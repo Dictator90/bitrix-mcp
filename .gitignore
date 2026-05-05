@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.bitrix-mcp/
+__pycache__/
+.pytest_cache/
+.venv/

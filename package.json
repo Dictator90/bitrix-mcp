@@ -1,0 +1,42 @@
+{
+  "name": "bitrix-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
+  "type": "module",
+  "bin": {
+    "bitrix-mcp": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test --import tsx tests/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli.js serve"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "embeddings",
+    "README.md"
+  ],
+  "keywords": [
+    "bitrix",
+    "mcp",
+    "model-context-protocol",
+    "liveapi"
+  ],
+  "license": "MIT"
+}
