@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { indexPath, resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, readIndex } from "../indexer/indexer.js";
-import { resolveTemplateIndexTarget } from "../indexer/template.js";
+import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi } from "../liveapi/search.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
@@ -46,14 +46,14 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
   server.tool(
     "bitrix_index_template",
-    "Index Bitrix templates, components, scripts, and styles separately from the full project.",
+    "Index Bitrix templates, components, scripts, and styles separately from the full project. Set templatePath relative to the project root, for example local/templates/site.",
     {
-      templatePath: z.string().optional(),
-      root: z.string().optional().describe("Deprecated: use templatePath to index a specific template directory.")
+      templatePath: z.string().optional().describe("Template directory path relative to the project root, for example local/templates/site."),
+      root: z.string().optional().describe("Deprecated: use templatePath instead. Temporary compatibility alias for a template path relative to the project root.")
     },
     async ({ templatePath, root }) => {
-      const target = templatePath ? resolveTemplateIndexTarget(paths.workspaceRoot, templatePath) : { root: root ?? paths.workspaceRoot };
-      const manifest = await buildIndex({ root: target.root, kind: "template", outFile: indexPath(paths.dataDir, "template"), patterns: target.patterns });
+      const options = resolveTemplateIndexOptions(paths, templatePath ?? root);
+      const manifest = await buildIndex(options);
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
     }
   );

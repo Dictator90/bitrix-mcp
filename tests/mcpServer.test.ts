@@ -27,3 +27,21 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
   assert.equal(manifest.root, path.join(fixtureRoot, "local/templates/my_template"));
   assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
+
+test("MCP bitrix_index_template keeps root as deprecated templatePath alias", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-root-"));
+  const paths: RuntimePaths = {
+    workspaceRoot: fixtureRoot,
+    dataDir,
+    docsDir: path.join(fixtureRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765"
+  };
+  const server = createMcpServer(paths);
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+
+  await tool.handler({ root: "local/templates/my_template" });
+  const manifest = JSON.parse(await fs.readFile(path.join(dataDir, "template-index.json"), "utf8")) as IndexManifest;
+
+  assert.equal(manifest.root, path.join(fixtureRoot, "local/templates/my_template"));
+  assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
+});

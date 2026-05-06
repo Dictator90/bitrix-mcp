@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
-import { resolveTemplateIndexTarget } from "./indexer/template.js";
+import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
 import { serveStdio } from "./mcp/server.js";
 
@@ -49,8 +49,8 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-template") {
-    const target = resolveTemplateIndexTarget(paths.workspaceRoot, arg);
-    const manifest = await buildIndex({ root: target.root, kind: "template", outFile: indexPath(paths.dataDir, "template"), patterns: target.patterns });
+    const options = resolveTemplateIndexOptions(paths, arg);
+    const manifest = await buildIndex(options);
     console.log(`Indexed ${manifest.files.length} template files into ${indexPath(paths.dataDir, "template")}`);
     return;
   }
