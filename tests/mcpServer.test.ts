@@ -6,6 +6,7 @@ import path from "node:path";
 import { createMcpServer } from "../src/mcp/server.js";
 import { sqlitePath, type RuntimePaths } from "../src/config/paths.js";
 import { readIndexFromSqlite } from "../src/indexer/sqliteStore.js";
+import { addPathDocSource } from "../src/resources/docs.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
@@ -75,10 +76,12 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
     docsDir: path.join(fixtureRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765"
   };
+  await addPathDocSource(dataDir, paths.docsDir);
   const server = createMcpServer(paths);
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_docs_search;
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  const result = await tool.handler({ query: "managed cache", limit: 5 });
+  await tools.bitrix_index_docs.handler({});
+  const result = await tools.bitrix_docs_search.handler({ query: "managed cache", limit: 5 });
   const results = JSON.parse(result.content[0].text) as Array<{ item: { text: string } }>;
 
   assert.match(results[0]?.item.text ?? "", /managed cache/);

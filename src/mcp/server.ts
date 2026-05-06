@@ -1,11 +1,11 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs } from "../liveapi/search.js";
-import { listDocResources, readDocResource, indexDocResourcesToSqlite } from "../resources/docs.js";
+import { indexDocResourcesToSqlite, listDocResources, readDocResource } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
@@ -61,9 +61,19 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(50).default(5)
     },
     async ({ query, limit }) => {
-      await indexDocResourcesToSqlite(paths.docsDir, paths.dataDir);
       const results = await searchSqliteDocs(sqlitePath(paths.dataDir), { query, limit }) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    }
+  );
+
+
+  server.tool(
+    "bitrix_index_docs",
+    "Index registered Bitrix documentation sources into the local SQLite documentation index.",
+    {},
+    async () => {
+      const chunks = await indexDocResourcesToSqlite(paths.dataDir);
+      return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
     }
   );
 
@@ -85,17 +95,29 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix-docs://index",
     { title: "Bitrix Framework documentation index", description: "List of available local Bitrix Framework documentation resources.", mimeType: "application/json" },
     async (uri) => {
-      const resources = await listDocResources(paths.docsDir);
+      const resources = await listDocResources(paths.dataDir);
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(resources, null, 2) }] };
     }
   );
 
   server.resource(
-    "bitrix-docs-getting-started",
-    "bitrix-docs://framework/getting-started.md",
-    { title: "Bitrix Framework getting started", description: "Bundled quick reference for Bitrix Framework indexing.", mimeType: "text/markdown" },
+    "bitrix-docs",
+    new ResourceTemplate("bitrix-docs://{source}/{path*}", {
+      list: async () => {
+        const resources = await listDocResources(paths.dataDir);
+        return {
+          resources: resources.map((resource) => ({
+            uri: resource.uri,
+            name: resource.name,
+            description: resource.description,
+            mimeType: resource.mimeType
+          }))
+        };
+      }
+    }),
+    { title: "Bitrix Framework documentation", description: "Indexed Bitrix Framework documentation resources from registered SQLite doc sources." },
     async (uri) => {
-      const { contents, resource } = await readDocResource(paths.docsDir, uri.href);
+      const { contents, resource } = await readDocResource(paths.dataDir, uri.href);
       return { contents: [{ uri: resource.uri, mimeType: resource.mimeType, text: contents }] };
     }
   );

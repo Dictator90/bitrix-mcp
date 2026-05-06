@@ -56,3 +56,11 @@ export function indexPath(dataDir: string, kind: string): string {
 export function sqlitePath(dataDir: string): string {
   return path.join(dataDir, "bitrix-mcp.sqlite");
 }
+
+export function docsSourcesDir(dataDir: string): string {
+  return path.join(dataDir, "docs-sources");
+}
+
+export function frameworkDocsCheckoutPath(dataDir: string): string {
+  return path.join(docsSourcesDir(dataDir), "framework-docs");
+}

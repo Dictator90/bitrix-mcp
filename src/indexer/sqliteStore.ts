@@ -109,6 +109,7 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL,
         uri TEXT NOT NULL UNIQUE,
         title TEXT,
         path TEXT,
@@ -127,9 +128,14 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS doc_sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
-        source_uri TEXT NOT NULL,
-        source_title TEXT
+        type TEXT NOT NULL CHECK(type IN ('git', 'path')),
+        uri TEXT NOT NULL,
+        root_path TEXT,
+        checkout_path TEXT,
+        name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(type, uri)
       );
 
       CREATE TABLE IF NOT EXISTS index_meta (
@@ -166,6 +172,30 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       FROM doc_chunks
       JOIN docs ON docs.id = doc_chunks.doc_id;
     `);
+
+    const docSourceColumns = (db.prepare("PRAGMA table_info(doc_sources)").all() as Array<{ name: string }>).map((column) => column.name);
+    if (!docSourceColumns.includes("type")) {
+      db.exec(`
+        DROP TABLE IF EXISTS doc_sources;
+        CREATE TABLE doc_sources (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL CHECK(type IN ('git', 'path')),
+          uri TEXT NOT NULL,
+          root_path TEXT,
+          checkout_path TEXT,
+          name TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(type, uri)
+        );
+      `);
+    }
+
+    const docColumns = (db.prepare("PRAGMA table_info(docs)").all() as Array<{ name: string }>).map((column) => column.name);
+    if (!docColumns.includes("source_id")) {
+      db.exec("ALTER TABLE docs ADD COLUMN source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL;");
+    }
+    db.exec("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source_id);");
   } finally {
     db.close();
   }
