@@ -2,6 +2,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
+import { formatIndexAllResult, indexAll, readIndexStatus } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../liveapi/search.js";
@@ -63,6 +64,26 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       const options = resolveTemplateIndexOptions(paths, templatePath ?? root);
       const manifest = await buildIndex(options);
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
+    }
+  );
+
+  server.tool(
+    "bitrix_index_all",
+    "Index the project, templates, Bitrix modules, module install assets, and registered documentation sources into SQLite.",
+    {},
+    async () => {
+      const result = await indexAll(paths);
+      return { content: [{ type: "text", text: formatIndexAllResult(result) }] };
+    }
+  );
+
+  server.tool(
+    "bitrix_index_status",
+    "Show the Bitrix MCP SQLite DB path and current index counters for files, symbols, events, documents, and last index time.",
+    {},
+    async () => {
+      const status = await readIndexStatus(paths);
+      return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
     }
   );
 

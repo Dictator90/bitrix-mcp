@@ -38,6 +38,12 @@ npx bitrix-mcp init
 # Start MCP server over stdio for Cursor, PhpStorm, Claude Desktop, Kilo, etc.
 npx bitrix-mcp serve
 
+# Index everything: project, templates, Bitrix modules, install assets, and docs
+npx bitrix-mcp index-all
+
+# Index all code scopes without documentation
+npx bitrix-mcp index-code
+
 # Index the current project
 npx bitrix-mcp index-project /path/to/project
 
@@ -47,6 +53,10 @@ npx bitrix-mcp index-template /path/to/project
 # Index installed Bitrix Framework PHP sources for LiveAPI
 cd /path/to/bitrix/project
 npx bitrix-mcp index-bitrix
+
+# Show index counters or run environment diagnostics
+npx bitrix-mcp status
+npx bitrix-mcp doctor
 ```
 
 Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, and `cache/`; it also reads project `.gitignore` rules when present.
@@ -68,7 +78,7 @@ Override paths with environment variables:
 - `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
 - `BITRIX_MCP_DOCS_PATHS` — documentation directories separated by the platform path delimiter (`:` on Unix, `;` on Windows).
 - `BITRIX_MCP_DOCS_DIR` — legacy single documentation directory exposed as MCP resources.
-- `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`.
+- `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`, `index-code`, and `index-all`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
 - `BITRIX_MCP_SEMANTIC_ENABLED` — enables the optional `bitrix_semantic_docs_search` MCP tool when set to `1`, `true`, `yes`, or `on`; disabled by default.
 
@@ -122,6 +132,8 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix_liveapi_search` — search indexed PHP symbols.
 - `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function.
 - `bitrix_index_project` — index the current project from an agent.
+- `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and registered documentation sources.
+- `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
 - `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
 - `bitrix_index_docs` — index registered local/Git documentation sources into SQLite.
 - `bitrix_docs_search` — default local SQLite FTS documentation search.
