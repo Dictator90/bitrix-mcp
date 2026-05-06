@@ -97,7 +97,7 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 - `bitrix_liveapi_search` — search indexed PHP symbols.
 - `bitrix_index_project` — index the current project from an agent.
-- `bitrix_index_template` — index templates from an agent.
+- `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
 - `bitrix_semantic_docs_search` — semantic documentation search through embeddings.
 
 ## MCP resources
