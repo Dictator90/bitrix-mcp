@@ -115,6 +115,7 @@ test("documentation index scans multiple runtime docs paths", async () => {
   }
 });
 
+
 test(".bitrixmcpignore excludes PHP and JS files from SQLite index", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-root-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-data-"));
@@ -138,6 +139,26 @@ test(".bitrixmcpignore excludes PHP and JS files from SQLite index", async () =>
     sqliteManifest?.files.map((file) => file.relativePath),
     ["index.php"]
   );
+});
+
+test("bitrix and install indexes include downloaded core ignored by project .gitignore", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-gitignored-core-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-gitignored-data-"));
+
+  await fs.mkdir(path.join(root, "bitrix/modules/main/install/js/admin"), { recursive: true });
+  await fs.writeFile(path.join(root, ".gitignore"), "/bitrix/\n", "utf8");
+  await fs.writeFile(path.join(root, "index.php"), "<?php function visible_project(): void {}\n", "utf8");
+  await fs.writeFile(path.join(root, "bitrix/modules/main/include.php"), "<?php class GitignoredCoreClass {}\n", "utf8");
+  await fs.writeFile(path.join(root, "bitrix/modules/main/install/js/admin/panel.ts"), "export class GitignoredInstallPanel {}\n", "utf8");
+
+  const projectManifest = await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+  assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["index.php"]);
+
+  const bitrixManifest = await buildIndex({ root, kind: "bitrix", outFile: path.join(dataDir, "bitrix-index.json"), patterns: ["bitrix/modules/**/*.php"] });
+  assert.deepEqual(bitrixManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/include.php"]);
+
+  const installManifest = await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json"), patterns: ["bitrix/modules/*/install/**/*.{js,ts}"] });
+  assert.deepEqual(installManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/install/js/admin/panel.ts"]);
 });
 
 test("template index uses template-specific patterns", async () => {
