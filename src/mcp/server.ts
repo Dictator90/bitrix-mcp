@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { indexPath, resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
+import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, readIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi } from "../liveapi/search.js";
+import { searchSqliteLiveApi } from "../indexer/sqliteStore.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
@@ -22,12 +23,15 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, type, module, limit }) => {
-      const [bitrixIndex, projectIndex, templateIndex] = await Promise.all([
-        readIndex(indexPath(paths.dataDir, "bitrix")),
-        readIndex(indexPath(paths.dataDir, "project")),
-        readIndex(indexPath(paths.dataDir, "template"))
-      ]);
-      const results = searchLiveApi([bitrixIndex, projectIndex, templateIndex], { query, type, module, limit });
+      const sqliteResults = await searchSqliteLiveApi(sqlitePath(paths.dataDir), { query, type, module, limit });
+      const results = sqliteResults ?? searchLiveApi(
+        await Promise.all([
+          readIndex(indexPath(paths.dataDir, "bitrix")),
+          readIndex(indexPath(paths.dataDir, "project")),
+          readIndex(indexPath(paths.dataDir, "template"))
+        ]),
+        { query, type, module, limit }
+      );
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
   );

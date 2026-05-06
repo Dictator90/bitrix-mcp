@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
-import { detectLanguage } from "./language.js";
+import { sqlitePath } from "../config/paths.js";
 import { parsePhpSymbols } from "../liveapi/phpParser.js";
+import { detectLanguage } from "./language.js";
+import { readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
 import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
 
 export const DEFAULT_INDEX_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
@@ -13,7 +15,8 @@ const TEMPLATE_HINTS = ["local/templates/**", "bitrix/templates/**", "templates/
 export interface IndexOptions {
   root: string;
   kind: IndexKind;
-  outFile: string;
+  outFile?: string;
+  dbFile?: string;
   patterns?: string[];
 }
 
@@ -68,12 +71,18 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     files
   };
 
-  await fs.mkdir(path.dirname(options.outFile), { recursive: true });
-  await fs.writeFile(options.outFile, JSON.stringify(manifest, null, 2), "utf8");
+  const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
+  await writeIndexToSqlite(dbFile, manifest);
   return manifest;
 }
 
-export async function readIndex(indexFile: string): Promise<IndexManifest | undefined> {
+export async function readIndex(indexFile: string, kind?: IndexKind): Promise<IndexManifest | undefined> {
+  if (kind) {
+    const sqliteIndex = await readIndexFromSqlite(sqlitePath(path.dirname(indexFile)), kind);
+    if (sqliteIndex) {
+      return sqliteIndex;
+    }
+  }
   try {
     return JSON.parse(await fs.readFile(indexFile, "utf8")) as IndexManifest;
   } catch (error) {
