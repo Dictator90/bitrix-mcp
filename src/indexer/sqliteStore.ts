@@ -30,6 +30,10 @@ interface SymbolRow {
   name: string;
   module: string | null;
   class_name: string | null;
+  handler_class?: string | null;
+  handler_method?: string | null;
+  handler_function?: string | null;
+  event_name?: string | null;
   file: string;
   line: number;
   signature: string | null;
@@ -50,6 +54,10 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     name: row.name,
     module: row.module ?? undefined,
     className: row.class_name ?? undefined,
+    handlerClass: row.handler_class ?? undefined,
+    handlerMethod: row.handler_method ?? undefined,
+    handlerFunction: row.handler_function ?? undefined,
+    eventName: row.event_name ?? undefined,
     file: row.file,
     line: row.line,
     signature: row.signature ?? undefined,
@@ -87,6 +95,10 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         name TEXT NOT NULL,
         module TEXT,
         class_name TEXT,
+        handler_class TEXT,
+        handler_method TEXT,
+        handler_function TEXT,
+        event_name TEXT,
         file TEXT NOT NULL,
         line INTEGER NOT NULL,
         signature TEXT,
@@ -101,6 +113,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         root TEXT NOT NULL,
         module TEXT,
         name TEXT NOT NULL,
+        handler_class TEXT,
+        handler_method TEXT,
+        handler_function TEXT,
         file TEXT NOT NULL,
         line INTEGER NOT NULL,
         signature TEXT,
@@ -150,7 +165,7 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-        name, module, signature, description
+        name, module, handler_class, handler_method, handler_function, signature, description
       );
 
       CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
@@ -165,8 +180,6 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       INSERT OR IGNORE INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       SELECT id, name, type, module, class_name, signature, description FROM symbols;
 
-      INSERT OR IGNORE INTO events_fts (rowid, name, module, signature, description)
-      SELECT id, name, module, signature, description FROM events;
 
       INSERT OR IGNORE INTO docs_fts (rowid, uri, title, path, text)
       SELECT doc_chunks.id, docs.uri, docs.title, docs.path, doc_chunks.text
@@ -200,6 +213,43 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       db.exec("ALTER TABLE docs ADD COLUMN source_name TEXT;");
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source_id);");
+    const symbolColumns = (db.prepare("PRAGMA table_info(symbols)").all() as Array<{ name: string }>).map((column) => column.name);
+    for (const [column, definition] of [
+      ["handler_class", "TEXT"],
+      ["handler_method", "TEXT"],
+      ["handler_function", "TEXT"],
+      ["event_name", "TEXT"]
+    ] as const) {
+      if (!symbolColumns.includes(column)) {
+        db.exec(`ALTER TABLE symbols ADD COLUMN ${column} ${definition};`);
+      }
+    }
+
+    const eventColumns = (db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map((column) => column.name);
+    for (const [column, definition] of [
+      ["handler_class", "TEXT"],
+      ["handler_method", "TEXT"],
+      ["handler_function", "TEXT"]
+    ] as const) {
+      if (!eventColumns.includes(column)) {
+        db.exec(`ALTER TABLE events ADD COLUMN ${column} ${definition};`);
+      }
+    }
+
+    const eventFtsColumns = (db.prepare("PRAGMA table_info(events_fts)").all() as Array<{ name: string }>).map((column) => column.name);
+    if (!eventFtsColumns.includes("handler_class")) {
+      db.exec(`
+        DROP TABLE IF EXISTS events_fts;
+        CREATE VIRTUAL TABLE events_fts USING fts5(
+          name, module, handler_class, handler_method, handler_function, signature, description
+        );
+      `);
+    }
+    db.exec(`
+      INSERT OR IGNORE INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
+      SELECT id, name, module, handler_class, handler_method, handler_function, signature, description FROM events;
+    `);
+
   } finally {
     db.close();
   }
@@ -215,21 +265,21 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, name, module, class_name, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
-      INSERT INTO events (symbol_id, file_id, kind, root, module, name, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events (symbol_id, file_id, kind, root, module, name, handler_class, handler_method, handler_function, file, line, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertSymbolFts = db.prepare(`
       INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const insertEventFts = db.prepare(`
-      INSERT INTO events_fts (rowid, name, module, signature, description)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const setMeta = db.prepare(`
       INSERT INTO index_meta (key, value, updated_at)
@@ -254,6 +304,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             symbol.name,
             nullable(symbol.module),
             nullable(symbol.className),
+            nullable(symbol.handlerClass),
+            nullable(symbol.handlerMethod),
+            nullable(symbol.handlerFunction),
+            nullable(symbol.eventName),
             symbol.file,
             symbol.line,
             nullable(symbol.signature),
@@ -275,7 +329,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               file.kind,
               manifest.root,
               nullable(symbol.module),
-              symbol.name,
+              symbol.eventName ?? symbol.name,
+              nullable(symbol.handlerClass),
+              nullable(symbol.handlerMethod),
+              nullable(symbol.handlerFunction),
               symbol.file,
               symbol.line,
               nullable(symbol.signature),
@@ -283,8 +340,11 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             );
             insertEventFts.run(
               Number(eventResult.lastInsertRowid),
-              symbol.name,
+              symbol.eventName ?? symbol.name,
               nullable(symbol.module),
+              nullable(symbol.handlerClass),
+              nullable(symbol.handlerMethod),
+              nullable(symbol.handlerFunction),
               nullable(symbol.signature),
               nullable(symbol.description)
             );
@@ -316,7 +376,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT type, name, module, class_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT type, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,

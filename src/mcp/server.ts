@@ -4,7 +4,7 @@ import { z } from "zod";
 import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
-import { searchLiveApi, searchSqliteDocs } from "../liveapi/search.js";
+import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite, listDocResources, readDocResource } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
@@ -23,6 +23,20 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     },
     async ({ query, type, module, limit }) => {
       const results = await searchLiveApi(sqlitePath(paths.dataDir), { query, type, module, limit }) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "bitrix_event_search",
+    "Search indexed Bitrix event handlers by event module, event name, handler class, handler method, or handler function.",
+    {
+      query: z.string().min(1),
+      module: z.string().optional(),
+      limit: z.number().int().min(1).max(100).default(20)
+    },
+    async ({ query, module, limit }) => {
+      const results = await searchSqliteEvents(sqlitePath(paths.dataDir), { query, module, limit }) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
   );

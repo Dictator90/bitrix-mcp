@@ -7,7 +7,7 @@ import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources } from "../src/resources/docs.js";
-import { searchLiveApi, searchSqliteDocs } from "../src/liveapi/search.js";
+import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
@@ -37,6 +37,11 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
 
   const eventResults = await searchLiveApi(sqlitePath(dataDir), { query: "OnBefore", type: "event", module: "main", limit: 5 });
   assert.equal(eventResults?.[0]?.item.name, "main:OnBeforeProlog");
+
+  const eventTableResults = await searchSqliteEvents(sqlitePath(dataDir), { query: "Demo", module: "main", limit: 5 });
+  assert.equal(eventTableResults?.[0]?.item.eventName, "OnBeforeProlog");
+  assert.equal(eventTableResults?.[0]?.item.handlerClass, "Demo");
+  assert.equal(eventTableResults?.[0]?.item.handlerMethod, "handler");
 
   await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
   await indexDocResourcesToSqlite(dataDir);
