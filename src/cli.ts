@@ -3,6 +3,7 @@ import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } 
 import { buildIndex } from "./indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
+import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
 import { serveStdio } from "./mcp/server.js";
 
 function usage(): string {
@@ -13,11 +14,15 @@ Commands:
   serve                         Start MCP server over stdio
   index-project [root]          Index project files
   index-template [templatePath] Index a specific template path, or standard template locations
-  index-bitrix [root]            Index installed Bitrix Framework PHP sources
+  index-bitrix [root]           Index installed Bitrix Framework PHP sources
+  docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
+  docs-add-path <path>          Register a local documentation directory
+  docs-update                   Clone or pull registered Git documentation sources
+  index-docs                    Index registered documentation sources into SQLite
 
 Environment:
   BITRIX_MCP_DATA_DIR           Directory for generated indexes
-  BITRIX_MCP_DOCS_DIR           Directory with local Bitrix documentation
+  BITRIX_MCP_DOCS_DIR           Legacy directory with local Bitrix documentation
   BITRIX_MCP_EMBEDDINGS_URL     Python embeddings service URL
   BITRIX_ROOT                   Bitrix project root for LiveAPI indexing
 `;
@@ -63,6 +68,33 @@ async function main(argv: string[]): Promise<void> {
     const projectRoot = resolveBitrixProjectRoot(root);
     const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
+    return;
+  }
+
+  if (command === "docs-add-git") {
+    const source = await addGitDocSource(paths.dataDir, arg ?? OFFICIAL_DOCS_GIT_URL);
+    console.log(`Registered Git documentation source ${source.uri} at ${source.checkoutPath ?? source.rootPath}`);
+    return;
+  }
+
+  if (command === "docs-add-path") {
+    if (!arg) {
+      throw new Error("docs-add-path requires a local documentation directory path.");
+    }
+    const source = await addPathDocSource(paths.dataDir, arg);
+    console.log(`Registered local documentation source ${source.rootPath}`);
+    return;
+  }
+
+  if (command === "docs-update") {
+    const sources = await updateDocSources(paths.dataDir);
+    console.log(`Updated ${sources.length} Git documentation source${sources.length === 1 ? "" : "s"}.`);
+    return;
+  }
+
+  if (command === "index-docs") {
+    const chunks = await indexDocResourcesToSqlite(paths.dataDir);
+    console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 

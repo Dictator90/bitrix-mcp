@@ -41,3 +41,14 @@ export interface DocResource {
   mimeType: string;
   path: string;
 }
+
+export interface DocSource {
+  id: number;
+  type: "git" | "path";
+  uri: string;
+  rootPath?: string;
+  checkoutPath?: string;
+  name?: string;
+  createdAt: string;
+  updatedAt: string;
+}

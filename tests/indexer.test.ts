@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { sqlitePath } from "../src/config/paths.js";
-import { indexDocResourcesToSqlite } from "../src/resources/docs.js";
+import { addPathDocSource, indexDocResourcesToSqlite, listDocResources } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs } from "../src/liveapi/search.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
@@ -37,10 +37,31 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
   const eventResults = await searchLiveApi(sqlitePath(dataDir), { query: "OnBefore", type: "event", module: "main", limit: 5 });
   assert.equal(eventResults?.[0]?.item.name, "main:OnBeforeProlog");
 
-  await indexDocResourcesToSqlite(path.join(fixtureRoot, "docs"), dataDir);
+  await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
+  await indexDocResourcesToSqlite(dataDir);
   const docResults = await searchSqliteDocs(sqlitePath(dataDir), { query: "managed cache", limit: 5 });
   assert.match(docResults?.[0]?.item.text ?? "", /managed cache/);
 });
+
+test("documentation index supports multiple registered local paths", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-"));
+  const docsOne = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-one-"));
+  const docsTwo = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-two-"));
+
+  await fs.writeFile(path.join(docsOne, "cache.md"), "# Cache docs\nmanaged cache details\n", "utf8");
+  await fs.writeFile(path.join(docsTwo, "events.txt"), "# Event docs\nOnBeforeProlog event details\n", "utf8");
+
+  await addPathDocSource(dataDir, docsOne, "custom-one");
+  await addPathDocSource(dataDir, docsTwo, "custom-two");
+  const chunks = await indexDocResourcesToSqlite(dataDir);
+
+  assert.equal(chunks, 2);
+  const resources = await listDocResources(dataDir);
+  assert.equal(resources.length, 2);
+  assert.ok(resources.some((resource) => resource.uri.startsWith("bitrix-docs://path-") && resource.path === path.join(docsOne, "cache.md")));
+  assert.ok(resources.some((resource) => resource.uri.startsWith("bitrix-docs://path-") && resource.path === path.join(docsTwo, "events.txt")));
+});
+
 
 test(".bitrixmcpignore excludes PHP and JS files from SQLite index", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-root-"));
