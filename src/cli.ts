@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
+import { resolveTemplateIndexTarget } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
 import { serveStdio } from "./mcp/server.js";
 
@@ -11,7 +12,7 @@ Commands:
   init                          Configure an MCP client, index the project, and start stdio server
   serve                         Start MCP server over stdio
   index-project [root]          Index project files
-  index-template [root]         Index templates/components/scripts/styles
+  index-template [templatePath] Index a specific template path, or standard template locations
   index-bitrix [root]            Index installed Bitrix Framework PHP sources
 
 Environment:
@@ -48,7 +49,8 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-template") {
-    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "template", outFile: indexPath(paths.dataDir, "template") });
+    const target = resolveTemplateIndexTarget(paths.workspaceRoot, arg);
+    const manifest = await buildIndex({ root: target.root, kind: "template", outFile: indexPath(paths.dataDir, "template"), patterns: target.patterns });
     console.log(`Indexed ${manifest.files.length} template files into ${indexPath(paths.dataDir, "template")}`);
     return;
   }

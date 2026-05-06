@@ -6,7 +6,7 @@ import { detectLanguage } from "./language.js";
 import { parsePhpSymbols } from "../liveapi/phpParser.js";
 import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
 
-const DEFAULT_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
+export const DEFAULT_INDEX_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
 const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**"];
 const TEMPLATE_HINTS = ["local/templates/**", "bitrix/templates/**", "templates/**"];
 
@@ -30,7 +30,7 @@ async function loadIgnore(root: string) {
 
 export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
   const root = path.resolve(options.root);
-  const patterns = options.patterns ?? (options.kind === "template" ? TEMPLATE_HINTS : DEFAULT_PATTERNS);
+  const patterns = options.patterns ?? (options.kind === "template" ? TEMPLATE_HINTS : DEFAULT_INDEX_PATTERNS);
   const ig = await loadIgnore(root);
   const entries = await fg(patterns, {
     cwd: root,

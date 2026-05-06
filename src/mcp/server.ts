@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { indexPath, resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, readIndex } from "../indexer/indexer.js";
+import { resolveTemplateIndexTarget } from "../indexer/template.js";
 import { searchLiveApi } from "../liveapi/search.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
@@ -47,10 +48,12 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix_index_template",
     "Index Bitrix templates, components, scripts, and styles separately from the full project.",
     {
-      root: z.string().optional()
+      templatePath: z.string().optional(),
+      root: z.string().optional().describe("Deprecated: use templatePath to index a specific template directory.")
     },
-    async ({ root }) => {
-      const manifest = await buildIndex({ root: root ?? paths.workspaceRoot, kind: "template", outFile: indexPath(paths.dataDir, "template") });
+    async ({ templatePath, root }) => {
+      const target = templatePath ? resolveTemplateIndexTarget(paths.workspaceRoot, templatePath) : { root: root ?? paths.workspaceRoot };
+      const manifest = await buildIndex({ root: target.root, kind: "template", outFile: indexPath(paths.dataDir, "template"), patterns: target.patterns });
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
     }
   );
