@@ -49,7 +49,20 @@ cd /path/to/bitrix/project
 npx bitrix-mcp index-bitrix
 ```
 
-Generated indexes are written to `.bitrix-mcp/` by default. Override paths with environment variables:
+Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, and `cache/`; it also reads project `.gitignore` rules when present.
+
+To exclude additional project-specific files from LiveAPI and template indexes, add a `.bitrixmcpignore` file to the project root. It uses the same pattern syntax as `.gitignore` and is applied together with the built-in rules and `.gitignore`:
+
+```gitignore
+# Generated local scripts
+local/scripts/generated/**
+
+# Private custom code that should not be searchable
+private/*.php
+assets/ignored.js
+```
+
+Override paths with environment variables:
 
 - `BITRIX_MCP_DATA_DIR` — index storage directory.
 - `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
