@@ -22,11 +22,16 @@ export interface IndexOptions {
 
 async function loadIgnore(root: string) {
   const ig = ignore().add(DEFAULT_IGNORES.map((entry) => entry.replace(/^\*\*\//, "")));
-  try {
-    const gitignore = await fs.readFile(path.join(root, ".gitignore"), "utf8");
-    ig.add(gitignore);
-  } catch {
-    // Optional file.
+  for (const ignoreFile of [".gitignore", ".bitrixmcpignore"]) {
+    try {
+      const ignoreRules = await fs.readFile(path.join(root, ignoreFile), "utf8");
+      ig.add(ignoreRules);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      // Optional file.
+    }
   }
   return ig;
 }

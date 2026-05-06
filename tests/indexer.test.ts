@@ -42,6 +42,31 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
   assert.match(docResults?.[0]?.item.text ?? "", /managed cache/);
 });
 
+test(".bitrixmcpignore excludes PHP and JS files from SQLite index", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+
+  await fs.mkdir(path.join(root, "private"), { recursive: true });
+  await fs.mkdir(path.join(root, "assets"), { recursive: true });
+  await fs.writeFile(path.join(root, "index.php"), "<?php function visible_helper() {}\n", "utf8");
+  await fs.writeFile(path.join(root, "private", "secret.php"), "<?php function secret_helper() {}\n", "utf8");
+  await fs.writeFile(path.join(root, "assets", "ignored.js"), "export const ignored = true;\n", "utf8");
+  await fs.writeFile(path.join(root, ".bitrixmcpignore"), "private/*.php\nassets/ignored.js\n", "utf8");
+
+  const manifest = await buildIndex({ root, kind: "project", outFile });
+  assert.deepEqual(
+    manifest.files.map((file) => file.relativePath),
+    ["index.php"]
+  );
+
+  const sqliteManifest = await readIndex(outFile, "project");
+  assert.deepEqual(
+    sqliteManifest?.files.map((file) => file.relativePath),
+    ["index.php"]
+  );
+});
+
 test("template index uses template-specific patterns", async () => {
   const root = fixtureRoot;
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-template-"));
