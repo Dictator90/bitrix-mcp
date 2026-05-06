@@ -114,6 +114,7 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         title TEXT,
         path TEXT,
         mime_type TEXT,
+        source_name TEXT,
         indexed_at TEXT NOT NULL
       );
 
@@ -194,6 +195,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
     const docColumns = (db.prepare("PRAGMA table_info(docs)").all() as Array<{ name: string }>).map((column) => column.name);
     if (!docColumns.includes("source_id")) {
       db.exec("ALTER TABLE docs ADD COLUMN source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL;");
+    }
+    if (!docColumns.includes("source_name")) {
+      db.exec("ALTER TABLE docs ADD COLUMN source_name TEXT;");
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source_id);");
   } finally {
@@ -336,6 +340,8 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
 
 export interface DocIndexChunk {
   uri: string;
+  sourceId?: number;
+  sourceName?: string;
   title?: string;
   path?: string;
   mimeType?: string;
@@ -349,9 +355,11 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
   try {
     db.exec("PRAGMA foreign_keys = ON;");
     const insertDoc = db.prepare(`
-      INSERT INTO docs (uri, title, path, mime_type, indexed_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO docs (source_id, source_name, uri, title, path, mime_type, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uri) DO UPDATE SET
+        source_id = excluded.source_id,
+        source_name = excluded.source_name,
         title = excluded.title,
         path = excluded.path,
         mime_type = excluded.mime_type,
@@ -376,7 +384,7 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
       db.exec("DELETE FROM docs_fts;");
       db.exec("DELETE FROM docs;");
       for (const chunk of chunks) {
-        const doc = insertDoc.get(chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), indexedAt) as { id: number };
+        const doc = insertDoc.get(chunk.sourceId ?? null, nullable(chunk.sourceName), chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), indexedAt) as { id: number };
         const row = insertChunk.get(doc.id, chunk.chunkIndex, chunk.text) as { id: number };
         insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
       }

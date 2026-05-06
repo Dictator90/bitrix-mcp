@@ -364,7 +364,7 @@ export async function initAndServe(): Promise<void> {
     rl.close();
   }
 
-  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl };
+  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl };
 
   await indexIfMissing(paths, "project", projectRoot);
   await indexIfMissing(paths, "template", projectRoot);

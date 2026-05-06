@@ -6,6 +6,7 @@ export interface RuntimePaths {
   workspaceRoot: string;
   dataDir: string;
   docsDir: string;
+  docsPaths: string[];
   bitrixRoot?: string;
   embeddingsUrl: string;
 }
@@ -13,7 +14,9 @@ export interface RuntimePaths {
 export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): RuntimePaths {
   const workspaceRoot = path.resolve(overrides.workspaceRoot ?? process.env.BITRIX_MCP_WORKSPACE ?? process.cwd());
   const dataDir = path.resolve(overrides.dataDir ?? process.env.BITRIX_MCP_DATA_DIR ?? path.join(workspaceRoot, ".bitrix-mcp"));
-  const docsDir = path.resolve(overrides.docsDir ?? process.env.BITRIX_MCP_DOCS_DIR ?? path.join(workspaceRoot, "docs"));
+  const envDocsPaths = parseDelimitedPaths(process.env.BITRIX_MCP_DOCS_PATHS);
+  const docsDir = path.resolve(overrides.docsDir ?? process.env.BITRIX_MCP_DOCS_DIR ?? envDocsPaths[0] ?? path.join(workspaceRoot, "docs"));
+  const docsPaths = normalizeDocsPaths(overrides.docsPaths ?? (envDocsPaths.length > 0 ? envDocsPaths : [docsDir]));
   const explicitBitrixRoot = overrides.bitrixRoot ?? process.env.BITRIX_ROOT;
   const bitrixRoot = explicitBitrixRoot ?? detectWorkspaceBitrixRoot(workspaceRoot);
   const embeddingsUrl = overrides.embeddingsUrl ?? process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
@@ -22,9 +25,18 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
     workspaceRoot,
     dataDir,
     docsDir,
+    docsPaths,
     bitrixRoot: bitrixRoot ? resolveBitrixProjectRoot(bitrixRoot) : undefined,
     embeddingsUrl
   };
+}
+
+function parseDelimitedPaths(value: string | undefined): string[] {
+  return value?.split(path.delimiter).map((entry) => entry.trim()).filter(Boolean) ?? [];
+}
+
+function normalizeDocsPaths(paths: string[]): string[] {
+  return [...new Set(paths.map((entry) => path.resolve(entry)))];
 }
 
 export function resolveBitrixProjectRoot(root: string): string {

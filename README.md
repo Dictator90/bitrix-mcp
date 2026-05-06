@@ -66,7 +66,8 @@ Override paths with environment variables:
 
 - `BITRIX_MCP_DATA_DIR` — index storage directory.
 - `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
-- `BITRIX_MCP_DOCS_DIR` — documentation directory exposed as MCP resources.
+- `BITRIX_MCP_DOCS_PATHS` — documentation directories separated by the platform path delimiter (`:` on Unix, `;` on Windows).
+- `BITRIX_MCP_DOCS_DIR` — legacy single documentation directory exposed as MCP resources.
 - `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
 
@@ -166,6 +167,7 @@ For a project at `/var/www/site`, the final per-project MCP config written by `b
       "env": {
         "BITRIX_MCP_WORKSPACE": "/var/www/site",
         "BITRIX_MCP_DATA_DIR": "/var/www/site/.bitrix-mcp",
+        "BITRIX_MCP_DOCS_PATHS": "/var/www/site/docs:/var/www/site/vendor-docs",
         "BITRIX_MCP_DOCS_DIR": "/var/www/site/docs",
         "BITRIX_ROOT": "/var/www/site",
         "BITRIX_MCP_EMBEDDINGS_URL": "http://127.0.0.1:8765"

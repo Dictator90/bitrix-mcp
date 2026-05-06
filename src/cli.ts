@@ -22,6 +22,7 @@ Commands:
 
 Environment:
   BITRIX_MCP_DATA_DIR           Directory for generated indexes
+  BITRIX_MCP_DOCS_PATHS         Documentation directories separated by the platform path delimiter
   BITRIX_MCP_DOCS_DIR           Legacy directory with local Bitrix documentation
   BITRIX_MCP_EMBEDDINGS_URL     Python embeddings service URL
   BITRIX_ROOT                   Bitrix project root for LiveAPI indexing
@@ -93,7 +94,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-docs") {
-    const chunks = await indexDocResourcesToSqlite(paths.dataDir);
+    const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     return;
   }
