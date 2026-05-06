@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { indexPath, resolveRuntimePaths } from "./config/paths.js";
+import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
 import { initAndServe } from "./init/init.js";
 import { serveStdio } from "./mcp/server.js";
@@ -12,13 +12,13 @@ Commands:
   serve                         Start MCP server over stdio
   index-project [root]          Index project files
   index-template [root]         Index templates/components/scripts/styles
-  index-bitrix <bitrix-root>    Index installed Bitrix Framework PHP sources
+  index-bitrix [root]            Index installed Bitrix Framework PHP sources
 
 Environment:
   BITRIX_MCP_DATA_DIR           Directory for generated indexes
   BITRIX_MCP_DOCS_DIR           Directory with local Bitrix documentation
   BITRIX_MCP_EMBEDDINGS_URL     Python embeddings service URL
-  BITRIX_ROOT                   Installed Bitrix root for LiveAPI indexing
+  BITRIX_ROOT                   Bitrix project root for LiveAPI indexing
 `;
 }
 
@@ -56,9 +56,10 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-bitrix") {
     const root = arg ?? paths.bitrixRoot;
     if (!root) {
-      throw new Error("Pass <bitrix-root> or set BITRIX_ROOT for index-bitrix.");
+      throw new Error("Bitrix root not found. Run from a project containing ./bitrix, pass [root], or set BITRIX_ROOT.");
     }
-    const manifest = await buildIndex({ root, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
+    const projectRoot = resolveBitrixProjectRoot(root);
+    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${indexPath(paths.dataDir, "bitrix")}`);
     return;
   }

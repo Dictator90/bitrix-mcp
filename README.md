@@ -45,7 +45,8 @@ npx bitrix-mcp index-project /path/to/project
 npx bitrix-mcp index-template /path/to/project
 
 # Index installed Bitrix Framework PHP sources for LiveAPI
-npx bitrix-mcp index-bitrix /path/to/bitrix/site
+cd /path/to/bitrix/project
+npx bitrix-mcp index-bitrix
 ```
 
 Generated indexes are written to `.bitrix-mcp/` by default. Override paths with environment variables:
@@ -53,7 +54,7 @@ Generated indexes are written to `.bitrix-mcp/` by default. Override paths with 
 - `BITRIX_MCP_DATA_DIR` — index storage directory.
 - `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
 - `BITRIX_MCP_DOCS_DIR` — documentation directory exposed as MCP resources.
-- `BITRIX_ROOT` — default Bitrix installation root for `index-bitrix`.
+- `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
 
 ## `bitrix-mcp init`

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveRuntimePaths } from "../src/config/paths.js";
+import { resolveBitrixProjectRoot, resolveRuntimePaths } from "../src/config/paths.js";
 
 function withBitrixRootEnv<T>(value: string | undefined, callback: () => T): T {
   const previous = process.env.BITRIX_ROOT;
@@ -37,6 +37,26 @@ test("resolveRuntimePaths uses explicit BITRIX_ROOT", () => {
     const paths = resolveRuntimePaths({ workspaceRoot });
     assert.equal(paths.bitrixRoot, explicitRoot);
   });
+});
+
+test("resolveRuntimePaths normalizes explicit BITRIX_ROOT bitrix directory to project root", () => {
+  const workspaceRoot = tempWorkspace();
+  const projectRoot = path.join(workspaceRoot, "site");
+  const bitrixDir = path.join(projectRoot, "bitrix");
+  fs.mkdirSync(bitrixDir, { recursive: true });
+
+  withBitrixRootEnv(bitrixDir, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+    assert.equal(paths.bitrixRoot, projectRoot);
+  });
+});
+
+test("resolveBitrixProjectRoot normalizes a passed bitrix directory to project root", () => {
+  const projectRoot = tempWorkspace();
+  const bitrixDir = path.join(projectRoot, "bitrix");
+  fs.mkdirSync(bitrixDir);
+
+  assert.equal(resolveBitrixProjectRoot(bitrixDir), projectRoot);
 });
 
 test("resolveRuntimePaths uses workspace root when workspace bitrix directory exists", () => {

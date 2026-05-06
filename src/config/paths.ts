@@ -22,9 +22,22 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
     workspaceRoot,
     dataDir,
     docsDir,
-    bitrixRoot: bitrixRoot ? path.resolve(bitrixRoot.replace(/^~(?=$|\/|\\)/, os.homedir())) : undefined,
+    bitrixRoot: bitrixRoot ? resolveBitrixProjectRoot(bitrixRoot) : undefined,
     embeddingsUrl
   };
+}
+
+export function resolveBitrixProjectRoot(root: string): string {
+  const resolvedRoot = path.resolve(root.replace(/^~(?=$|\/|\\)/, os.homedir()));
+  if (path.basename(resolvedRoot).toLowerCase() !== "bitrix") {
+    return resolvedRoot;
+  }
+
+  try {
+    return fs.statSync(resolvedRoot).isDirectory() ? path.dirname(resolvedRoot) : resolvedRoot;
+  } catch {
+    return resolvedRoot;
+  }
 }
 
 function detectWorkspaceBitrixRoot(workspaceRoot: string): string | undefined {
