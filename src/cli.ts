@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { indexPath, resolveRuntimePaths } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
+import { initAndServe } from "./init/init.js";
 import { serveStdio } from "./mcp/server.js";
 
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
 
 Commands:
+  init                          Configure an MCP client, index the project, and start stdio server
   serve                         Start MCP server over stdio
   index-project [root]          Index project files
   index-template [root]         Index templates/components/scripts/styles
@@ -26,6 +28,11 @@ async function main(argv: string[]): Promise<void> {
 
   if (!command || command === "--help" || command === "-h") {
     console.log(usage());
+    return;
+  }
+
+  if (command === "init") {
+    await initAndServe();
     return;
   }
 
