@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { IndexFile, IndexKind, IndexManifest, SearchResult, SymbolRecord } from "../types.js";
+import type { IndexFile, IndexKind, IndexManifest, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -13,8 +13,6 @@ export interface SqliteSearchQuery {
   module?: string;
   limit?: number;
 }
-
-type SqliteValue = string | number | null;
 
 interface FileRow {
   id: number;
@@ -42,17 +40,21 @@ function nullable(value: string | undefined): string | null {
   return value ?? null;
 }
 
-function scoreSymbol(symbol: SymbolRecord, query: string): number {
-  const haystack = [symbol.name, symbol.className, symbol.module, symbol.signature, symbol.description].filter(Boolean).join(" ").toLowerCase();
-  const needle = query.toLowerCase();
-  if (symbol.name.toLowerCase() === needle) return 1;
-  if (symbol.name.toLowerCase().includes(needle)) return 0.85;
-  if (haystack.includes(needle)) return 0.6;
-  return 0;
-}
-
 function openDatabase(dbFile: string): DatabaseSync {
   return new DatabaseSync(dbFile);
+}
+
+function rowToSymbol(row: SymbolRow): SymbolRecord {
+  return {
+    type: row.type,
+    name: row.name,
+    module: row.module ?? undefined,
+    className: row.class_name ?? undefined,
+    file: row.file,
+    line: row.line,
+    signature: row.signature ?? undefined,
+    description: row.description ?? undefined
+  };
 }
 
 export async function ensureSqliteStore(dbFile: string): Promise<void> {
@@ -136,10 +138,33 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         updated_at TEXT NOT NULL
       );
 
+      CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
+        name, type, module, class_name, signature, description
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+        name, module, signature, description
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
+        uri, title, path, text
+      );
+
       CREATE INDEX IF NOT EXISTS idx_files_kind ON files(kind);
       CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(type, module, name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
       CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
+
+      INSERT OR IGNORE INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
+      SELECT id, name, type, module, class_name, signature, description FROM symbols;
+
+      INSERT OR IGNORE INTO events_fts (rowid, name, module, signature, description)
+      SELECT id, name, module, signature, description FROM events;
+
+      INSERT OR IGNORE INTO docs_fts (rowid, uri, title, path, text)
+      SELECT doc_chunks.id, docs.uri, docs.title, docs.path, doc_chunks.text
+      FROM doc_chunks
+      JOIN docs ON docs.id = doc_chunks.doc_id;
     `);
   } finally {
     db.close();
@@ -164,6 +189,14 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO events (symbol_id, file_id, kind, root, module, name, file, line, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertSymbolFts = db.prepare(`
+      INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertEventFts = db.prepare(`
+      INSERT INTO events_fts (rowid, name, module, signature, description)
+      VALUES (?, ?, ?, ?, ?)
+    `);
     const setMeta = db.prepare(`
       INSERT INTO index_meta (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -172,6 +205,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
 
     db.exec("BEGIN IMMEDIATE;");
     try {
+      db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE kind = ?)").run(manifest.kind);
+      db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
       db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
       for (const file of manifest.files) {
         const result = insertFile.run(file.kind, manifest.root, file.path, file.relativePath, file.size, file.mtimeMs, file.language, manifest.generatedAt);
@@ -190,8 +225,17 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(symbol.signature),
             nullable(symbol.description)
           ) as { id: number };
+          insertSymbolFts.run(
+            symbolIdRow.id,
+            symbol.name,
+            symbol.type,
+            nullable(symbol.module),
+            nullable(symbol.className),
+            nullable(symbol.signature),
+            nullable(symbol.description)
+          );
           if (symbol.type === "event") {
-            insertEvent.run(
+            const eventResult = insertEvent.run(
               symbolIdRow.id,
               fileId,
               file.kind,
@@ -203,11 +247,18 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               nullable(symbol.signature),
               nullable(symbol.description)
             );
+            insertEventFts.run(
+              Number(eventResult.lastInsertRowid),
+              symbol.name,
+              nullable(symbol.module),
+              nullable(symbol.signature),
+              nullable(symbol.description)
+            );
           }
         }
       }
       setMeta.run(`index:${manifest.kind}`, JSON.stringify({ version: manifest.version, generatedAt: manifest.generatedAt, root: manifest.root, kind: manifest.kind, files: manifest.files.length }), manifest.generatedAt);
-      setMeta.run("schema_version", "1", manifest.generatedAt);
+      setMeta.run("schema_version", "2", manifest.generatedAt);
       db.exec("COMMIT;");
     } catch (error) {
       db.exec("ROLLBACK;");
@@ -253,55 +304,61 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
   }
 }
 
-export async function searchSqliteLiveApi(dbFile: string, query: SqliteSearchQuery): Promise<SearchResult<SymbolRecord>[] | undefined> {
-  try {
-    await fs.access(dbFile);
-  } catch {
-    return undefined;
-  }
+export interface DocIndexChunk {
+  uri: string;
+  title?: string;
+  path?: string;
+  mimeType?: string;
+  chunkIndex: number;
+  text: string;
+}
+
+export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[], indexedAt = new Date().toISOString()): Promise<void> {
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
   try {
-    const clauses = ["(lower(name) LIKE ? OR lower(coalesce(class_name, '')) LIKE ? OR lower(coalesce(module, '')) LIKE ? OR lower(coalesce(signature, '')) LIKE ? OR lower(coalesce(description, '')) LIKE ?)"];
-    const needle = `%${query.query.toLowerCase()}%`;
-    const params: SqliteValue[] = [needle, needle, needle, needle, needle];
-    if (query.type) {
-      clauses.push("type = ?");
-      params.push(query.type);
-    }
-    if (query.module) {
-      clauses.push("module = ?");
-      params.push(query.module);
-    }
+    db.exec("PRAGMA foreign_keys = ON;");
+    const insertDoc = db.prepare(`
+      INSERT INTO docs (uri, title, path, mime_type, indexed_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(uri) DO UPDATE SET
+        title = excluded.title,
+        path = excluded.path,
+        mime_type = excluded.mime_type,
+        indexed_at = excluded.indexed_at
+      RETURNING id
+    `);
+    const insertChunk = db.prepare(`
+      INSERT INTO doc_chunks (doc_id, chunk_index, text)
+      VALUES (?, ?, ?)
+      ON CONFLICT(doc_id, chunk_index) DO UPDATE SET text = excluded.text
+      RETURNING id
+    `);
+    const insertFts = db.prepare("INSERT INTO docs_fts (rowid, uri, title, path, text) VALUES (?, ?, ?, ?, ?)");
+    const setMeta = db.prepare(`
+      INSERT INTO index_meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
 
-    const rows = db.prepare(`
-      SELECT type, name, module, class_name, file, line, signature, description
-      FROM symbols
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY name
-      LIMIT ?
-    `).all(...params, Math.max(query.limit ?? 20, 100)) as unknown as SymbolRow[];
-
-    return rows
-      .map(rowToSymbol)
-      .map((symbol) => ({ score: scoreSymbol(symbol, query.query), item: symbol }))
-      .filter((result) => result.score > 0)
-      .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-      .slice(0, query.limit ?? 20);
+    db.exec("BEGIN IMMEDIATE;");
+    try {
+      db.exec("DELETE FROM docs_fts;");
+      db.exec("DELETE FROM docs;");
+      for (const chunk of chunks) {
+        const doc = insertDoc.get(chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), indexedAt) as { id: number };
+        const row = insertChunk.get(doc.id, chunk.chunkIndex, chunk.text) as { id: number };
+        insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
+      }
+      setMeta.run("index:docs", JSON.stringify({ generatedAt: indexedAt, chunks: chunks.length }), indexedAt);
+      db.exec("COMMIT;");
+    } catch (error) {
+      db.exec("ROLLBACK;");
+      throw error;
+    }
   } finally {
     db.close();
   }
 }
 
-function rowToSymbol(row: SymbolRow): SymbolRecord {
-  return {
-    type: row.type,
-    name: row.name,
-    module: row.module ?? undefined,
-    className: row.class_name ?? undefined,
-    file: row.file,
-    line: row.line,
-    signature: row.signature ?? undefined,
-    description: row.description ?? undefined
-  };
-}
+export { searchSqliteLiveApi, searchSqliteDocs } from "../liveapi/search.js";

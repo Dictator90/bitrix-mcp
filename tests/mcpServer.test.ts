@@ -66,3 +66,20 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
 
   assert.equal(results[0]?.item.name, "demo_helper");
 });
+
+test("MCP bitrix_docs_search searches local docs without embeddings service", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-docs-"));
+  const paths: RuntimePaths = {
+    workspaceRoot: fixtureRoot,
+    dataDir,
+    docsDir: path.join(fixtureRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765"
+  };
+  const server = createMcpServer(paths);
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_docs_search;
+
+  const result = await tool.handler({ query: "managed cache", limit: 5 });
+  const results = JSON.parse(result.content[0].text) as Array<{ item: { text: string } }>;
+
+  assert.match(results[0]?.item.text ?? "", /managed cache/);
+});

@@ -2,11 +2,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
-import { buildIndex, readIndex } from "../indexer/indexer.js";
+import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
-import { searchLiveApi } from "../liveapi/search.js";
-import { searchSqliteLiveApi } from "../indexer/sqliteStore.js";
-import { listDocResources, readDocResource } from "../resources/docs.js";
+import { searchLiveApi, searchSqliteDocs } from "../liveapi/search.js";
+import { listDocResources, readDocResource, indexDocResourcesToSqlite } from "../resources/docs.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
@@ -23,15 +22,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, type, module, limit }) => {
-      const sqliteResults = await searchSqliteLiveApi(sqlitePath(paths.dataDir), { query, type, module, limit });
-      const results = sqliteResults ?? searchLiveApi(
-        await Promise.all([
-          readIndex(indexPath(paths.dataDir, "bitrix")),
-          readIndex(indexPath(paths.dataDir, "project")),
-          readIndex(indexPath(paths.dataDir, "template"))
-        ]),
-        { query, type, module, limit }
-      );
+      const results = await searchLiveApi(sqlitePath(paths.dataDir), { query, type, module, limit }) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
   );
@@ -59,6 +50,20 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       const options = resolveTemplateIndexOptions(paths, templatePath ?? root);
       const manifest = await buildIndex(options);
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
+    }
+  );
+
+  server.tool(
+    "bitrix_docs_search",
+    "Local SQL/FTS search in indexed Bitrix Framework documentation without the Python embeddings service.",
+    {
+      query: z.string().min(1),
+      limit: z.number().int().min(1).max(50).default(5)
+    },
+    async ({ query, limit }) => {
+      await indexDocResourcesToSqlite(paths.docsDir, paths.dataDir);
+      const results = await searchSqliteDocs(sqlitePath(paths.dataDir), { query, limit }) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
   );
 
