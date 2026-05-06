@@ -69,3 +69,81 @@ EventManager::getInstance()->addEventHandlerCompatible('main', 'OnPageStart', ['
   assert.equal(registeredHandler?.handlerMethod, "onDealAdd");
   assert.equal(registeredHandler?.line, 4);
 });
+
+test("parsePhpSymbols extracts namespaced classes, aliases, calls, and typed method signatures", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+namespace Vendor\Module;
+
+use App\Contracts\Runnable;
+use App\Support\Worker as SupportWorker;
+
+interface Runner extends Runnable {}
+trait LogsWork {}
+class Example
+{
+    public const STATUS_READY = 'ready';
+
+    public function run(int $id, ?string $name = null): SupportWorker
+    {
+        SupportWorker::boot($id);
+        $this->log($name);
+    }
+}
+`, "/srv/site/local/modules/custom.module/lib/example.php");
+
+  assert.equal(symbols.find((symbol) => symbol.type === "interface")?.name, "Vendor\\Module\\Runner");
+  assert.equal(symbols.find((symbol) => symbol.type === "trait")?.name, "Vendor\\Module\\LogsWork");
+  assert.equal(symbols.find((symbol) => symbol.type === "class")?.name, "Vendor\\Module\\Example");
+
+  const method = symbols.find((symbol) => symbol.type === "method" && symbol.name === "run");
+  assert.equal(method?.className, "Vendor\\Module\\Example");
+  assert.match(method?.signature ?? "", /public function run\(int \$id, \?string \$name = null\): SupportWorker/);
+
+  const constant = symbols.find((symbol) => symbol.type === "constant" && symbol.name.endsWith("::STATUS_READY"));
+  assert.equal(constant?.name, "Vendor\\Module\\Example::STATUS_READY");
+
+  const staticCall = symbols.find((symbol) => symbol.type === "static_call" && symbol.name.endsWith("::boot"));
+  assert.equal(staticCall?.name, "App\\Support\\Worker::boot");
+
+  const methodCall = symbols.find((symbol) => symbol.type === "method_call" && symbol.name === "$this->log");
+  assert.equal(methodCall?.line, 16);
+});
+
+test("parsePhpSymbols extracts multiline EventManager calls with ::class handlers", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+namespace Vendor\Module;
+
+use Bitrix\Main\EventManager;
+use Vendor\Module\Handlers\PageHandler;
+
+EventManager::getInstance()
+    ->addEventHandlerCompatible(
+        'main',
+        'OnPageStart',
+        [PageHandler::class, 'handle']
+    );
+
+\Bitrix\Main\EventManager::getInstance()->registerEventHandler(
+    'sale',
+    'OnSaleOrderSaved',
+    'vendor.module',
+    PageHandler::class,
+    'onSaleOrderSaved'
+);
+`, "/srv/site/local/modules/vendor.module/lib/events.php");
+
+  const compatibleHandler = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnPageStart");
+  assert.equal(compatibleHandler?.module, "main");
+  assert.equal(compatibleHandler?.handlerClass, "Vendor\\Module\\Handlers\\PageHandler");
+  assert.equal(compatibleHandler?.handlerMethod, "handle");
+  assert.equal(compatibleHandler?.line, 7);
+
+  const registeredHandler = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnSaleOrderSaved");
+  assert.equal(registeredHandler?.module, "sale");
+  assert.equal(registeredHandler?.handlerClass, "Vendor\\Module\\Handlers\\PageHandler");
+  assert.equal(registeredHandler?.handlerMethod, "onSaleOrderSaved");
+  assert.equal(registeredHandler?.line, 14);
+
+  const eventManagerCall = symbols.find((symbol) => symbol.type === "static_call" && symbol.name === "Bitrix\\Main\\EventManager::getInstance");
+  assert.ok(eventManagerCall);
+});

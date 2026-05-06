@@ -1,5 +1,6 @@
 import type { SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
+import { parsePhpSymbolsWithAst } from "./phpAstParser.js";
 
 function lineOf(source: string, index: number): number {
   return source.slice(0, index).split(/\r?\n/).length;
@@ -11,7 +12,7 @@ function moduleFromPath(filePath: string): string | undefined {
   return match?.[1];
 }
 
-export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[] {
+function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
   const module = moduleFromPath(filePath);
 
@@ -84,4 +85,12 @@ export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[
   }
 
   return symbols;
+}
+
+export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[] {
+  try {
+    return parsePhpSymbolsWithAst(source, filePath);
+  } catch {
+    return parsePhpSymbolsWithRegex(source, filePath);
+  }
 }
