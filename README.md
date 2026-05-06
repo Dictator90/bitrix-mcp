@@ -66,7 +66,7 @@ cd /path/to/bitrix/project
 bitrix-mcp init
 ```
 
-The command uses the current working directory as the project root, sets `BITRIX_MCP_DATA_DIR` to `<projectRoot>/.bitrix-mcp`, sets `BITRIX_MCP_WORKSPACE` to the same project, and automatically treats the current project as `BITRIX_ROOT` when `<projectRoot>/bitrix` exists. It then asks which AI agents to configure. You can enter one number or multiple numbers separated by commas; each selected client gets its own MCP configuration created or updated:
+The command uses the current working directory as the project root, creates `<projectRoot>/.bitrix-mcp`, sets `BITRIX_MCP_WORKSPACE` to `<projectRoot>`, `BITRIX_MCP_DATA_DIR` to `<projectRoot>/.bitrix-mcp`, and `BITRIX_MCP_DOCS_DIR` to `<projectRoot>/docs`. When `<projectRoot>/bitrix` exists, it also sets `BITRIX_ROOT` to `<projectRoot>`. It then asks which AI agents to configure. You can enter one number or multiple numbers separated by commas; each selected client gets its own MCP configuration created or updated:
 
 - Cursor — `.cursor/mcp.json`.
 - Claude Desktop — global `claude_desktop_config.json`.
@@ -82,7 +82,7 @@ The command uses the current working directory as the project root, sets `BITRIX
 - Kilo Code — `~/.kilocode/cli/global/settings/mcp_settings.json`.
 - Other MCP clients — a custom JSON path entered during setup.
 
-For supported JSON clients, `init` adds a `bitrix-mcp` server that runs:
+For supported JSON clients, `init` reads the existing MCP config and adds or updates only the `bitrix-mcp` entry, preserving other MCP servers and unrelated settings. The `bitrix-mcp` server runs:
 
 ```json
 {
@@ -138,15 +138,23 @@ Search through `/search` or the MCP tool `bitrix_semantic_docs_search`.
 
 ## Agent configuration example
 
+For a project at `/var/www/site`, the final per-project MCP config written by `bitrix-mcp init` looks like this. If `/var/www/site/bitrix` exists, `BITRIX_ROOT` is included; otherwise that line is omitted. Existing sibling servers such as `another-server` are preserved.
+
 ```json
 {
   "mcpServers": {
+    "another-server": {
+      "command": "another-tool",
+      "args": ["serve"]
+    },
     "bitrix-mcp": {
-      "command": "npx",
-      "args": ["bitrix-mcp", "serve"],
+      "command": "bitrix-mcp",
+      "args": ["serve"],
       "env": {
-        "BITRIX_MCP_DATA_DIR": "/path/to/project/.bitrix-mcp",
-        "BITRIX_MCP_DOCS_DIR": "/path/to/project/docs",
+        "BITRIX_MCP_WORKSPACE": "/var/www/site",
+        "BITRIX_MCP_DATA_DIR": "/var/www/site/.bitrix-mcp",
+        "BITRIX_MCP_DOCS_DIR": "/var/www/site/docs",
+        "BITRIX_ROOT": "/var/www/site",
         "BITRIX_MCP_EMBEDDINGS_URL": "http://127.0.0.1:8765"
       }
     }

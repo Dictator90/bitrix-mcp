@@ -95,10 +95,10 @@ async function writeJsonObject(filePath: string, value: Record<string, unknown>)
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function envConfig(context: InitContext): Record<string, string> {
+export function envConfig(context: InitContext): Record<string, string> {
   return {
-    BITRIX_MCP_DATA_DIR: context.dataDir,
     BITRIX_MCP_WORKSPACE: context.projectRoot,
+    BITRIX_MCP_DATA_DIR: context.dataDir,
     BITRIX_MCP_DOCS_DIR: context.docsDir,
     ...(context.bitrixRoot ? { BITRIX_ROOT: context.bitrixRoot } : {}),
     BITRIX_MCP_EMBEDDINGS_URL: context.embeddingsUrl
@@ -131,7 +131,7 @@ function ensureObject(parent: Record<string, unknown>, key: string): Record<stri
   return next;
 }
 
-async function writeMcpServersConfig(filePath: string, context: InitContext, serverConfig: Record<string, unknown> = mcpServerConfig(context)): Promise<WrittenConfig> {
+export async function writeMcpServersConfig(filePath: string, context: InitContext, serverConfig: Record<string, unknown> = mcpServerConfig(context)): Promise<WrittenConfig> {
   const config = await readJsonObject(filePath);
   ensureObject(config, "mcpServers")["bitrix-mcp"] = serverConfig;
   await writeJsonObject(filePath, config);
@@ -149,12 +149,7 @@ async function writeVsCodeConfig(filePath: string, context: InitContext): Promis
 }
 
 async function writeContinueConfig(filePath: string, context: InitContext): Promise<WrittenConfig> {
-  await writeJsonObject(filePath, {
-    mcpServers: {
-      "bitrix-mcp": mcpServerConfig(context)
-    }
-  });
-  return { label: "Continue", path: filePath };
+  return { ...(await writeMcpServersConfig(filePath, context)), label: "Continue" };
 }
 
 function escapeTomlString(value: string): string {
@@ -342,11 +337,14 @@ export async function initAndServe(): Promise<void> {
 
   process.env.BITRIX_MCP_DATA_DIR = dataDir;
   process.env.BITRIX_MCP_WORKSPACE = projectRoot;
+  process.env.BITRIX_MCP_DOCS_DIR = docsDir;
   if (bitrixRoot) {
     process.env.BITRIX_ROOT = bitrixRoot;
   }
 
   const context: InitContext = { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl };
+  await fs.mkdir(dataDir, { recursive: true });
+
   const { agents, rl } = await askAgents();
   try {
     const configResults: WrittenConfig[] = [];
@@ -366,7 +364,6 @@ export async function initAndServe(): Promise<void> {
     rl.close();
   }
 
-  await fs.mkdir(dataDir, { recursive: true });
   const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl };
 
   await indexIfMissing(paths, "project", projectRoot);
