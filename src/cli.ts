@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
+import { formatDoctor, formatIndexAllResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
@@ -12,13 +13,18 @@ function usage(): string {
 Commands:
   init                          Configure an MCP client, index the project, and start stdio server
   serve                         Start MCP server over stdio
+  index-all                     Index project, templates, Bitrix modules, install assets, and docs
+  index-code                    Index project, templates, Bitrix modules, and install assets
   index-project [root]          Index project files
   index-template [templatePath] Index a specific template path, or standard template locations
   index-bitrix [root]           Index installed Bitrix Framework PHP sources
+  index-install [root]          Index Bitrix module install assets
   docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
   docs-add-path <path>          Register a local documentation directory
   docs-update                   Clone or pull registered Git documentation sources
   index-docs                    Index registered documentation sources into SQLite
+  status                        Show SQLite DB path and index counters
+  doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and embeddings
 
 Environment:
   BITRIX_MCP_DATA_DIR           Directory for generated indexes
@@ -49,6 +55,17 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "index-all") {
+    console.log(formatIndexAllResult(await indexAll(paths)));
+    return;
+  }
+
+  if (command === "index-code") {
+    const result = await indexCode(paths);
+    console.log(formatIndexAllResult({ ...result, docChunks: 0 }));
+    return;
+  }
+
   if (command === "index-project") {
     const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project") });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
@@ -70,6 +87,12 @@ async function main(argv: string[]): Promise<void> {
     const projectRoot = resolveBitrixProjectRoot(root);
     const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
+    return;
+  }
+
+  if (command === "index-install") {
+    const manifest = await buildIndex(installIndexOptions(paths, arg));
+    console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
@@ -97,6 +120,20 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-docs") {
     const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
+    return;
+  }
+
+  if (command === "status") {
+    console.log(formatIndexStatus(await readIndexStatus(paths)));
+    return;
+  }
+
+  if (command === "doctor") {
+    const checks = await runDoctor(paths);
+    console.log(formatDoctor(checks));
+    if (hasDoctorErrors(checks)) {
+      process.exitCode = 1;
+    }
     return;
   }
 

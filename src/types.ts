@@ -1,4 +1,4 @@
-export type IndexKind = "project" | "template" | "bitrix" | "docs";
+export type IndexKind = "project" | "template" | "bitrix" | "install" | "docs";
 
 export interface IndexFile {
   path: string;

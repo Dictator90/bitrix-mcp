@@ -403,6 +403,39 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
   }
 }
 
+
+export interface IndexStatus {
+  dbFile: string;
+  files: number;
+  symbols: number;
+  events: number;
+  documents: number;
+  lastIndexedAt?: string;
+}
+
+function countRows(db: DatabaseSync, table: string): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+  return row.count;
+}
+
+export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const lastIndexedRow = db.prepare("SELECT MAX(updated_at) AS last_indexed_at FROM index_meta WHERE key LIKE 'index:%'").get() as { last_indexed_at: string | null };
+    return {
+      dbFile,
+      files: countRows(db, "files"),
+      symbols: countRows(db, "symbols"),
+      events: countRows(db, "events"),
+      documents: countRows(db, "docs"),
+      lastIndexedAt: lastIndexedRow.last_indexed_at ?? undefined
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export interface DocIndexChunk {
   uri: string;
   sourceId?: number;
