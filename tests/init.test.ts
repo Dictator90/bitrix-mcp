@@ -12,13 +12,15 @@ test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     bitrixRoot: projectRoot,
-    embeddingsUrl: "http://127.0.0.1:8765"
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
   });
 
   assert.equal(config.BITRIX_MCP_WORKSPACE, projectRoot);
   assert.equal(config.BITRIX_MCP_DATA_DIR, path.join(projectRoot, ".bitrix-mcp"));
   assert.equal(config.BITRIX_MCP_DOCS_DIR, path.join(projectRoot, "docs"));
   assert.equal(config.BITRIX_ROOT, projectRoot);
+  assert.equal(config.BITRIX_MCP_SEMANTIC_ENABLED, "0");
 });
 
 test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers", async () => {
@@ -52,7 +54,8 @@ test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers"
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     bitrixRoot: projectRoot,
-    embeddingsUrl: "http://127.0.0.1:8765"
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
   });
 
   const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
@@ -67,4 +70,5 @@ test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers"
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_MCP_DATA_DIR, path.join(projectRoot, ".bitrix-mcp"));
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_MCP_DOCS_DIR, path.join(projectRoot, "docs"));
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_ROOT, projectRoot);
+  assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_MCP_SEMANTIC_ENABLED, "0");
 });

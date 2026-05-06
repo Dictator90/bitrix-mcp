@@ -50,6 +50,7 @@ interface InitContext {
   docsDir: string;
   bitrixRoot?: string;
   embeddingsUrl: string;
+  semanticEnabled: boolean;
 }
 
 interface WrittenConfig {
@@ -101,7 +102,8 @@ export function envConfig(context: InitContext): Record<string, string> {
     BITRIX_MCP_DATA_DIR: context.dataDir,
     BITRIX_MCP_DOCS_DIR: context.docsDir,
     ...(context.bitrixRoot ? { BITRIX_ROOT: context.bitrixRoot } : {}),
-    BITRIX_MCP_EMBEDDINGS_URL: context.embeddingsUrl
+    BITRIX_MCP_EMBEDDINGS_URL: context.embeddingsUrl,
+    BITRIX_MCP_SEMANTIC_ENABLED: context.semanticEnabled ? "1" : "0"
   };
 }
 
@@ -333,6 +335,7 @@ export async function initAndServe(): Promise<void> {
   const dataDir = path.join(projectRoot, ".bitrix-mcp");
   const docsDir = path.join(projectRoot, "docs");
   const embeddingsUrl = process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
+  const semanticEnabled = ["1", "true", "yes", "on"].includes((process.env.BITRIX_MCP_SEMANTIC_ENABLED ?? "").trim().toLowerCase());
   const bitrixRoot = (await pathExists(path.join(projectRoot, "bitrix"))) ? projectRoot : undefined;
 
   process.env.BITRIX_MCP_DATA_DIR = dataDir;
@@ -342,7 +345,7 @@ export async function initAndServe(): Promise<void> {
     process.env.BITRIX_ROOT = bitrixRoot;
   }
 
-  const context: InitContext = { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl };
+  const context: InitContext = { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled };
   await fs.mkdir(dataDir, { recursive: true });
 
   const { agents, rl } = await askAgents();
@@ -364,7 +367,7 @@ export async function initAndServe(): Promise<void> {
     rl.close();
   }
 
-  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl };
+  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl, semanticEnabled };
 
   await indexIfMissing(paths, "project", projectRoot);
   await indexIfMissing(paths, "template", projectRoot);

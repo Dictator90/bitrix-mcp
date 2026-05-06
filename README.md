@@ -7,15 +7,15 @@ Local, token-free MCP server for AI agents that need reference access to **Bitri
 - **LiveAPI**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, and constants.
 - **Project indexing**: indexes the current project through a terminal command or MCP tool.
 - **Template indexing**: separately indexes templates, components, scripts, styles, and layout assets.
-- **MCP resources**: exposes local Bitrix Framework documentation files as MCP resources.
-- **Semantic documentation search**: delegates embeddings to a Python `sentence-transformers` FastAPI service.
+- **MCP resources and local documentation search**: exposes local Bitrix Framework documentation files as MCP resources and searches the indexed docs with SQLite FTS.
+- **Optional semantic documentation search**: delegates embeddings to a Python `sentence-transformers` FastAPI service when explicitly enabled.
 - **Public local access**: no token or Bitrix authentication is required; access is controlled by where you run the process.
 
 ## Requirements
 
 - Node.js 20+
 - npm 10+
-- Python 3.11+ for semantic search
+- Python 3.11+ only for optional semantic search
 - A local or mounted Bitrix installation if you want LiveAPI data from core/modules
 
 The server uses `@modelcontextprotocol/sdk` **v1.29.0**.
@@ -70,6 +70,16 @@ Override paths with environment variables:
 - `BITRIX_MCP_DOCS_DIR` — legacy single documentation directory exposed as MCP resources.
 - `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
+- `BITRIX_MCP_SEMANTIC_ENABLED` — enables the optional `bitrix_semantic_docs_search` MCP tool when set to `1`, `true`, `yes`, or `on`; disabled by default.
+
+## Documentation search modes
+
+Bitrix MCP supports two documentation search modes:
+
+1. **Local SQLite FTS (default)** — run `bitrix-mcp index-docs` or the MCP tool `bitrix_index_docs` to index registered Markdown/text documentation into `.bitrix-mcp/bitrix-mcp.sqlite`. Use the `bitrix_docs_search` MCP tool for token-free full-text search. This mode does not need Python, network access, or the embeddings service.
+2. **Semantic embeddings (optional)** — start the Python FastAPI service from `embeddings/`, index documents into that service, and set `BITRIX_MCP_SEMANTIC_ENABLED=1` for the MCP server. This registers the additional `bitrix_semantic_docs_search` MCP tool, which calls `BITRIX_MCP_EMBEDDINGS_URL`.
+
+Use local FTS as the baseline documentation search. Enable semantic mode only when you need embedding-based ranking and can run the Python service alongside the MCP server.
 
 ## `bitrix-mcp init`
 
@@ -113,7 +123,9 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function.
 - `bitrix_index_project` — index the current project from an agent.
 - `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
-- `bitrix_semantic_docs_search` — semantic documentation search through embeddings.
+- `bitrix_index_docs` — index registered local/Git documentation sources into SQLite.
+- `bitrix_docs_search` — default local SQLite FTS documentation search.
+- `bitrix_semantic_docs_search` — optional semantic documentation search through embeddings; available only when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
 
 ## MCP resources
 
@@ -149,7 +161,7 @@ Index documents by POSTing chunks to `/index`:
 }
 ```
 
-Search through `/search` or the MCP tool `bitrix_semantic_docs_search`.
+Search through `/search` or, when `BITRIX_MCP_SEMANTIC_ENABLED=1`, the MCP tool `bitrix_semantic_docs_search`. The service also exposes `/health`, `/stats`, and `/reload`; `/search` keeps the JSON index and embedding matrix in memory after load/reload instead of rebuilding them for every request.
 
 ## Agent configuration example
 
@@ -171,7 +183,8 @@ For a project at `/var/www/site`, the final per-project MCP config written by `b
         "BITRIX_MCP_DOCS_PATHS": "/var/www/site/docs:/var/www/site/vendor-docs",
         "BITRIX_MCP_DOCS_DIR": "/var/www/site/docs",
         "BITRIX_ROOT": "/var/www/site",
-        "BITRIX_MCP_EMBEDDINGS_URL": "http://127.0.0.1:8765"
+        "BITRIX_MCP_EMBEDDINGS_URL": "http://127.0.0.1:8765",
+        "BITRIX_MCP_SEMANTIC_ENABLED": "0"
       }
     }
   }
