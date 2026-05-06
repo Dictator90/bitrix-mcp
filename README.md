@@ -32,6 +32,9 @@ On Windows PowerShell, Linux, and macOS the same commands work. Use absolute pat
 ## CLI usage
 
 ```bash
+# Configure an agent, create .bitrix-mcp indexes, and start stdio server
+npx bitrix-mcp init
+
 # Start MCP server over stdio for Cursor, PhpStorm, Claude Desktop, Kilo, etc.
 npx bitrix-mcp serve
 
@@ -48,9 +51,46 @@ npx bitrix-mcp index-bitrix /path/to/bitrix/site
 Generated indexes are written to `.bitrix-mcp/` by default. Override paths with environment variables:
 
 - `BITRIX_MCP_DATA_DIR` — index storage directory.
+- `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
 - `BITRIX_MCP_DOCS_DIR` — documentation directory exposed as MCP resources.
 - `BITRIX_ROOT` — default Bitrix installation root for `index-bitrix`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
+
+## `bitrix-mcp init`
+
+Run `init` from the root of a Bitrix project after installing `bitrix-mcp` globally or making it available on your `PATH`:
+
+```bash
+cd /path/to/bitrix/project
+bitrix-mcp init
+```
+
+The command uses the current working directory as the project root, sets `BITRIX_MCP_DATA_DIR` to `<projectRoot>/.bitrix-mcp`, sets `BITRIX_MCP_WORKSPACE` to the same project, and automatically treats the current project as `BITRIX_ROOT` when `<projectRoot>/bitrix` exists. It then asks which AI agents to configure. You can enter one number or multiple numbers separated by commas; each selected client gets its own MCP configuration created or updated:
+
+- Cursor — `.cursor/mcp.json`.
+- Claude Desktop — global `claude_desktop_config.json`.
+- Claude Code — project `.mcp.json`.
+- PhpStorm / JetBrains — prints a JetBrains AI Assistant MCP JSON snippet to paste into the IDE settings.
+- VS Code / GitHub Copilot — `.vscode/mcp.json` using the VS Code `servers` format.
+- Windsurf — `~/.codeium/windsurf/mcp_config.json`.
+- Cline — `~/.cline/data/settings/cline_mcp_settings.json`.
+- Roo Code — `.roo/mcp.json`.
+- Continue — `.continue/mcpServers/bitrix-mcp.json`.
+- Gemini CLI — `.gemini/settings.json`.
+- OpenAI Codex — `~/.codex/config.toml`.
+- Kilo Code — `~/.kilocode/cli/global/settings/mcp_settings.json`.
+- Other MCP clients — a custom JSON path entered during setup.
+
+For supported JSON clients, `init` adds a `bitrix-mcp` server that runs:
+
+```json
+{
+  "command": "bitrix-mcp",
+  "args": ["serve"]
+}
+```
+
+After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, and starts the MCP server over stdio.
 
 ## MCP tools
 
