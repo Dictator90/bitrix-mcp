@@ -3,6 +3,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
 import { sqlitePath } from "../config/paths.js";
+import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbols } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
@@ -56,7 +57,9 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     const absolutePath = path.join(root, relativePath);
     const stat = await fs.stat(absolutePath);
     const language = detectLanguage(absolutePath);
-    const source = language === "php" ? await fs.readFile(absolutePath, "utf8") : "";
+    const shouldParseSymbols = language === "php" || language === "javascript" || language === "typescript";
+    const source = shouldParseSymbols ? await fs.readFile(absolutePath, "utf8") : "";
+    const symbols = language === "php" ? parsePhpSymbols(source, absolutePath) : language === "javascript" || language === "typescript" ? parseJsSymbols(source, absolutePath) : [];
     files.push({
       path: absolutePath,
       relativePath,
@@ -64,7 +67,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
       size: stat.size,
       mtimeMs: stat.mtimeMs,
       language,
-      symbols: language === "php" ? parsePhpSymbols(source, absolutePath) : []
+      symbols: symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? language }))
     });
   }
 

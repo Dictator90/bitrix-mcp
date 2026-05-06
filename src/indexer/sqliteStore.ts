@@ -27,6 +27,7 @@ interface FileRow {
 
 interface SymbolRow {
   type: SymbolRecord["type"];
+  language: string | null;
   name: string;
   module: string | null;
   class_name: string | null;
@@ -51,6 +52,7 @@ function openDatabase(dbFile: string): DatabaseSync {
 function rowToSymbol(row: SymbolRow): SymbolRecord {
   return {
     type: row.type,
+    language: row.language ?? undefined,
     name: row.name,
     module: row.module ?? undefined,
     className: row.class_name ?? undefined,
@@ -92,6 +94,7 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         kind TEXT NOT NULL,
         root TEXT NOT NULL,
         type TEXT NOT NULL,
+        language TEXT,
         name TEXT NOT NULL,
         module TEXT,
         class_name TEXT,
@@ -218,7 +221,8 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       ["handler_class", "TEXT"],
       ["handler_method", "TEXT"],
       ["handler_function", "TEXT"],
-      ["event_name", "TEXT"]
+      ["event_name", "TEXT"],
+      ["language", "TEXT"]
     ] as const) {
       if (!symbolColumns.includes(column)) {
         db.exec(`ALTER TABLE symbols ADD COLUMN ${column} ${definition};`);
@@ -265,8 +269,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -301,6 +305,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             file.kind,
             manifest.root,
             symbol.type,
+            nullable(symbol.language ?? file.language),
             symbol.name,
             nullable(symbol.module),
             nullable(symbol.className),
@@ -352,7 +357,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         }
       }
       setMeta.run(`index:${manifest.kind}`, JSON.stringify({ version: manifest.version, generatedAt: manifest.generatedAt, root: manifest.root, kind: manifest.kind, files: manifest.files.length }), manifest.generatedAt);
-      setMeta.run("schema_version", "2", manifest.generatedAt);
+      setMeta.run("schema_version", "3", manifest.generatedAt);
       db.exec("COMMIT;");
     } catch (error) {
       db.exec("ROLLBACK;");
@@ -376,7 +381,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT type, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,
