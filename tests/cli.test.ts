@@ -5,6 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { sqlitePath } from "../src/config/paths.js";
+import { readIndexFromSqlite } from "../src/indexer/sqliteStore.js";
 import type { IndexManifest } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,7 +19,10 @@ async function runCliIndexTemplate(args: string[] = []): Promise<IndexManifest> 
     cwd: fixtureRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
   });
-  return JSON.parse(await fs.readFile(path.join(dataDir, "template-index.json"), "utf8")) as IndexManifest;
+  await assert.rejects(fs.readFile(path.join(dataDir, "template-index.json"), "utf8"));
+  const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
+  assert.ok(manifest);
+  return manifest;
 }
 
 test("cli index-template indexes a relative templatePath from workspace root", async () => {

@@ -52,3 +52,7 @@ function detectWorkspaceBitrixRoot(workspaceRoot: string): string | undefined {
 export function indexPath(dataDir: string, kind: string): string {
   return path.join(dataDir, `${kind}-index.json`);
 }
+
+export function sqlitePath(dataDir: string): string {
+  return path.join(dataDir, "bitrix-mcp.sqlite");
+}

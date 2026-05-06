@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths } from "./config/paths.js";
+import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
@@ -44,14 +44,14 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "index-project") {
     const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project") });
-    console.log(`Indexed ${manifest.files.length} project files into ${indexPath(paths.dataDir, "project")}`);
+    console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-template") {
     const options = resolveTemplateIndexOptions(paths, arg);
     const manifest = await buildIndex(options);
-    console.log(`Indexed ${manifest.files.length} template files into ${indexPath(paths.dataDir, "template")}`);
+    console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
@@ -62,7 +62,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const projectRoot = resolveBitrixProjectRoot(root);
     const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
-    console.log(`Indexed ${manifest.files.length} Bitrix files into ${indexPath(paths.dataDir, "bitrix")}`);
+    console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
