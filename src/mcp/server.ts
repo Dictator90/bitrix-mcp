@@ -72,7 +72,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Index registered Bitrix documentation sources into the local SQLite documentation index.",
     {},
     async () => {
-      const chunks = await indexDocResourcesToSqlite(paths.dataDir);
+      const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
       return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
     }
   );

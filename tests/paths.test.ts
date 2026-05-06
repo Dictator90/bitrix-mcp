@@ -77,3 +77,58 @@ test("resolveRuntimePaths leaves bitrixRoot unset when no workspace bitrix direc
     assert.equal(paths.bitrixRoot, undefined);
   });
 });
+
+function withDocsEnv<T>(values: { docsPaths?: string; docsDir?: string }, callback: () => T): T {
+  const previousPaths = process.env.BITRIX_MCP_DOCS_PATHS;
+  const previousDir = process.env.BITRIX_MCP_DOCS_DIR;
+  if (values.docsPaths === undefined) {
+    delete process.env.BITRIX_MCP_DOCS_PATHS;
+  } else {
+    process.env.BITRIX_MCP_DOCS_PATHS = values.docsPaths;
+  }
+  if (values.docsDir === undefined) {
+    delete process.env.BITRIX_MCP_DOCS_DIR;
+  } else {
+    process.env.BITRIX_MCP_DOCS_DIR = values.docsDir;
+  }
+
+  try {
+    return callback();
+  } finally {
+    if (previousPaths === undefined) {
+      delete process.env.BITRIX_MCP_DOCS_PATHS;
+    } else {
+      process.env.BITRIX_MCP_DOCS_PATHS = previousPaths;
+    }
+    if (previousDir === undefined) {
+      delete process.env.BITRIX_MCP_DOCS_DIR;
+    } else {
+      process.env.BITRIX_MCP_DOCS_DIR = previousDir;
+    }
+  }
+}
+
+test("resolveRuntimePaths reads BITRIX_MCP_DOCS_PATHS with path delimiter", () => {
+  const workspaceRoot = tempWorkspace();
+  const docsOne = path.join(workspaceRoot, "docs-one");
+  const docsTwo = path.join(workspaceRoot, "docs-two");
+
+  withDocsEnv({ docsPaths: [docsOne, docsTwo].join(path.delimiter) }, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+
+    assert.equal(paths.docsDir, docsOne);
+    assert.deepEqual(paths.docsPaths, [docsOne, docsTwo]);
+  });
+});
+
+test("resolveRuntimePaths keeps BITRIX_MCP_DOCS_DIR compatibility", () => {
+  const workspaceRoot = tempWorkspace();
+  const docsDir = path.join(workspaceRoot, "legacy-docs");
+
+  withDocsEnv({ docsDir }, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+
+    assert.equal(paths.docsDir, docsDir);
+    assert.deepEqual(paths.docsPaths, [docsDir]);
+  });
+});

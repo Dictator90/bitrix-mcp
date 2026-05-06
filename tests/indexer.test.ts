@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
+import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs } from "../src/liveapi/search.js";
@@ -62,6 +63,40 @@ test("documentation index supports multiple registered local paths", async () =>
   assert.ok(resources.some((resource) => resource.uri.startsWith("bitrix-docs://path-") && resource.path === path.join(docsTwo, "events.txt")));
 });
 
+
+
+test("documentation index scans multiple runtime docs paths", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-runtime-docs-"));
+  const docsOne = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-runtime-one-"));
+  const docsTwo = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-runtime-two-"));
+
+  await fs.writeFile(path.join(docsOne, "cache.md"), "# Runtime Cache\nmanaged cache runtime details\n", "utf8");
+  await fs.writeFile(path.join(docsTwo, "events.txt"), "# Runtime Events\nOnBeforeProlog runtime details\n", "utf8");
+
+  const chunks = await indexDocResourcesToSqlite(dataDir, [docsOne, docsTwo]);
+
+  assert.equal(chunks, 2);
+  const resources = await listDocResources(dataDir);
+  assert.equal(resources.length, 2);
+  assert.ok(resources.some((resource) => resource.path === path.join(docsOne, "cache.md")));
+  assert.ok(resources.some((resource) => resource.path === path.join(docsTwo, "events.txt")));
+
+  const db = new DatabaseSync(sqlitePath(dataDir));
+  try {
+    const docs = db.prepare(`
+      SELECT d.path, d.source_id, d.source_name, s.name
+      FROM docs d
+      JOIN doc_sources s ON s.id = d.source_id
+      ORDER BY d.path
+    `).all() as Array<{ path: string; source_id: number; source_name: string; name: string }>;
+
+    assert.equal(docs.length, 2);
+    assert.ok(docs.every((doc) => doc.source_id > 0));
+    assert.deepEqual(docs.map((doc) => doc.source_name), docs.map((doc) => doc.name));
+  } finally {
+    db.close();
+  }
+});
 
 test(".bitrixmcpignore excludes PHP and JS files from SQLite index", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignore-root-"));

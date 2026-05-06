@@ -16,6 +16,7 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
     workspaceRoot: fixtureRoot,
     dataDir,
     docsDir: path.join(fixtureRoot, "docs"),
+    docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765"
   };
   const server = createMcpServer(paths);
@@ -36,6 +37,7 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
     workspaceRoot: fixtureRoot,
     dataDir,
     docsDir: path.join(fixtureRoot, "docs"),
+    docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765"
   };
   const server = createMcpServer(paths);
@@ -56,6 +58,7 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
     workspaceRoot: fixtureRoot,
     dataDir,
     docsDir: path.join(fixtureRoot, "docs"),
+    docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765"
   };
   const server = createMcpServer(paths);
@@ -74,6 +77,7 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
     workspaceRoot: fixtureRoot,
     dataDir,
     docsDir: path.join(fixtureRoot, "docs"),
+    docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765"
   };
   await addPathDocSource(dataDir, paths.docsDir);

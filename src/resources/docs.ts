@@ -28,6 +28,7 @@ interface DocResourceRow {
   title: string | null;
   path: string | null;
   mime_type: string | null;
+  source_name: string | null;
 }
 
 function openDatabase(dbFile: string): DatabaseSync {
@@ -36,6 +37,11 @@ function openDatabase(dbFile: string): DatabaseSync {
 
 function nullable(value: string | undefined): string | null {
   return value ?? null;
+}
+
+function sourceNameForPath(root: string, index?: number): string {
+  const basename = path.basename(root) || "local-docs";
+  return index == null ? basename : `${basename}-${index + 1}`;
 }
 
 function expandHome(value: string): string {
@@ -161,7 +167,7 @@ export async function addPathDocSource(dataDir: string, docsPath: string, name?:
   }
   await ensureSqliteStore(sqlitePath(dataDir));
   const now = new Date().toISOString();
-  const sourceName = name ?? (path.basename(root) || "local-docs");
+  const sourceName = name ?? sourceNameForPath(root);
   const db = openDatabase(sqlitePath(dataDir));
   try {
     const row = db.prepare(`
@@ -177,6 +183,17 @@ export async function addPathDocSource(dataDir: string, docsPath: string, name?:
   } finally {
     db.close();
   }
+}
+
+export async function addPathDocSources(dataDir: string, docsPaths: string[]): Promise<DocSource[]> {
+  const sources: DocSource[] = [];
+  for (const [index, docsPath] of docsPaths.entries()) {
+    const root = expandHome(docsPath);
+    if (await directoryExists(root)) {
+      sources.push(await addPathDocSource(dataDir, root, sourceNameForPath(root, docsPaths.length > 1 ? index : undefined)));
+    }
+  }
+  return sources;
 }
 
 export async function listDocSources(dataDir: string): Promise<DocSource[]> {
@@ -235,13 +252,14 @@ export async function listDocResources(dataDir: string): Promise<DocResource[]> 
   await ensureSqliteStore(sqlitePath(dataDir));
   const db = openDatabase(sqlitePath(dataDir));
   try {
-    const rows = db.prepare("SELECT uri, title, path, mime_type FROM docs ORDER BY uri").all() as unknown as DocResourceRow[];
+    const rows = db.prepare("SELECT uri, title, path, mime_type, source_name FROM docs ORDER BY uri").all() as unknown as DocResourceRow[];
     return rows.map((row) => {
       const name = row.title ?? row.uri.replace(/^bitrix-docs:\/\//, "").replace(/\.(md|txt)$/i, "").replace(/[\\/]/g, " / ");
+      const descriptionSource = row.source_name ? `${row.source_name}: ` : "";
       return {
         uri: row.uri,
         name,
-        description: `Bitrix Framework documentation: ${name}`,
+        description: `Bitrix Framework documentation: ${descriptionSource}${name}`,
         mimeType: row.mime_type ?? "text/plain",
         path: row.path ?? ""
       };
@@ -260,7 +278,10 @@ export async function readDocResource(dataDir: string, uri: string): Promise<{ c
   return { contents: await fs.readFile(resource.path, "utf8"), resource };
 }
 
-export async function indexDocResourcesToSqlite(dataDir: string): Promise<number> {
+export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: string[] = []): Promise<number> {
+  if (docsPaths.length > 0) {
+    await addPathDocSources(dataDir, docsPaths);
+  }
   const sources = await listDocSources(dataDir);
   const chunks: DocIndexChunk[] = [];
   for (const source of sources) {
@@ -271,6 +292,8 @@ export async function indexDocResourcesToSqlite(dataDir: string): Promise<number
       splitDocChunks(contents).forEach((text, chunkIndex) => {
         chunks.push({
           uri: resource.uri,
+          sourceId: source.id,
+          sourceName: sourceDisplayName(source),
           title,
           path: resource.path,
           mimeType: resource.mimeType,
