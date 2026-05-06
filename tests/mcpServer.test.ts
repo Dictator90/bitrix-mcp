@@ -69,6 +69,13 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   const results = JSON.parse(result.content[0].text) as Array<{ item: { name: string } }>;
 
   assert.equal(results[0]?.item.name, "demo_helper");
+
+  const eventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5 });
+  const eventResults = JSON.parse(eventResult.content[0].text) as Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }>;
+
+  assert.equal(eventResults[0]?.item.eventName, "OnBeforeProlog");
+  assert.equal(eventResults[0]?.item.handlerClass, "Demo");
+  assert.equal(eventResults[0]?.item.handlerMethod, "handler");
 });
 
 test("MCP bitrix_docs_search searches local docs without embeddings service", async () => {

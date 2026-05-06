@@ -15,6 +15,22 @@ export interface SymbolRecord {
   name: string;
   module?: string;
   className?: string;
+  handlerClass?: string;
+  handlerMethod?: string;
+  handlerFunction?: string;
+  eventName?: string;
+  file: string;
+  line: number;
+  signature?: string;
+  description?: string;
+}
+
+export interface EventRecord {
+  module: string;
+  eventName: string;
+  handlerClass?: string;
+  handlerMethod?: string;
+  handlerFunction?: string;
   file: string;
   line: number;
   signature?: string;

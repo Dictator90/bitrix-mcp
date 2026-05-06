@@ -1,4 +1,5 @@
 import type { SymbolRecord } from "../types.js";
+import { parsePhpEvents } from "./eventParser.js";
 
 function lineOf(source: string, index: number): number {
   return source.slice(0, index).split(/\r?\n/).length;
@@ -42,15 +43,19 @@ export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[
     });
   }
 
-  const eventRegex = /(?:RegisterModuleDependences|AddEventHandler|registerEventHandler)\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']/gi;
-  for (const match of source.matchAll(eventRegex)) {
+  for (const event of parsePhpEvents(source, filePath)) {
     symbols.push({
       type: "event",
-      name: `${match[1]}:${match[2]}`,
-      module: match[1],
-      file: filePath,
-      line: lineOf(source, match.index ?? 0),
-      signature: match[0]
+      name: `${event.module}:${event.eventName}`,
+      module: event.module,
+      eventName: event.eventName,
+      handlerClass: event.handlerClass,
+      handlerMethod: event.handlerMethod,
+      handlerFunction: event.handlerFunction,
+      file: event.file,
+      line: event.line,
+      signature: event.signature,
+      description: event.description
     });
   }
 
