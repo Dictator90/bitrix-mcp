@@ -21,9 +21,13 @@ export interface IndexOptions {
   patterns?: string[];
 }
 
-async function loadIgnore(root: string) {
+async function loadIgnore(root: string, options: { useGitignore?: boolean } = {}) {
   const ig = ignore().add(DEFAULT_IGNORES.map((entry) => entry.replace(/^\*\*\//, "")));
-  for (const ignoreFile of [".gitignore", ".bitrixmcpignore"]) {
+  const ignoreFiles = [
+    options.useGitignore === false ? undefined : ".gitignore",
+    ".bitrixmcpignore"
+  ].filter((entry): entry is string => Boolean(entry));
+  for (const ignoreFile of ignoreFiles) {
     try {
       const ignoreRules = await fs.readFile(path.join(root, ignoreFile), "utf8");
       ig.add(ignoreRules);
@@ -40,7 +44,9 @@ async function loadIgnore(root: string) {
 export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
   const root = path.resolve(options.root);
   const patterns = options.patterns ?? (options.kind === "template" ? TEMPLATE_HINTS : DEFAULT_INDEX_PATTERNS);
-  const ig = await loadIgnore(root);
+  const ig = await loadIgnore(root, {
+    useGitignore: options.kind !== "bitrix" && options.kind !== "install"
+  });
   const entries = await fg(patterns, {
     cwd: root,
     onlyFiles: true,
