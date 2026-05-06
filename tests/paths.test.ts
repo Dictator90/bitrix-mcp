@@ -132,3 +132,34 @@ test("resolveRuntimePaths keeps BITRIX_MCP_DOCS_DIR compatibility", () => {
     assert.deepEqual(paths.docsPaths, [docsDir]);
   });
 });
+
+function withSemanticEnv<T>(value: string | undefined, callback: () => T): T {
+  const previous = process.env.BITRIX_MCP_SEMANTIC_ENABLED;
+  if (value === undefined) {
+    delete process.env.BITRIX_MCP_SEMANTIC_ENABLED;
+  } else {
+    process.env.BITRIX_MCP_SEMANTIC_ENABLED = value;
+  }
+
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BITRIX_MCP_SEMANTIC_ENABLED;
+    } else {
+      process.env.BITRIX_MCP_SEMANTIC_ENABLED = previous;
+    }
+  }
+}
+
+test("resolveRuntimePaths enables optional semantic mode from BITRIX_MCP_SEMANTIC_ENABLED", () => {
+  const workspaceRoot = tempWorkspace();
+
+  withSemanticEnv("true", () => {
+    assert.equal(resolveRuntimePaths({ workspaceRoot }).semanticEnabled, true);
+  });
+
+  withSemanticEnv(undefined, () => {
+    assert.equal(resolveRuntimePaths({ workspaceRoot }).semanticEnabled, false);
+  });
+});

@@ -10,7 +10,6 @@ import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
   const server = new McpServer({ name: "bitrix-mcp", version: "0.1.0" });
-  const embeddings = new EmbeddingsClient(paths.embeddingsUrl);
 
   server.tool(
     "bitrix_liveapi_search",
@@ -91,18 +90,22 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
-  server.tool(
-    "bitrix_semantic_docs_search",
-    "Semantic search in Bitrix Framework documentation through the Python sentence-transformers service.",
-    {
-      query: z.string().min(1),
-      limit: z.number().int().min(1).max(20).default(5)
-    },
-    async ({ query, limit }) => {
-      const results = await embeddings.search(query, limit);
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-    }
-  );
+  if (paths.semanticEnabled) {
+    const embeddings = new EmbeddingsClient(paths.embeddingsUrl);
+
+    server.tool(
+      "bitrix_semantic_docs_search",
+      "Optional semantic search in Bitrix Framework documentation through the Python sentence-transformers service. Enable with BITRIX_MCP_SEMANTIC_ENABLED=1.",
+      {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(5)
+      },
+      async ({ query, limit }) => {
+        const results = await embeddings.search(query, limit);
+        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      }
+    );
+  }
 
   server.resource(
     "bitrix-docs-index",
