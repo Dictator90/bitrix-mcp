@@ -19,6 +19,7 @@ export interface DocSearchResult {
 
 interface SymbolRow {
   type: SymbolRecord["type"];
+  language: string | null;
   name: string;
   module: string | null;
   class_name: string | null;
@@ -114,6 +115,7 @@ function rowToEvent(row: EventRow): EventRecord {
 function rowToSymbol(row: SymbolRow): SymbolRecord {
   return {
     type: row.type,
+    language: row.language ?? undefined,
     name: row.name,
     module: row.module ?? undefined,
     className: row.class_name ?? undefined,
@@ -185,11 +187,11 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
         JOIN symbols s ON s.id = symbols_fts.rowid
         WHERE symbols_fts MATCH ?
       )
-      SELECT type, name, module, class_name, file, line, signature, description,
+      SELECT type, language, name, module, class_name, file, line, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
       FROM candidates
       ${where}
-      GROUP BY type, name, module, class_name, file, line, signature, description
+      GROUP BY type, language, name, module, class_name, file, line, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, fts, ...filterParams, limit) as unknown as SymbolRow[];

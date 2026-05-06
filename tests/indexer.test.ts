@@ -22,6 +22,10 @@ test("buildIndex indexes project PHP symbols", async () => {
   assert.equal(sqliteManifest?.root, root);
   const results = await searchLiveApi(sqlitePath(dataDir), { query: "demo_helper" });
   assert.equal(results?.[0]?.item.name, "demo_helper");
+
+  const jsFile = manifest.files.find((file) => file.relativePath === "local/modules/vendor.module/install/js/admin/widget.ts");
+  assert.equal(jsFile?.language, "typescript");
+  assert.ok(jsFile?.symbols.some((symbol) => symbol.type === "class" && symbol.name === "VendorWidget" && symbol.module === "vendor.module" && symbol.language === "typescript"));
 });
 
 test("SQLite FTS searches classes, methods, events, and docs", async () => {
@@ -34,6 +38,14 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
 
   const methodResults = await searchLiveApi(sqlitePath(dataDir), { query: "execute", type: "method", limit: 5 });
   assert.equal(methodResults?.[0]?.item.name, "executeComponent");
+
+  const jsResults = await searchLiveApi(sqlitePath(dataDir), { query: "VendorWidget", type: "class", limit: 5 });
+  assert.equal(jsResults?.[0]?.item.name, "VendorWidget");
+  assert.equal(jsResults?.[0]?.item.module, "vendor.module");
+  assert.equal(jsResults?.[0]?.item.language, "typescript");
+
+  const objectMethodResults = await searchLiveApi(sqlitePath(dataDir), { query: "helpers.prepare", type: "object_method", module: "vendor.module", limit: 5 });
+  assert.equal(objectMethodResults?.[0]?.item.name, "helpers.prepare");
 
   const eventResults = await searchLiveApi(sqlitePath(dataDir), { query: "OnBefore", type: "event", module: "main", limit: 5 });
   assert.equal(eventResults?.[0]?.item.name, "main:OnBeforeProlog");
