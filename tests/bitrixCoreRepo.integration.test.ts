@@ -144,29 +144,39 @@ test("MCP tools index and search a standard Bitrix checkout deployed from autrob
   const docsResult = await tools.bitrix_index_docs.handler({});
   assert.equal(docsResult.content[0]?.text, "Indexed 1 documentation chunks.");
 
-  const classSearch = parseJsonTool<Array<{ item: { name: string; module?: string; file: string } }>>(
+  const classSearch = parseJsonTool<Array<{ name: string; module?: string; file: string }>>(
     await tools.bitrix_liveapi_search.handler({ query: "Application", type: "class", module: "main", limit: 5 })
   );
-  assert.equal(classSearch[0]?.item.name, "Bitrix\\Main\\Application");
-  assert.ok(classSearch[0]?.item.file.startsWith(path.join(standardRoot, "bitrix/modules/main")));
+  assert.equal(classSearch[0]?.name, "Bitrix\\Main\\Application");
+  assert.ok(classSearch[0]?.file.startsWith(path.join(standardRoot, "bitrix/modules/main")));
 
-  const installSearch = parseJsonTool<Array<{ item: { name: string; language?: string; module?: string } }>>(
+  const installSearch = parseJsonTool<Array<{ name: string; module?: string }>>(
     await tools.bitrix_liveapi_search.handler({ query: "StandardAdminPanel", type: "class", module: "main", limit: 5 })
   );
-  assert.equal(installSearch[0]?.item.name, "StandardAdminPanel");
-  assert.equal(installSearch[0]?.item.language, "typescript");
+  assert.equal(installSearch[0]?.name, "StandardAdminPanel");
 
-  const eventSearch = parseJsonTool<Array<{ item: { eventName: string; handlerClass?: string; handlerMethod?: string } }>>(
+  const fullInstallSearch = parseJsonTool<Array<{ item: { name: string; language?: string; module?: string } }>>(
+    await tools.bitrix_liveapi_search.handler({ query: "StandardAdminPanel", type: "class", module: "main", limit: 5, format: "full" })
+  );
+  assert.equal(fullInstallSearch[0]?.item.language, "typescript");
+
+  const eventSearch = parseJsonTool<Array<{ type: string; name: string; module?: string }>>(
     await tools.bitrix_event_search.handler({ query: "BeforeProlog", module: "main", limit: 5 })
   );
-  assert.equal(eventSearch[0]?.item.eventName, "OnBeforeProlog");
-  assert.equal(eventSearch[0]?.item.handlerClass, "BitrixStandardHandler");
-  assert.equal(eventSearch[0]?.item.handlerMethod, "onBeforeProlog");
+  assert.equal(eventSearch[0]?.type, "event");
+  assert.equal(eventSearch[0]?.name, "OnBeforeProlog");
 
-  const docsSearch = parseJsonTool<Array<{ item: { text: string } }>>(
+  const fullEventSearch = parseJsonTool<Array<{ item: { eventName: string; handlerClass?: string; handlerMethod?: string } }>>(
+    await tools.bitrix_event_search.handler({ query: "BeforeProlog", module: "main", limit: 5, format: "full" })
+  );
+  assert.equal(fullEventSearch[0]?.item.handlerClass, "BitrixStandardHandler");
+  assert.equal(fullEventSearch[0]?.item.handlerMethod, "onBeforeProlog");
+
+  const docsSearch = parseJsonTool<Array<{ excerpt: string; type: string }>>(
     await tools.bitrix_docs_search.handler({ query: "standard repository deployment", limit: 5 })
   );
-  assert.match(docsSearch[0]?.item.text ?? "", /standard repository deployment/);
+  assert.equal(docsSearch[0]?.type, "doc");
+  assert.match(docsSearch[0]?.excerpt ?? "", /\*\*standard\*\* \*\*repository\*\* \*\*deployment\*\*/i);
 
   const status = parseJsonTool<{ dbFile: string; files: number; symbols: number; events: number; documents: number }>(
     await tools.bitrix_index_status.handler({})

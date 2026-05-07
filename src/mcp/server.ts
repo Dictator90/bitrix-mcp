@@ -6,6 +6,14 @@ import { readIndexStatus } from "../indexer/actions.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
+import { formatSemanticDocSearchResults } from "./format.js";
+
+const searchFormatSchema = {
+  includeSignature: z.boolean().optional().describe("Include the compact signature field; enabled by default."),
+  maxSignatureChars: z.number().int().min(20).max(2_000).optional().describe("Maximum characters for compact signatures; default is 160."),
+  maxTextChars: z.number().int().min(80).max(10_000).optional().describe("Maximum characters for documentation excerpts in compact mode; default is 500."),
+  format: z.enum(["compact", "full"]).optional().describe("compact returns short fields by default; full returns the raw indexed result payload.")
+};
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
   const server = new McpServer({ name: "bitrix-mcp", version: "0.1.0" });
@@ -18,10 +26,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]).optional(),
       module: z.string().optional(),
       kind: z.enum(["project", "bitrix", "template", "install"]).optional(),
-      limit: z.number().int().min(1).max(100).default(20)
+      limit: z.number().int().min(1).max(100).default(20),
+      ...searchFormatSchema
     },
-    async ({ query, type, module, kind, limit }) => {
-      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, limit } });
+    async ({ query, type, module, kind, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
 
@@ -31,10 +40,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     {
       query: z.string().min(1),
       module: z.string().optional(),
-      limit: z.number().int().min(1).max(100).default(20)
+      limit: z.number().int().min(1).max(100).default(20),
+      ...searchFormatSchema
     },
-    async ({ query, module, limit }) => {
-      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, limit } });
+    async ({ query, module, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
 
@@ -87,10 +97,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Local SQL/FTS search in indexed Bitrix Framework documentation without the Python embeddings service.",
     {
       query: z.string().min(1),
-      limit: z.number().int().min(1).max(50).default(5)
+      limit: z.number().int().min(1).max(50).default(5),
+      ...searchFormatSchema
     },
-    async ({ query, limit }) => {
-      return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit } });
+    async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
 
@@ -112,12 +123,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       "Optional semantic search in Bitrix Framework documentation through the Python sentence-transformers service. Enable with BITRIX_MCP_SEMANTIC_ENABLED=1.",
       {
         query: z.string().min(1),
-        limit: z.number().int().min(1).max(20).default(5)
+        limit: z.number().int().min(1).max(20).default(5),
+        ...searchFormatSchema
       },
-      async ({ query, limit }) => {
+      async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
         return withMcpToolGuard("bitrix_semantic_docs_search", async () => {
           const results = await embeddings.search(query, limit);
-          return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+          return { content: [{ type: "text", text: JSON.stringify(formatSemanticDocSearchResults(results, { query, includeSignature, maxSignatureChars, maxTextChars, format }), null, 2) }] };
         });
       }
     );
