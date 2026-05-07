@@ -1,12 +1,10 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { indexPath, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
-import { formatIndexAllResult, indexAll, readIndexStatus } from "../indexer/actions.js";
-import { buildIndex } from "../indexer/indexer.js";
-import { resolveTemplateIndexOptions } from "../indexer/template.js";
-import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../liveapi/search.js";
-import { indexDocResourcesToSqlite, listDocResources, readDocResource } from "../resources/docs.js";
+import { resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
+import { readIndexStatus } from "../indexer/actions.js";
+import { listDocResources, readDocResource } from "../resources/docs.js";
+import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
@@ -23,8 +21,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, type, module, kind, limit }) => {
-      const results = await searchLiveApi(sqlitePath(paths.dataDir), { query, type, module, kind, limit }) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, limit } });
     }
   );
 
@@ -37,8 +34,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20)
     },
     async ({ query, module, limit }) => {
-      const results = await searchSqliteEvents(sqlitePath(paths.dataDir), { query, module, limit }) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, limit } });
     }
   );
 
@@ -49,8 +45,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       root: z.string().optional()
     },
     async ({ root }) => {
-      const manifest = await buildIndex({ root: root ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project") });
-      return { content: [{ type: "text", text: `Indexed ${manifest.files.length} project files.` }] };
+      return runWorkerTask("bitrix_index_project", { name: "indexProject", paths, root });
     }
   );
 
@@ -62,9 +57,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       root: z.string().optional().describe("Deprecated: use templatePath instead. Temporary compatibility alias for a template path relative to the project root.")
     },
     async ({ templatePath, root }) => {
-      const options = resolveTemplateIndexOptions(paths, templatePath ?? root);
-      const manifest = await buildIndex(options);
-      return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
+      return runWorkerTask("bitrix_index_template", { name: "indexTemplate", paths, templatePath, root });
     }
   );
 
@@ -73,8 +66,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Index the project, templates, Bitrix modules, module install assets, and registered documentation sources into SQLite.",
     {},
     async () => {
-      const result = await indexAll(paths);
-      return { content: [{ type: "text", text: formatIndexAllResult(result) }] };
+      return runWorkerTask("bitrix_index_all", { name: "indexAll", paths });
     }
   );
 
@@ -83,8 +75,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Show the Bitrix MCP SQLite DB path and current index counters for files, symbols, events, documents, and last index time.",
     {},
     async () => {
-      const status = await readIndexStatus(paths);
-      return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+      return withMcpToolGuard("bitrix_index_status", async () => {
+        const status = await readIndexStatus(paths);
+        return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
+      });
     }
   );
 
@@ -96,8 +90,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(50).default(5)
     },
     async ({ query, limit }) => {
-      const results = await searchSqliteDocs(sqlitePath(paths.dataDir), { query, limit }) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit } });
     }
   );
 
@@ -107,8 +100,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Clone/pull and index Bitrix documentation sources into the local SQLite documentation index, including the official Bitrix Framework docs repository when enabled.",
     {},
     async () => {
-      const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
-      return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
+      return runWorkerTask("bitrix_index_docs", { name: "indexDocs", paths });
     }
   );
 
@@ -123,8 +115,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         limit: z.number().int().min(1).max(20).default(5)
       },
       async ({ query, limit }) => {
-        const results = await embeddings.search(query, limit);
-        return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+        return withMcpToolGuard("bitrix_semantic_docs_search", async () => {
+          const results = await embeddings.search(query, limit);
+          return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+        });
       }
     );
   }

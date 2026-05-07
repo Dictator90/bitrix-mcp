@@ -78,6 +78,10 @@ function ftsQuery(query: string): string {
   return tokens.join(" ") || "__bitrix_mcp_no_match__";
 }
 
+function candidateLimit(limit: number): number {
+  return Math.max(100, Math.min(1_000, limit * 25));
+}
+
 function symbolScore(row: SymbolRow): number {
   if (row.exact_rank) return 1;
   if (row.prefix_rank) return 0.9;
@@ -148,58 +152,66 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
   const prefix = `${escapeLike(normalizedQuery)}%`;
   const like = `%${escapeLike(normalizedQuery)}%`;
   const limit = query.limit ?? 20;
+  const maxCandidates = candidateLimit(limit);
+  const branchFilters: string[] = [];
   const filterParams: Array<string | number> = [];
-  const filters: string[] = [];
   if (query.type) {
-    filters.push("type = ?");
+    branchFilters.push("s.type = ?");
     filterParams.push(query.type);
   }
   if (query.module) {
-    filters.push("module = ?");
+    branchFilters.push("s.module = ?");
     filterParams.push(query.module);
   }
   if (query.kind) {
-    filters.push("kind = ?");
+    branchFilters.push("s.kind = ?");
     filterParams.push(query.kind);
   }
-  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
 
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
       WITH candidates AS (
-        SELECT
-          s.*,
-          CASE WHEN lower(s.name) = ? OR lower(coalesce(s.class_name, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
-          CASE WHEN lower(s.name) LIKE ? ESCAPE '\\' OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-          CASE WHEN lower(s.name) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(s.module, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(s.signature, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(s.description, '')) LIKE ? ESCAPE '\\'
-          THEN 1 ELSE 0 END AS like_rank,
-          NULL AS rank
-        FROM symbols s
-        WHERE exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1
-        UNION
-        SELECT
-          s.*,
-          0 AS exact_rank,
-          0 AS prefix_rank,
-          0 AS like_rank,
-          bm25(symbols_fts) AS rank
-        FROM symbols_fts
-        JOIN symbols s ON s.id = symbols_fts.rowid
-        WHERE symbols_fts MATCH ?
+        SELECT * FROM (
+          SELECT
+            s.*,
+            CASE WHEN lower(s.name) = ? OR lower(coalesce(s.class_name, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
+            CASE WHEN lower(s.name) LIKE ? ESCAPE '\\' OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
+            CASE WHEN lower(s.name) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(s.module, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(s.signature, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(s.description, '')) LIKE ? ESCAPE '\\'
+            THEN 1 ELSE 0 END AS like_rank,
+            NULL AS rank
+          FROM symbols s
+          WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
+          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, s.name ASC
+          LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+          SELECT
+            s.*,
+            0 AS exact_rank,
+            0 AS prefix_rank,
+            0 AS like_rank,
+            bm25(symbols_fts) AS rank
+          FROM symbols_fts
+          JOIN symbols s ON s.id = symbols_fts.rowid
+          WHERE symbols_fts MATCH ?${branchWhere}
+          ORDER BY rank ASC
+          LIMIT ?
+        )
       )
       SELECT type, language, name, module, class_name, file, line, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
       FROM candidates
-      ${where}
       GROUP BY type, language, name, module, class_name, file, line, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, name ASC
       LIMIT ?
-    `).all(exact, exact, prefix, prefix, like, like, like, like, like, fts, ...filterParams, limit) as unknown as SymbolRow[];
+    `).all(exact, exact, prefix, prefix, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as SymbolRow[];
 
     return rows.map((row) => ({ score: symbolScore(row), item: rowToSymbol(row) }));
   } catch (error) {
@@ -229,53 +241,61 @@ export async function searchSqliteEvents(dbFile: string, query: { query: string;
   const prefix = `${escapeLike(normalizedQuery)}%`;
   const like = `%${escapeLike(normalizedQuery)}%`;
   const limit = query.limit ?? 20;
+  const maxCandidates = candidateLimit(limit);
   const filterParams: Array<string | number> = [];
-  const filters: string[] = [];
+  const branchFilters: string[] = [];
   if (query.module) {
-    filters.push("module = ?");
+    branchFilters.push("e.module = ?");
     filterParams.push(query.module);
   }
-  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
 
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
       WITH candidates AS (
-        SELECT
-          e.*,
-          CASE WHEN lower(e.name) = ? OR lower(coalesce(e.module, '') || ':' || e.name) = ? THEN 1 ELSE 0 END AS exact_rank,
-          CASE WHEN lower(e.name) LIKE ? ESCAPE '\\' OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-          CASE WHEN lower(e.name) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.module, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.handler_class, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.handler_method, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.handler_function, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.signature, '')) LIKE ? ESCAPE '\\'
-             OR lower(coalesce(e.description, '')) LIKE ? ESCAPE '\\'
-          THEN 1 ELSE 0 END AS like_rank,
-          NULL AS rank
-        FROM events e
-        WHERE exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1
-        UNION
-        SELECT
-          e.*,
-          0 AS exact_rank,
-          0 AS prefix_rank,
-          0 AS like_rank,
-          bm25(events_fts) AS rank
-        FROM events_fts
-        JOIN events e ON e.id = events_fts.rowid
-        WHERE events_fts MATCH ?
+        SELECT * FROM (
+          SELECT
+            e.*,
+            CASE WHEN lower(e.name) = ? OR lower(coalesce(e.module, '') || ':' || e.name) = ? THEN 1 ELSE 0 END AS exact_rank,
+            CASE WHEN lower(e.name) LIKE ? ESCAPE '\\' OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
+            CASE WHEN lower(e.name) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.module, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.handler_class, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.handler_method, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.handler_function, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.signature, '')) LIKE ? ESCAPE '\\'
+               OR lower(coalesce(e.description, '')) LIKE ? ESCAPE '\\'
+            THEN 1 ELSE 0 END AS like_rank,
+            NULL AS rank
+          FROM events e
+          WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
+          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, e.name ASC
+          LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+          SELECT
+            e.*,
+            0 AS exact_rank,
+            0 AS prefix_rank,
+            0 AS like_rank,
+            bm25(events_fts) AS rank
+          FROM events_fts
+          JOIN events e ON e.id = events_fts.rowid
+          WHERE events_fts MATCH ?${branchWhere}
+          ORDER BY rank ASC
+          LIMIT ?
+        )
       )
       SELECT module, name, handler_class, handler_method, handler_function, file, line, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
       FROM candidates
-      ${where}
       GROUP BY module, name, handler_class, handler_method, handler_function, file, line, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, name ASC
       LIMIT ?
-    `).all(exact, exact, prefix, prefix, like, like, like, like, like, like, like, like, fts, ...filterParams, limit) as unknown as EventRow[];
+    `).all(exact, exact, prefix, prefix, like, like, like, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as EventRow[];
 
     return rows.map((row) => ({ score: eventScore(row), item: rowToEvent(row) }));
   } catch (error) {
@@ -305,28 +325,37 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
   const prefix = `${escapeLike(normalizedQuery)}%`;
   const like = `%${escapeLike(normalizedQuery)}%`;
   const limit = query.limit ?? 5;
+  const maxCandidates = candidateLimit(limit);
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
       WITH candidates AS (
-        SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
-               CASE WHEN lower(coalesce(d.title, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
-               CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-               CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' OR lower(c.text) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS like_rank,
-               NULL AS rank
-        FROM doc_chunks c
-        JOIN docs d ON d.id = c.doc_id
-        WHERE exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1
-        UNION
-        SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
-               0 AS exact_rank,
-               0 AS prefix_rank,
-               0 AS like_rank,
-               bm25(docs_fts) AS rank
-        FROM docs_fts
-        JOIN doc_chunks c ON c.id = docs_fts.rowid
-        JOIN docs d ON d.id = c.doc_id
-        WHERE docs_fts MATCH ?
+        SELECT * FROM (
+          SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
+                 CASE WHEN lower(coalesce(d.title, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
+                 CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
+                 CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' OR lower(c.text) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS like_rank,
+                 NULL AS rank
+          FROM doc_chunks c
+          JOIN docs d ON d.id = c.doc_id
+          WHERE exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1
+          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, d.uri ASC, c.chunk_index ASC
+          LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+          SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
+                 0 AS exact_rank,
+                 0 AS prefix_rank,
+                 0 AS like_rank,
+                 bm25(docs_fts) AS rank
+          FROM docs_fts
+          JOIN doc_chunks c ON c.id = docs_fts.rowid
+          JOIN docs d ON d.id = c.doc_id
+          WHERE docs_fts MATCH ?
+          ORDER BY rank ASC
+          LIMIT ?
+        )
       )
       SELECT uri, title, path, chunk_index, text,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
@@ -334,7 +363,7 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
       GROUP BY uri, title, path, chunk_index, text
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, uri ASC, chunk_index ASC
       LIMIT ?
-    `).all(exact, prefix, like, like, fts, limit) as unknown as DocRow[];
+    `).all(exact, prefix, like, like, maxCandidates, fts, maxCandidates, limit) as unknown as DocRow[];
 
     return rows.map((row) => ({
       score: docScore(row),
