@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { envConfig, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
+import { DatabaseSync } from "node:sqlite";
+import { sqlitePath } from "../src/config/paths.js";
+import { envConfig, indexIfMissing, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
+import { ensureSqliteStore } from "../src/indexer/sqliteStore.js";
 
 test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
   const projectRoot = path.join(os.tmpdir(), "bitrix-mcp-project");
@@ -118,4 +121,45 @@ test("writeAgentGuidance upserts append-style rules without deleting user conten
   assert.match(rule, /Keep this section\./);
   assert.equal((rule.match(/bitrix-mcp:init-guidance:start/g) ?? []).length, 1);
   assert.match(rule, /bitrix_index_status/);
+});
+
+test("indexIfMissing skips buildIndex when SQLite metadata exists", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-init-sqlite-"));
+  const dataDir = path.join(projectRoot, ".bitrix-mcp");
+  const docsDir = path.join(projectRoot, "docs");
+  const dbFile = sqlitePath(dataDir);
+  const indexedAt = "2026-01-02T03:04:05.000Z";
+  const metaValue = JSON.stringify({ sentinel: true });
+
+  await ensureSqliteStore(dbFile);
+  const db = new DatabaseSync(dbFile);
+  try {
+    db.prepare("INSERT INTO index_meta (key, value, updated_at) VALUES (?, ?, ?)").run("index:project", metaValue, indexedAt);
+  } finally {
+    db.close();
+  }
+
+  await indexIfMissing(
+    {
+      workspaceRoot: projectRoot,
+      dataDir,
+      docsDir,
+      docsPaths: [docsDir],
+      embeddingsUrl: "http://127.0.0.1:8765",
+      semanticEnabled: false
+    },
+    "project",
+    path.join(projectRoot, "missing-root")
+  );
+
+  const after = new DatabaseSync(dbFile);
+  try {
+    const files = after.prepare("SELECT COUNT(*) AS count FROM files WHERE kind = ?").get("project") as { count: number };
+    const meta = after.prepare("SELECT value, updated_at FROM index_meta WHERE key = ?").get("index:project") as { value: string; updated_at: string };
+    assert.equal(files.count, 0);
+    assert.equal(meta.value, metaValue);
+    assert.equal(meta.updated_at, indexedAt);
+  } finally {
+    after.close();
+  }
 });

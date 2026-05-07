@@ -368,6 +368,26 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
   }
 }
 
+export async function hasIndexMetadata(dbFile: string, kind: IndexKind): Promise<boolean> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return false;
+  }
+
+  const db = openDatabase(dbFile);
+  try {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'index_meta'").get();
+    if (!table) {
+      return false;
+    }
+    const row = db.prepare("SELECT 1 FROM index_meta WHERE key = ? LIMIT 1").get(`index:${kind}`);
+    return Boolean(row);
+  } finally {
+    db.close();
+  }
+}
+
 export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Promise<IndexManifest | undefined> {
   try {
     await fs.access(dbFile);
