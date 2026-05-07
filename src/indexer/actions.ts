@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { indexPath, resolveBitrixProjectRoot, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
-import { buildIndex, type IndexOptions } from "./indexer.js";
+import { buildIndex, DEFAULT_BITRIX_PATTERNS, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
 import { getIndexStatus, ensureSqliteStore, type IndexStatus } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
 import { indexDocResourcesToSqlite, listDocSources } from "../resources/docs.js";
@@ -22,11 +22,7 @@ export interface DoctorCheck {
   message: string;
 }
 
-const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
-export const INSTALL_ASSET_PATTERNS = [
-  `bitrix/modules/*/install/**/*.${CODE_EXTENSIONS}`,
-  `local/modules/*/install/**/*.${CODE_EXTENSIONS}`
-];
+export const INSTALL_ASSET_PATTERNS = DEFAULT_INSTALL_ASSET_PATTERNS;
 
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
@@ -61,7 +57,7 @@ export async function indexCode(paths: RuntimePaths, options: { force?: boolean 
   let installFiles = 0;
   if (paths.bitrixRoot) {
     const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot);
-    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force: options.force });
+    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: DEFAULT_BITRIX_PATTERNS, force: options.force });
     bitrixFiles = bitrixManifest.files.length;
 
     const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force });

@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import type { EventRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { EventRecord, IndexKind, SearchResult, SymbolRecord } from "../types.js";
 
 export interface LiveApiQuery {
   query: string;
   type?: SymbolRecord["type"];
   module?: string;
+  kind?: Exclude<IndexKind, "docs">;
   limit?: number;
 }
 
@@ -156,6 +157,10 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
   if (query.module) {
     filters.push("module = ?");
     filterParams.push(query.module);
+  }
+  if (query.kind) {
+    filters.push("kind = ?");
+    filterParams.push(query.kind);
   }
   const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
