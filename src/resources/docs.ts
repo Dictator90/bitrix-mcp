@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import fg from "fast-glob";
 import { frameworkDocsCheckoutPath, sqlitePath } from "../config/paths.js";
-import { ensureSqliteStore, writeDocsToSqlite, type DocIndexChunk } from "../indexer/sqliteStore.js";
+import { ensureSqliteStore, readExistingDocsBySource, writeDocsToSqlite, type DocIndexChunk } from "../indexer/sqliteStore.js";
 import type { DocResource, DocSource } from "../types.js";
 
 export const OFFICIAL_DOCS_GIT_URL = "https://github.com/bitrix-tools/framework-docs.git";
@@ -29,6 +29,11 @@ interface DocResourceRow {
   path: string | null;
   mime_type: string | null;
   source_name: string | null;
+}
+
+interface ScannedDocResource extends DocResource {
+  size: number;
+  mtimeMs: number;
 }
 
 function openDatabase(dbFile: string): DatabaseSync {
@@ -237,20 +242,26 @@ export async function updateDocSources(dataDir: string): Promise<DocSource[]> {
   return gitSources;
 }
 
-async function docsFromSource(source: DocSource): Promise<DocResource[]> {
+async function docsFromSource(source: DocSource): Promise<ScannedDocResource[]> {
   const root = source.rootPath ?? source.checkoutPath;
   if (!root) return [];
   const files = await fg(["**/*.{md,txt}"], { cwd: root, onlyFiles: true, dot: false }).catch(() => [] as string[]);
-  return files.sort().map((relativePath) => {
+  const resources: ScannedDocResource[] = [];
+  for (const relativePath of files.sort()) {
+    const fullPath = path.join(root, relativePath);
+    const stat = await fs.stat(fullPath);
     const name = resourceName(source, relativePath);
-    return {
+    resources.push({
       uri: `bitrix-docs://${sourceUriPrefix(source)}/${encodeRelativeUri(relativePath)}`,
       name,
       description: `Bitrix Framework documentation: ${name}`,
       mimeType: mimeTypeFor(relativePath),
-      path: path.join(root, relativePath)
-    };
-  });
+      path: fullPath,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs
+    });
+  }
+  return resources;
 }
 
 export async function listDocResources(dataDir: string): Promise<DocResource[]> {
@@ -292,6 +303,18 @@ export interface IndexDocResourcesOptions {
   includeOfficialDocs?: boolean;
   updateGitSources?: boolean;
   officialDocsUrl?: string;
+  force?: boolean;
+}
+
+async function countDocChunks(dataDir: string): Promise<number> {
+  await ensureSqliteStore(sqlitePath(dataDir));
+  const db = openDatabase(sqlitePath(dataDir));
+  try {
+    const row = db.prepare("SELECT COUNT(*) AS count FROM doc_chunks").get() as { count: number };
+    return row.count;
+  } finally {
+    db.close();
+  }
 }
 
 export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: string[] = [], options: IndexDocResourcesOptions = {}): Promise<number> {
@@ -305,26 +328,41 @@ export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: stri
     await updateDocSources(dataDir);
   }
   const sources = await listDocSources(dataDir);
-  const chunks: DocIndexChunk[] = [];
   for (const source of sources) {
     const resources = await docsFromSource(source);
+    const currentUris: string[] = [];
+    const existingByUri = new Map((await readExistingDocsBySource(sqlitePath(dataDir), source.id)).map((metadata) => [metadata.uri, metadata]));
+    const changedChunks: DocIndexChunk[] = [];
     for (const resource of resources) {
+      const existing = existingByUri.get(resource.uri);
+      if (!options.force && existing && existing.size === resource.size && existing.mtimeMs === resource.mtimeMs) {
+        currentUris.push(resource.uri);
+        continue;
+      }
+
       const contents = await fs.readFile(resource.path, "utf8");
       const title = titleFromText(contents, resource.name);
-      splitDocChunks(contents).forEach((text, chunkIndex) => {
-        chunks.push({
+      const chunkTexts = splitDocChunks(contents);
+      if (chunkTexts.length === 0) {
+        continue;
+      }
+      currentUris.push(resource.uri);
+      chunkTexts.forEach((text, chunkIndex) => {
+        changedChunks.push({
           uri: resource.uri,
           sourceId: source.id,
           sourceName: sourceDisplayName(source),
           title,
           path: resource.path,
           mimeType: resource.mimeType,
+          size: resource.size,
+          mtimeMs: resource.mtimeMs,
           chunkIndex,
           text
         });
       });
     }
+    await writeDocsToSqlite(sqlitePath(dataDir), changedChunks, { sourceId: source.id, currentUris });
   }
-  await writeDocsToSqlite(sqlitePath(dataDir), chunks);
-  return chunks.length;
+  return countDocChunks(dataDir);
 }

@@ -141,6 +141,8 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         path TEXT,
         mime_type TEXT,
         source_name TEXT,
+        size INTEGER NOT NULL DEFAULT 0,
+        mtime_ms REAL NOT NULL DEFAULT 0,
         indexed_at TEXT NOT NULL
       );
 
@@ -222,6 +224,12 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
     }
     if (!docColumns.includes("source_name")) {
       db.exec("ALTER TABLE docs ADD COLUMN source_name TEXT;");
+    }
+    if (!docColumns.includes("size")) {
+      db.exec("ALTER TABLE docs ADD COLUMN size INTEGER NOT NULL DEFAULT 0;");
+    }
+    if (!docColumns.includes("mtime_ms")) {
+      db.exec("ALTER TABLE docs ADD COLUMN mtime_ms REAL NOT NULL DEFAULT 0;");
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source_id);");
     const symbolColumns = (db.prepare("PRAGMA table_info(symbols)").all() as Array<{ name: string }>).map((column) => column.name);
@@ -525,6 +533,13 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
   }
 }
 
+export interface ExistingDocIndexMetadata {
+  uri: string;
+  sourceId?: number;
+  size: number;
+  mtimeMs: number;
+}
+
 export interface DocIndexChunk {
   uri: string;
   sourceId?: number;
@@ -532,24 +547,49 @@ export interface DocIndexChunk {
   title?: string;
   path?: string;
   mimeType?: string;
+  size: number;
+  mtimeMs: number;
   chunkIndex: number;
   text: string;
 }
 
-export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[], indexedAt = new Date().toISOString()): Promise<void> {
+export interface WriteDocsOptions {
+  sourceId?: number;
+  currentUris?: Iterable<string>;
+}
+
+export async function readExistingDocsBySource(dbFile: string, sourceId: number): Promise<ExistingDocIndexMetadata[]> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return [];
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const rows = db.prepare("SELECT uri, source_id, size, mtime_ms FROM docs WHERE source_id = ?").all(sourceId) as Array<{ uri: string; source_id: number | null; size: number; mtime_ms: number }>;
+    return rows.map((row) => ({ uri: row.uri, sourceId: row.source_id ?? undefined, size: row.size, mtimeMs: row.mtime_ms }));
+  } finally {
+    db.close();
+  }
+}
+
+export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[], options: WriteDocsOptions = {}, indexedAt = new Date().toISOString()): Promise<void> {
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
   try {
     db.exec("PRAGMA foreign_keys = ON;");
     const insertDoc = db.prepare(`
-      INSERT INTO docs (source_id, source_name, uri, title, path, mime_type, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO docs (source_id, source_name, uri, title, path, mime_type, size, mtime_ms, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(uri) DO UPDATE SET
         source_id = excluded.source_id,
         source_name = excluded.source_name,
         title = excluded.title,
         path = excluded.path,
         mime_type = excluded.mime_type,
+        size = excluded.size,
+        mtime_ms = excluded.mtime_ms,
         indexed_at = excluded.indexed_at
       RETURNING id
     `);
@@ -560,6 +600,10 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
       RETURNING id
     `);
     const insertFts = db.prepare("INSERT INTO docs_fts (rowid, uri, title, path, text) VALUES (?, ?, ?, ?, ?)");
+    const deleteFtsForDoc = db.prepare("DELETE FROM docs_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE doc_id = ?)");
+    const deleteChunksForDoc = db.prepare("DELETE FROM doc_chunks WHERE doc_id = ?");
+    const deleteDocById = db.prepare("DELETE FROM docs WHERE id = ?");
+    const selectChangedDoc = db.prepare("SELECT id FROM docs WHERE uri = ?");
     const setMeta = db.prepare(`
       INSERT INTO index_meta (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -568,14 +612,33 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
 
     db.exec("BEGIN IMMEDIATE;");
     try {
-      db.exec("DELETE FROM docs_fts;");
-      db.exec("DELETE FROM docs;");
+      if (options.sourceId !== undefined && options.currentUris) {
+        const currentUris = new Set(options.currentUris);
+        const existingDocs = db.prepare("SELECT id, uri FROM docs WHERE source_id = ?").all(options.sourceId) as Array<{ id: number; uri: string }>;
+        for (const doc of existingDocs) {
+          if (!currentUris.has(doc.uri)) {
+            deleteFtsForDoc.run(doc.id);
+            deleteDocById.run(doc.id);
+          }
+        }
+      }
+
+      const changedUris = new Set(chunks.map((chunk) => chunk.uri));
+      for (const uri of changedUris) {
+        const doc = selectChangedDoc.get(uri) as { id: number } | undefined;
+        if (doc) {
+          deleteFtsForDoc.run(doc.id);
+          deleteChunksForDoc.run(doc.id);
+        }
+      }
+
       for (const chunk of chunks) {
-        const doc = insertDoc.get(chunk.sourceId ?? null, nullable(chunk.sourceName), chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), indexedAt) as { id: number };
+        const doc = insertDoc.get(chunk.sourceId ?? null, nullable(chunk.sourceName), chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), chunk.size, chunk.mtimeMs, indexedAt) as { id: number };
         const row = insertChunk.get(doc.id, chunk.chunkIndex, chunk.text) as { id: number };
         insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
       }
-      setMeta.run("index:docs", JSON.stringify({ generatedAt: indexedAt, chunks: chunks.length }), indexedAt);
+      const totalChunks = (db.prepare("SELECT COUNT(*) AS count FROM doc_chunks").get() as { count: number }).count;
+      setMeta.run("index:docs", JSON.stringify({ generatedAt: indexedAt, chunks: totalChunks }), indexedAt);
       db.exec("COMMIT;");
     } catch (error) {
       db.exec("ROLLBACK;");

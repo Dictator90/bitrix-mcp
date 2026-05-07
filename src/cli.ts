@@ -22,7 +22,7 @@ Commands:
   docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
   docs-add-path <path>          Register a local documentation directory
   docs-update                   Clone or pull registered Git documentation sources
-  index-docs                    Index registered documentation sources into SQLite
+  index-docs [--force]          Index registered documentation sources into SQLite
   status                        Show SQLite DB path and index counters
   doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and embeddings
 
@@ -121,7 +121,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-docs") {
-    const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
+    const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force });
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     return;
   }
