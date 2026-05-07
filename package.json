@@ -31,7 +31,8 @@
     "dist",
     "docs",
     "embeddings",
-    "README.md"
+    "README.md",
+    "ru.README.md"
   ],
   "keywords": [
     "bitrix",

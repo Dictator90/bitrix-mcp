@@ -1,33 +1,81 @@
 # Bitrix MCP
 
-Local, token-free MCP server for AI agents that need reference access to **Bitrix Framework** projects without installing a Bitrix module or modifying the 1C-Bitrix runtime.
+[Русская документация](./ru.README.md)
+
+Bitrix MCP is a local, token-free MCP server for AI assistants that work with **Bitrix Framework / 1C-Bitrix** projects. It indexes your project, templates, Bitrix modules, install assets, and documentation so an AI agent can search real project symbols and docs without installing a Bitrix module or changing the runtime.
+
+## Who this is for
+
+Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Desktop, Claude Code, PhpStorm / JetBrains AI Assistant, VS Code / GitHub Copilot, Windsurf, Cline, Roo Code, Continue, Gemini CLI, OpenAI Codex, or Kilo Code to answer questions about a local Bitrix project, find framework APIs, inspect event handlers, or work with templates using indexed local context.
 
 ## Capabilities
 
-- **LiveAPI**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, and constants.
-- **Project indexing**: indexes the current project through a terminal command or MCP tool.
+- **LiveAPI search**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, and constants.
+- **Project indexing**: indexes the current project from a terminal command or MCP tool.
 - **Template indexing**: separately indexes templates, components, scripts, styles, and layout assets.
-- **MCP resources and local documentation search**: exposes local Bitrix Framework documentation files as MCP resources and searches the indexed docs with SQLite FTS.
-- **Optional semantic documentation search**: delegates embeddings to a Python `sentence-transformers` FastAPI service when explicitly enabled.
-- **Public local access**: no token or Bitrix authentication is required; access is controlled by where you run the process.
+- **Documentation search**: exposes local Bitrix Framework documentation as MCP resources and searches indexed Markdown/text docs with SQLite FTS.
+- **Optional semantic documentation search**: delegates embedding search to a Python `sentence-transformers` FastAPI service when explicitly enabled.
+- **Local access model**: no token or Bitrix authentication is required; access is controlled by where you run the process and which local folders you expose.
 
-## Requirements
+## System requirements
 
-- Node.js 20+
-- npm 10+
-- Python 3.11+ only for optional semantic search
-- A local or mounted Bitrix installation if you want LiveAPI data from core/modules
+- Operating system: Linux, macOS, or Windows / Windows PowerShell.
+- Node.js **20+**.
+- npm **10+**.
+- Disk access to the Bitrix project you want to index.
+- Network access is recommended for the first documentation index because the official Bitrix Framework docs repository is cloned or updated by default.
+- Python **3.11+** is required only for optional semantic documentation search.
 
 The server uses `@modelcontextprotocol/sdk` **v1.29.0**.
 
-## Install
+## Dependencies
+
+Runtime dependencies are installed by `npm install` and include:
+
+- `@modelcontextprotocol/sdk` — MCP server protocol support.
+- `fast-glob`, `ignore` — file discovery and ignore handling.
+- `php-parser` — PHP symbol parsing for Bitrix and project sources.
+- `zod` — schema validation.
+
+Optional semantic search dependencies live in `embeddings/requirements.txt` and are installed only if you run the Python embeddings service.
+
+## Quick start
+
+From the root of your Bitrix project:
 
 ```bash
+# 1. Install the package dependencies if you use a local checkout of this repo
 npm install
 npm run build
+
+# 2. Go to the Bitrix project you want to index
+cd /path/to/bitrix/project
+
+# 3. Configure your MCP client, create .bitrix-mcp indexes, and start the server
+npx bitrix-mcp init
 ```
 
-On Windows PowerShell, Linux, and macOS the same commands work. Use absolute paths with quotes when they contain spaces.
+During `init`, select one or more AI agents from the prompt. Bitrix MCP writes or updates that agent's MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio.
+
+After setup, open your AI client and ask it to use Bitrix MCP. A good first prompt is:
+
+```text
+Use Bitrix MCP to check index status, then find how this project registers sale module event handlers.
+```
+
+If you only need to run or refresh indexes manually:
+
+```bash
+# Index everything: project, templates, Bitrix modules, install assets, and docs
+npx bitrix-mcp index-all
+
+# Show index counters and diagnostics
+npx bitrix-mcp status
+npx bitrix-mcp doctor
+
+# Start the MCP server after indexes already exist
+npx bitrix-mcp serve
+```
 
 ## CLI usage
 
@@ -54,6 +102,15 @@ npx bitrix-mcp index-template /path/to/project
 cd /path/to/bitrix/project
 npx bitrix-mcp index-bitrix
 
+# Index Bitrix module install assets
+npx bitrix-mcp index-install /path/to/project
+
+# Register, update, and index documentation sources
+npx bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
+npx bitrix-mcp docs-add-path /path/to/local/docs
+npx bitrix-mcp docs-update
+npx bitrix-mcp index-docs
+
 # Show index counters or run environment diagnostics
 npx bitrix-mcp status
 npx bitrix-mcp doctor
@@ -72,7 +129,9 @@ private/*.php
 assets/ignored.js
 ```
 
-Override paths with environment variables:
+## Configuration
+
+Override paths and optional features with environment variables:
 
 - `BITRIX_MCP_DATA_DIR` — index storage directory.
 - `BITRIX_MCP_WORKSPACE` — project root used by the MCP server.
@@ -161,6 +220,34 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix-docs://framework/getting-started.md` — bundled starter reference.
 
 By default documentation indexing uses `https://github.com/bitrix-tools/framework-docs.git` plus any local `docs/` directory and registered docs sources. Place additional `.md` or `.txt` files under `docs/` to expose them through the documentation index, or set `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0` to skip the official repository.
+
+## Example prompts
+
+Use prompts like these in your MCP-capable AI client after Bitrix MCP is configured:
+
+```text
+Use Bitrix MCP to show index status and tell me whether project, template, Bitrix, and documentation indexes are ready.
+```
+
+```text
+Use bitrix_liveapi_search to find examples of CIBlockElement::GetList usage and explain the parameters relevant to this project.
+```
+
+```text
+Search Bitrix MCP docs for sale order event handlers, then find matching handlers in this project.
+```
+
+```text
+Use Bitrix MCP to inspect local/templates/main and explain which components and template assets are used on the catalog page.
+```
+
+```text
+Before changing code, use Bitrix MCP to find existing project helpers for user fields and suggest the safest implementation plan.
+```
+
+```text
+Refresh Bitrix MCP indexes, then check whether any custom module install assets define admin JavaScript widgets.
+```
 
 ## Python embeddings service
 
