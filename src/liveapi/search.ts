@@ -6,7 +6,16 @@ export interface LiveApiQuery {
   query: string;
   type?: SymbolRecord["type"];
   module?: string;
-  kind?: Exclude<IndexKind, "docs">;
+  kind?: IndexKind | IndexKind[];
+  preferLocal?: boolean;
+  limit?: number;
+}
+
+export interface LiveApiEventQuery {
+  query: string;
+  module?: string;
+  kind?: IndexKind | IndexKind[];
+  preferLocal?: boolean;
   limit?: number;
 }
 
@@ -23,6 +32,7 @@ export interface DocSearchResult {
 }
 
 interface SymbolRow {
+  kind: IndexKind;
   type: SymbolRecord["type"];
   language: string | null;
   name: string;
@@ -36,9 +46,11 @@ interface SymbolRow {
   exact_rank: number;
   prefix_rank: number;
   like_rank: number;
+  local_rank: number;
 }
 
 interface EventRow {
+  kind: IndexKind;
   module: string | null;
   name: string;
   handler_class: string | null;
@@ -52,6 +64,7 @@ interface EventRow {
   exact_rank: number;
   prefix_rank: number;
   like_rank: number;
+  local_rank: number;
 }
 
 interface DocRow {
@@ -90,6 +103,16 @@ function candidateLimit(limit: number): number {
   return Math.max(100, Math.min(1_000, limit * 25));
 }
 
+function kindValues(kind: IndexKind | IndexKind[] | undefined): IndexKind[] {
+  if (!kind) return [];
+  return Array.isArray(kind) ? kind : [kind];
+}
+
+function localBoostExpression(alias: string, preferLocal: boolean | undefined): string {
+  if (preferLocal === false) return "0";
+  return `CASE WHEN ${alias}.kind IN ('project', 'template') THEN 1 ELSE 0 END`;
+}
+
 function symbolScore(row: SymbolRow): number {
   if (row.exact_rank) return 1;
   if (row.prefix_rank) return 0.9;
@@ -113,6 +136,7 @@ function docScore(row: DocRow): number {
 
 function rowToEvent(row: EventRow): EventRecord {
   return {
+    kind: row.kind,
     module: row.module ?? "",
     eventName: row.name,
     handlerClass: row.handler_class ?? undefined,
@@ -127,6 +151,7 @@ function rowToEvent(row: EventRow): EventRecord {
 
 function rowToSymbol(row: SymbolRow): SymbolRecord {
   return {
+    kind: row.kind,
     type: row.type,
     language: row.language ?? undefined,
     name: row.name,
@@ -171,11 +196,13 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
     branchFilters.push("s.module = ?");
     filterParams.push(query.module);
   }
-  if (query.kind) {
-    branchFilters.push("s.kind = ?");
-    filterParams.push(query.kind);
+  const kinds = kindValues(query.kind);
+  if (kinds.length) {
+    branchFilters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
+    filterParams.push(...kinds);
   }
   const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
+  const localRankSql = localBoostExpression("s", query.preferLocal);
 
   const db = openDatabase(dbFile);
   try {
@@ -192,10 +219,11 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
                OR lower(coalesce(s.signature, '')) LIKE ? ESCAPE '\\'
                OR lower(coalesce(s.description, '')) LIKE ? ESCAPE '\\'
             THEN 1 ELSE 0 END AS like_rank,
+            ${localRankSql} AS local_rank,
             NULL AS rank
           FROM symbols s
           WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
-          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, s.name ASC
+          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, s.name ASC
           LIMIT ?
         )
         UNION ALL
@@ -205,19 +233,20 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
             0 AS exact_rank,
             0 AS prefix_rank,
             0 AS like_rank,
+            ${localRankSql} AS local_rank,
             bm25(symbols_fts) AS rank
           FROM symbols_fts
           JOIN symbols s ON s.id = symbols_fts.rowid
           WHERE symbols_fts MATCH ?${branchWhere}
-          ORDER BY rank ASC
+          ORDER BY rank ASC, local_rank DESC
           LIMIT ?
         )
       )
-      SELECT type, language, name, module, class_name, file, line, signature, description,
-             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
+      SELECT kind, type, language, name, module, class_name, file, line, signature, description,
+             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
       FROM candidates
-      GROUP BY type, language, name, module, class_name, file, line, signature, description
-      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, name ASC
+      GROUP BY kind, type, language, name, module, class_name, file, line, signature, description
+      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as SymbolRow[];
 
@@ -232,7 +261,7 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
   }
 }
 
-export async function searchSqliteEvents(dbFile: string, query: { query: string; module?: string; limit?: number }): Promise<SearchResult<EventRecord>[] | undefined> {
+export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuery): Promise<SearchResult<EventRecord>[] | undefined> {
   try {
     await fs.access(dbFile);
   } catch {
@@ -256,7 +285,13 @@ export async function searchSqliteEvents(dbFile: string, query: { query: string;
     branchFilters.push("e.module = ?");
     filterParams.push(query.module);
   }
+  const kinds = kindValues(query.kind);
+  if (kinds.length) {
+    branchFilters.push(`e.kind IN (${kinds.map(() => "?").join(", ")})`);
+    filterParams.push(...kinds);
+  }
   const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
+  const localRankSql = localBoostExpression("e", query.preferLocal);
 
   const db = openDatabase(dbFile);
   try {
@@ -276,10 +311,11 @@ export async function searchSqliteEvents(dbFile: string, query: { query: string;
                OR lower(coalesce(e.signature, '')) LIKE ? ESCAPE '\\'
                OR lower(coalesce(e.description, '')) LIKE ? ESCAPE '\\'
             THEN 1 ELSE 0 END AS like_rank,
+            ${localRankSql} AS local_rank,
             NULL AS rank
           FROM events e
           WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
-          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, e.name ASC
+          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, e.name ASC
           LIMIT ?
         )
         UNION ALL
@@ -289,19 +325,20 @@ export async function searchSqliteEvents(dbFile: string, query: { query: string;
             0 AS exact_rank,
             0 AS prefix_rank,
             0 AS like_rank,
+            ${localRankSql} AS local_rank,
             bm25(events_fts) AS rank
           FROM events_fts
           JOIN events e ON e.id = events_fts.rowid
           WHERE events_fts MATCH ?${branchWhere}
-          ORDER BY rank ASC
+          ORDER BY rank ASC, local_rank DESC
           LIMIT ?
         )
       )
-      SELECT module, name, handler_class, handler_method, handler_function, file, line, signature, description,
-             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
+      SELECT kind, module, name, handler_class, handler_method, handler_function, file, line, signature, description,
+             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
       FROM candidates
-      GROUP BY module, name, handler_class, handler_method, handler_function, file, line, signature, description
-      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, name ASC
+      GROUP BY kind, module, name, handler_class, handler_method, handler_function, file, line, signature, description
+      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as EventRow[];
 

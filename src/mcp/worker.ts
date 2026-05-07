@@ -3,7 +3,7 @@ import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
-import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiQuery } from "../liveapi/search.js";
+import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, type SearchFormatOptions } from "./format.js";
 
@@ -13,7 +13,7 @@ type WorkerTask =
   | { name: "indexAll"; paths: RuntimePaths }
   | { name: "indexDocs"; paths: RuntimePaths }
   | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
-  | { name: "searchEvents"; paths: RuntimePaths; query: { query: string; module?: string; limit?: number } & SearchFormatOptions }
+  | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
   | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {

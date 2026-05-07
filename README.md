@@ -228,8 +228,8 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 ## MCP tools
 
-- `bitrix_liveapi_search` — search indexed PHP symbols.
-- `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function.
+- `bitrix_liveapi_search` — search indexed PHP symbols; use `kind` to limit sources to `project`, `template`, `bitrix`, `install`, or an array of those kinds.
+- `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function; use `kind` to search only project/template/core/install handlers.
 - `bitrix_index_project` — index the current project from an agent.
 - `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
 - `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
@@ -242,12 +242,14 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 Search tools support shared response-shaping options:
 
+- `kind`: for `bitrix_liveapi_search` and `bitrix_event_search`, restrict results to one index kind (`"project"`, `"template"`, `"bitrix"`, or `"install"`) or an array of kinds.
+- `preferLocal`: for `bitrix_liveapi_search` and `bitrix_event_search`, boost `project` and `template` results ahead of equally relevant `bitrix` and `install` results; defaults to `true`.
 - `format`: `"compact"` (default) or `"full"`.
 - `includeSignature`: include the compact `signature` field for symbol/event results; defaults to `true`.
 - `maxSignatureChars`: truncate compact signatures to this many characters; defaults to `160`.
 - `maxTextChars`: truncate documentation excerpts to this many characters; defaults to `500`.
 
-Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `name`, `module`, `file`, `line`, and a truncated `signature` when available:
+Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `kind`, `name`, `module`, `file`, `line`, and a truncated `signature` when available:
 
 ```json
 {
@@ -263,6 +265,7 @@ Example compact response shape:
   {
     "score": 1,
     "type": "method",
+    "kind": "bitrix",
     "name": "CIBlockElement::GetList",
     "module": "iblock",
     "file": "bitrix/modules/iblock/classes/general/iblockelement.php",
@@ -317,6 +320,45 @@ To reduce symbol/event output further while staying in compact mode, disable sig
   "includeSignature": false
 }
 ```
+
+
+### Search by index kind
+
+Use `kind` when you want to separate local project code from Bitrix core, templates, or module install assets. If `kind` is omitted, project and template matches are boosted ahead of equally relevant core/install matches by default.
+
+Search only project event handlers:
+
+```json
+{
+  "query": "OnBeforeProlog",
+  "module": "main",
+  "kind": "project",
+  "limit": 10
+}
+```
+
+Search only Bitrix core API symbols:
+
+```json
+{
+  "query": "CIBlockElement::GetList",
+  "type": "method",
+  "kind": "bitrix",
+  "limit": 5
+}
+```
+
+Search only module install assets, for example frontend exports or admin widgets indexed from `install/js`:
+
+```json
+{
+  "query": "VendorWidget",
+  "kind": "install",
+  "limit": 10
+}
+```
+
+You can also pass an array to search several source kinds while still excluding the rest, for example `{ "kind": ["project", "template"] }`.
 
 ## MCP resources
 

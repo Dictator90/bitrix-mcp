@@ -12,6 +12,7 @@ export interface IndexFile {
 
 export interface SymbolRecord {
   type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method";
+  kind?: IndexKind;
   language?: string;
   name: string;
   module?: string;
@@ -27,6 +28,7 @@ export interface SymbolRecord {
 }
 
 export interface EventRecord {
+  kind?: IndexKind;
   module: string;
   eventName: string;
   handlerClass?: string;
