@@ -13,12 +13,12 @@ function usage(): string {
 Commands:
   init                          Configure an MCP client, index the project, and start stdio server
   serve                         Start MCP server over stdio
-  index-all                     Index project, templates, Bitrix modules, install assets, and docs
-  index-code                    Index project, templates, Bitrix modules, and install assets
-  index-project [root]          Index project files
-  index-template [templatePath] Index a specific template path, or standard template locations
-  index-bitrix [root]           Index installed Bitrix Framework PHP sources
-  index-install [root]          Index Bitrix module install assets
+  index-all [--force]           Index project, templates, Bitrix modules, install assets, and docs
+  index-code [--force]          Index project, templates, Bitrix modules, and install assets
+  index-project [root] [--force] Index project files
+  index-template [templatePath] [--force] Index a specific template path, or standard template locations
+  index-bitrix [root] [--force]  Index installed Bitrix Framework PHP sources
+  index-install [root] [--force] Index Bitrix module install assets
   docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
   docs-add-path <path>          Register a local documentation directory
   docs-update                   Clone or pull registered Git documentation sources
@@ -38,7 +38,9 @@ Environment:
 }
 
 async function main(argv: string[]): Promise<void> {
-  const [command, arg] = argv;
+  const force = argv.includes("--force");
+  const positional = argv.filter((value) => value !== "--force");
+  const [command, arg] = positional;
   const paths = resolveRuntimePaths();
 
   if (!command || command === "--help" || command === "-h") {
@@ -57,25 +59,25 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-all") {
-    console.log(formatIndexAllResult(await indexAll(paths)));
+    console.log(formatIndexAllResult(await indexAll(paths, { force })));
     return;
   }
 
   if (command === "index-code") {
-    const result = await indexCode(paths);
+    const result = await indexCode(paths, { force });
     console.log(formatIndexAllResult({ ...result, docChunks: 0 }));
     return;
   }
 
   if (command === "index-project") {
-    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project") });
+    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-template") {
     const options = resolveTemplateIndexOptions(paths, arg);
-    const manifest = await buildIndex(options);
+    const manifest = await buildIndex({ ...options, force });
     console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -86,13 +88,13 @@ async function main(argv: string[]): Promise<void> {
       throw new Error("Bitrix root not found. Run from a project containing ./bitrix, pass [root], or set BITRIX_ROOT.");
     }
     const projectRoot = resolveBitrixProjectRoot(root);
-    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
+    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-install") {
-    const manifest = await buildIndex(installIndexOptions(paths, arg));
+    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force });
     console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }

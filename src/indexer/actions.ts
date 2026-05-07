@@ -53,18 +53,18 @@ async function fileExists(targetPath: string): Promise<boolean> {
   }
 }
 
-export async function indexCode(paths: RuntimePaths): Promise<Omit<IndexAllResult, "docChunks">> {
-  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project") });
-  const templateManifest = await buildIndex(resolveTemplateIndexOptions(paths));
+export async function indexCode(paths: RuntimePaths, options: { force?: boolean } = {}): Promise<Omit<IndexAllResult, "docChunks">> {
+  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force: options.force });
+  const templateManifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force: options.force });
 
   let bitrixFiles = 0;
   let installFiles = 0;
   if (paths.bitrixRoot) {
     const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot);
-    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"] });
+    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force: options.force });
     bitrixFiles = bitrixManifest.files.length;
 
-    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS });
+    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force });
     installFiles = installManifest.files.length;
   }
 
@@ -77,8 +77,8 @@ export async function indexCode(paths: RuntimePaths): Promise<Omit<IndexAllResul
   };
 }
 
-export async function indexAll(paths: RuntimePaths): Promise<IndexAllResult> {
-  const codeResult = await indexCode(paths);
+export async function indexAll(paths: RuntimePaths, options: { force?: boolean } = {}): Promise<IndexAllResult> {
+  const codeResult = await indexCode(paths, options);
   const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
   return { ...codeResult, docChunks };
 }
