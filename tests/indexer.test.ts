@@ -214,6 +214,81 @@ test("template index uses Bitrix template-specific patterns", async () => {
   assert.ok(manifest.files.every((file) => file.symbols.every((symbol) => symbol.name !== "invalid_template_helper")));
 });
 
+test("incremental build skips unchanged files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-skip-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-skip-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  const filePath = path.join(root, "index.php");
+
+  await fs.writeFile(filePath, "<?php function unchanged_helper(): void {}\n", "utf8");
+  await buildIndex({ root, kind: "project", outFile });
+
+  const dbFile = sqlitePath(dataDir);
+  const firstDb = new DatabaseSync(dbFile);
+  let firstIndexedAt: string;
+  try {
+    firstIndexedAt = (firstDb.prepare("SELECT indexed_at FROM files WHERE relative_path = ?").get("index.php") as { indexed_at: string }).indexed_at;
+  } finally {
+    firstDb.close();
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await buildIndex({ root, kind: "project", outFile });
+
+  const secondDb = new DatabaseSync(dbFile);
+  try {
+    const row = secondDb.prepare("SELECT indexed_at FROM files WHERE relative_path = ?").get("index.php") as { indexed_at: string };
+    assert.equal(row.indexed_at, firstIndexedAt);
+  } finally {
+    secondDb.close();
+  }
+
+  const results = await searchLiveApi(dbFile, { query: "unchanged_helper", type: "function" });
+  assert.equal(results?.[0]?.item.name, "unchanged_helper");
+});
+
+test("incremental build reparses changed files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-change-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-change-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  const filePath = path.join(root, "index.php");
+
+  await fs.writeFile(filePath, "<?php function old_incremental_helper(): void {}\n", "utf8");
+  await buildIndex({ root, kind: "project", outFile });
+
+  await fs.writeFile(filePath, "<?php function new_incremental_helper(): void {}\n", "utf8");
+  const future = new Date(Date.now() + 2000);
+  await fs.utimes(filePath, future, future);
+  await buildIndex({ root, kind: "project", outFile });
+
+  const dbFile = sqlitePath(dataDir);
+  const oldResults = await searchLiveApi(dbFile, { query: "old_incremental_helper", type: "function" });
+  const newResults = await searchLiveApi(dbFile, { query: "new_incremental_helper", type: "function" });
+  assert.equal(oldResults?.length ?? 0, 0);
+  assert.equal(newResults?.[0]?.item.name, "new_incremental_helper");
+});
+
+test("incremental build removes deleted files from SQLite", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-delete-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-delete-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  const keepPath = path.join(root, "keep.php");
+  const deletePath = path.join(root, "delete.php");
+
+  await fs.writeFile(keepPath, "<?php function kept_incremental_helper(): void {}\n", "utf8");
+  await fs.writeFile(deletePath, "<?php function deleted_incremental_helper(): void {}\n", "utf8");
+  await buildIndex({ root, kind: "project", outFile });
+
+  await fs.unlink(deletePath);
+  await buildIndex({ root, kind: "project", outFile });
+
+  const sqliteManifest = await readIndex(outFile, "project");
+  assert.deepEqual(sqliteManifest?.files.map((file) => file.relativePath), ["keep.php"]);
+
+  const deletedResults = await searchLiveApi(sqlitePath(dataDir), { query: "deleted_incremental_helper", type: "function" });
+  assert.equal(deletedResults?.length ?? 0, 0);
+});
+
 
 test("readIndex falls back to legacy JSON files", async () => {
   const legacyFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-legacy-")), "project-index.json");

@@ -6,7 +6,7 @@ import { sqlitePath } from "../config/paths.js";
 import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbols } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
-import { readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
+import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
 import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
 
 export const DEFAULT_INDEX_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
@@ -19,6 +19,7 @@ export interface IndexOptions {
   outFile?: string;
   dbFile?: string;
   patterns?: string[];
+  force?: boolean;
 }
 
 async function loadIgnore(root: string, options: { useGitignore?: boolean } = {}) {
@@ -44,6 +45,9 @@ async function loadIgnore(root: string, options: { useGitignore?: boolean } = {}
 export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
   const root = path.resolve(options.root);
   const patterns = options.patterns ?? (options.kind === "template" ? TEMPLATE_HINTS : DEFAULT_INDEX_PATTERNS);
+  const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
+  const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
+  const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
   const ig = await loadIgnore(root, {
     useGitignore: options.kind !== "bitrix" && options.kind !== "install"
   });
@@ -63,9 +67,10 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     const absolutePath = path.join(root, relativePath);
     const stat = await fs.stat(absolutePath);
     const language = detectLanguage(absolutePath);
-    const shouldParseSymbols = language === "php" || language === "javascript" || language === "typescript";
-    const source = shouldParseSymbols ? await fs.readFile(absolutePath, "utf8") : "";
-    const symbols = language === "php" ? parsePhpSymbols(source, absolutePath) : language === "javascript" || language === "typescript" ? parseJsSymbols(source, absolutePath) : [];
+    const existing = existingByPath.get(absolutePath);
+    const shouldParseSymbols = !existing || existing.size !== stat.size || existing.mtimeMs !== stat.mtimeMs;
+    const source = shouldParseSymbols && (language === "php" || language === "javascript" || language === "typescript") ? await fs.readFile(absolutePath, "utf8") : "";
+    const symbols = shouldParseSymbols ? language === "php" ? parsePhpSymbols(source, absolutePath) : language === "javascript" || language === "typescript" ? parseJsSymbols(source, absolutePath) : [] : [];
     files.push({
       path: absolutePath,
       relativePath,
@@ -85,9 +90,8 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     files
   };
 
-  const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
-  await writeIndexToSqlite(dbFile, manifest);
-  return manifest;
+  await writeIndexToSqlite(dbFile, manifest, { force: options.force });
+  return (await readIndexFromSqlite(dbFile, options.kind)) ?? manifest;
 }
 
 export async function readIndex(indexFile: string, kind?: IndexKind): Promise<IndexManifest | undefined> {

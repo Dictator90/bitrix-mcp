@@ -14,6 +14,14 @@ export interface SqliteSearchQuery {
   limit?: number;
 }
 
+export interface ExistingIndexFile {
+  id: number;
+  path: string;
+  relativePath: string;
+  size: number;
+  mtimeMs: number;
+}
+
 interface FileRow {
   id: number;
   root: string;
@@ -259,14 +267,42 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
   }
 }
 
-export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest): Promise<void> {
+export async function readExistingFilesByKind(dbFile: string, kind: IndexKind): Promise<ExistingIndexFile[]> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return [];
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const rows = db.prepare("SELECT id, path, relative_path, size, mtime_ms FROM files WHERE kind = ?").all(kind) as Array<{ id: number; path: string; relative_path: string; size: number; mtime_ms: number }>;
+    return rows.map((row) => ({ id: row.id, path: row.path, relativePath: row.relative_path, size: row.size, mtimeMs: row.mtime_ms }));
+  } finally {
+    db.close();
+  }
+}
+
+export interface WriteIndexOptions {
+  force?: boolean;
+}
+
+export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest, options: WriteIndexOptions = {}): Promise<void> {
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
   try {
     db.exec("PRAGMA foreign_keys = ON;");
-    const insertFile = db.prepare(`
+    const upsertFile = db.prepare(`
       INSERT INTO files (kind, root, path, relative_path, size, mtime_ms, language, indexed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind, path) DO UPDATE SET
+        root = excluded.root,
+        relative_path = excluded.relative_path,
+        size = excluded.size,
+        mtime_ms = excluded.mtime_ms,
+        language = excluded.language,
+        indexed_at = excluded.indexed_at
+      RETURNING id
     `);
     const insertSymbol = db.prepare(`
       INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description)
@@ -290,15 +326,48 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `);
+    const existingFiles = db.prepare("SELECT id, path, relative_path, size, mtime_ms FROM files WHERE kind = ?").all(manifest.kind) as Array<{ id: number; path: string; relative_path: string; size: number; mtime_ms: number }>;
+    const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
+    const currentPaths = new Set(manifest.files.map((file) => file.path));
+    const deleteSymbolsFtsForFile = db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE file_id = ?)");
+    const deleteEventsFtsForFile = db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE file_id = ?)");
+    const deleteEventsForFile = db.prepare("DELETE FROM events WHERE file_id = ?");
+    const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
+    const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
 
     db.exec("BEGIN IMMEDIATE;");
     try {
-      db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE kind = ?)").run(manifest.kind);
-      db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
-      db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
+      if (options.force) {
+        db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE kind = ?)").run(manifest.kind);
+        db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
+        db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
+        existingByPath.clear();
+      } else {
+        for (const file of existingFiles) {
+          if (!currentPaths.has(file.path)) {
+            deleteSymbolsFtsForFile.run(file.id);
+            deleteEventsFtsForFile.run(file.id);
+            deleteFileById.run(file.id);
+            existingByPath.delete(file.path);
+          }
+        }
+      }
+
       for (const file of manifest.files) {
-        const result = insertFile.run(file.kind, manifest.root, file.path, file.relativePath, file.size, file.mtimeMs, file.language, manifest.generatedAt);
-        const fileId = Number(result.lastInsertRowid);
+        const existing = existingByPath.get(file.path);
+        if (existing && existing.size === file.size && existing.mtime_ms === file.mtimeMs) {
+          continue;
+        }
+
+        if (existing) {
+          deleteSymbolsFtsForFile.run(existing.id);
+          deleteEventsFtsForFile.run(existing.id);
+          deleteEventsForFile.run(existing.id);
+          deleteSymbolsForFile.run(existing.id);
+        }
+
+        const fileRow = upsertFile.get(file.kind, manifest.root, file.path, file.relativePath, file.size, file.mtimeMs, file.language, manifest.generatedAt) as { id: number };
+        const fileId = fileRow.id;
         for (const symbol of file.symbols) {
           const symbolIdRow = insertSymbol.get(
             fileId,
