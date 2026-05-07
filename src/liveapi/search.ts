@@ -14,6 +14,10 @@ export interface DocSearchResult {
   uri: string;
   title?: string;
   path?: string;
+  headingPath?: string;
+  sectionAnchor?: string;
+  sourceUri?: string;
+  relativePath?: string;
   chunkIndex: number;
   text: string;
 }
@@ -54,6 +58,10 @@ interface DocRow {
   uri: string;
   title: string | null;
   path: string | null;
+  heading_path: string | null;
+  section_anchor: string | null;
+  source_uri: string | null;
+  relative_path: string | null;
   chunk_index: number;
   text: string;
   rank: number | null;
@@ -331,7 +339,7 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
     const rows = db.prepare(`
       WITH candidates AS (
         SELECT * FROM (
-          SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
+          SELECT d.uri, d.title, d.path, c.heading_path, c.section_anchor, c.source_uri, c.relative_path, c.chunk_index, c.text,
                  CASE WHEN lower(coalesce(d.title, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
                  CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
                  CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' OR lower(c.text) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS like_rank,
@@ -344,7 +352,7 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
         )
         UNION ALL
         SELECT * FROM (
-          SELECT d.uri, d.title, d.path, c.chunk_index, c.text,
+          SELECT d.uri, d.title, d.path, c.heading_path, c.section_anchor, c.source_uri, c.relative_path, c.chunk_index, c.text,
                  0 AS exact_rank,
                  0 AS prefix_rank,
                  0 AS like_rank,
@@ -357,10 +365,10 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
           LIMIT ?
         )
       )
-      SELECT uri, title, path, chunk_index, text,
+      SELECT uri, title, path, heading_path, section_anchor, source_uri, relative_path, chunk_index, text,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
       FROM candidates
-      GROUP BY uri, title, path, chunk_index, text
+      GROUP BY uri, title, path, heading_path, section_anchor, source_uri, relative_path, chunk_index, text
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, uri ASC, chunk_index ASC
       LIMIT ?
     `).all(exact, prefix, like, like, maxCandidates, fts, maxCandidates, limit) as unknown as DocRow[];
@@ -371,6 +379,10 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
         uri: row.uri,
         title: row.title ?? undefined,
         path: row.path ?? undefined,
+        headingPath: row.heading_path ?? undefined,
+        sectionAnchor: row.section_anchor ?? undefined,
+        sourceUri: row.source_uri ?? undefined,
+        relativePath: row.relative_path ?? undefined,
         chunkIndex: row.chunk_index,
         text: row.text
       }

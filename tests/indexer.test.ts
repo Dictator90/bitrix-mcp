@@ -77,6 +77,35 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
   assert.match(docResults?.[0]?.item.text ?? "", /managed cache/);
 });
 
+test("documentation markdown chunks preserve section heading metadata", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-markdown-docs-"));
+  await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
+
+  await indexDocResourcesToSqlite(dataDir, [], { force: true });
+
+  const results = await searchSqliteDocs(sqlitePath(dataDir), { query: "unique-heading-preservation-token", limit: 5 });
+  assert.equal(results?.[0]?.item.headingPath, "Framework Guide > Caching > Managed Cache Details");
+  assert.equal(results?.[0]?.item.sectionAnchor, "managed-cache-details");
+  assert.equal(results?.[0]?.item.relativePath, path.join("framework", "markdown-headings.md"));
+
+  const db = new DatabaseSync(sqlitePath(dataDir));
+  try {
+    const row = db.prepare(`
+      SELECT heading_path, section_anchor, source_uri, relative_path
+      FROM doc_chunks
+      WHERE text LIKE '%unique-heading-preservation-token%'
+      LIMIT 1
+    `).get() as { heading_path: string; section_anchor: string; source_uri: string; relative_path: string } | undefined;
+
+    assert.equal(row?.heading_path, "Framework Guide > Caching > Managed Cache Details");
+    assert.equal(row?.section_anchor, "managed-cache-details");
+    assert.match(row?.source_uri ?? "", /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md$/);
+    assert.equal(row?.relative_path, path.join("framework", "markdown-headings.md"));
+  } finally {
+    db.close();
+  }
+});
+
 test("documentation index supports multiple registered local paths", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-"));
   const docsOne = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-one-"));
@@ -278,7 +307,7 @@ test("kind-specific indexes do not duplicate fixture files", async () => {
     }
   }
 
-  assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["docs/framework/search.md", "index.php"]);
+  assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["docs/framework/markdown-headings.md", "docs/framework/search.md", "index.php"]);
   assert.deepEqual(indexedByRelativePath.get("index.php"), ["project"]);
   assert.deepEqual(indexedByRelativePath.get("local/modules/vendor.module/install/js/admin/widget.ts"), ["install"]);
   assert.deepEqual(indexedByRelativePath.get("local/templates/main/components/bitrix/news.list/.default/template.php"), ["template"]);
