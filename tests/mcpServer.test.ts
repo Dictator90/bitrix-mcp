@@ -10,6 +10,31 @@ import { addPathDocSource } from "../src/resources/docs.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
+function runtimePaths(dataDir: string, workspaceRoot = fixtureRoot): RuntimePaths {
+  return {
+    workspaceRoot,
+    dataDir,
+    docsDir: path.join(workspaceRoot, "docs"),
+    docsPaths: [path.join(workspaceRoot, "docs")],
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+}
+
+async function withOutsideWorkspaceOptIn<T>(work: () => Promise<T>): Promise<T> {
+  const previous = process.env.BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE;
+  process.env.BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE = "1";
+  try {
+    return await work();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE;
+    } else {
+      process.env.BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE = previous;
+    }
+  }
+}
+
 test("MCP bitrix_index_template accepts templatePath", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-"));
   const paths: RuntimePaths = {
@@ -53,6 +78,66 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 
+test("MCP bitrix_index_project rejects roots outside workspace by default", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-project-guard-"));
+  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-project-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_project;
+
+  await assert.rejects(
+    tool.handler({ root: outsideRoot }),
+    /MCP path restriction: bitrix_index_project parameter "root" must resolve inside workspaceRoot .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+  );
+});
+
+test("MCP bitrix_index_project allows outside workspace when explicitly enabled", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-project-opt-in-"));
+  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-project-opt-in-"));
+  await fs.writeFile(path.join(outsideRoot, "outside.php"), "<?php\nfunction outside_workspace_helper() {}\n");
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_project;
+
+  await withOutsideWorkspaceOptIn(async () => {
+    await tool.handler({ root: outsideRoot });
+  });
+  const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "project");
+
+  assert.equal(manifest?.root, path.resolve(outsideRoot));
+  assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "outside_workspace_helper")));
+});
+
+test("MCP bitrix_index_template rejects absolute templatePath and parent traversal by default", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-template-guard-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+
+  await assert.rejects(
+    tool.handler({ templatePath: path.join(fixtureRoot, "local/templates/my_template") }),
+    /MCP path restriction: bitrix_index_template parameter "templatePath" must be relative .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+  );
+  await assert.rejects(
+    tool.handler({ templatePath: "../outside-template" }),
+    /MCP path restriction: bitrix_index_template parameter "templatePath" must not contain "\.\." .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+  );
+});
+
+test("MCP bitrix_index_template allows absolute or parent paths when explicitly enabled", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-template-opt-in-"));
+  const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-template-opt-in-"));
+  await fs.writeFile(path.join(outsideRoot, "outside-template.php"), "<?php\nfunction outside_template_helper() {}\n");
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+  const traversingTemplatePath = path.relative(fixtureRoot, outsideRoot);
+
+  await withOutsideWorkspaceOptIn(async () => {
+    await tool.handler({ templatePath: traversingTemplatePath });
+    await tool.handler({ templatePath: outsideRoot });
+  });
+  const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
+
+  assert.equal(manifest?.root, path.resolve(outsideRoot));
+  assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "outside_template_helper")));
+});
 
 test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-search-"));
