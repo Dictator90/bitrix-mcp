@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
+import { getIndexStatus, readIndexWarnings } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { runDoctor } from "../src/indexer/actions.js";
@@ -31,6 +32,50 @@ async function createGitDocsRepository(): Promise<string> {
   await execFileAsync("git", ["commit", "-m", "Add routing docs"], { cwd: repo });
   return repo;
 }
+
+
+test("buildIndex records PHP parse fallback diagnostics", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-broken-php-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-broken-php-data-"));
+  const brokenPath = path.join(root, "broken.php");
+  await fs.writeFile(brokenPath, "<?php\nclass Broken { public function run( {\nAddEventHandler('main', 'OnPageStart', 'fallbackHandler');\n", "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+
+  const dbFile = sqlitePath(dataDir);
+  const status = await getIndexStatus(dbFile);
+  assert.equal(status.phpParseFallbackFiles, 1);
+
+  const warnings = await readIndexWarnings(dbFile, "project");
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].type, "php_parse_fallback");
+  assert.equal(warnings[0].file, brokenPath);
+  assert.match(warnings[0].message, /unexpected|syntax|Expecting|Parse/i);
+
+  const db = new DatabaseSync(dbFile);
+  try {
+    const meta = db.prepare("SELECT value FROM index_meta WHERE key = ?").get("index:project:warnings") as { value: string } | undefined;
+    assert.ok(meta);
+    const value = JSON.parse(meta.value) as { phpParseFallbackFiles: number; diagnostics: Array<{ file: string }> };
+    assert.equal(value.phpParseFallbackFiles, 1);
+    assert.equal(value.diagnostics[0].file, brokenPath);
+  } finally {
+    db.close();
+  }
+
+  const checks = await runDoctor({
+    workspaceRoot: root,
+    dataDir,
+    docsDir: path.join(root, "docs"),
+    docsPaths: [],
+    embeddingsUrl: "http://127.0.0.1:9",
+    semanticEnabled: false,
+    officialDocsEnabled: false
+  });
+  const phpParseCheck = checks.find((check) => check.name === "phpParse");
+  assert.equal(phpParseCheck?.status, "warning");
+  assert.match(phpParseCheck?.message ?? "", /1 PHP file/);
+});
 
 test("buildIndex indexes project PHP symbols", async () => {
   const root = fixtureRoot;

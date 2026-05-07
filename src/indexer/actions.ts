@@ -3,7 +3,7 @@ import path from "node:path";
 import { indexPath, resolveBitrixProjectRoot, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { buildIndex, DEFAULT_BITRIX_PATTERNS, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
-import { getIndexStatus, ensureSqliteStore, type IndexStatus } from "./sqliteStore.js";
+import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
 import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
 
@@ -120,6 +120,11 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
   try {
     await ensureSqliteStore(dbFile);
     checks.push({ name: "sqliteDb", status: "ok", message: `SQLite DB is readable/writable: ${dbFile}` });
+    const warnings = await readIndexWarnings(dbFile);
+    const fallbackFiles = new Set(warnings.map((warning) => warning.file)).size;
+    checks.push(fallbackFiles === 0
+      ? { name: "phpParse", status: "ok", message: "No PHP parse fallback/errors recorded." }
+      : { name: "phpParse", status: "warning", message: `${fallbackFiles} PHP file${fallbackFiles === 1 ? "" : "s"} used regex fallback after AST parse errors. Set BITRIX_MCP_DEBUG_PARSE=1 while indexing to print file paths.` });
   } catch (error) {
     checks.push({ name: "sqliteDb", status: "error", message: `SQLite DB check failed for ${dbFile}: ${error instanceof Error ? error.message : String(error)}` });
   }
@@ -175,6 +180,7 @@ export function formatIndexStatus(status: IndexStatus): string {
     `Events: ${status.events}`,
     `Documents: ${status.documents}`,
     `Documentation chunks: ${status.docChunks}`,
+    `PHP parse fallback/errors: ${status.phpParseFallbackFiles}`,
     `Last indexed: ${status.lastIndexedAt ?? "never"}`
   ].join("\n");
 }
