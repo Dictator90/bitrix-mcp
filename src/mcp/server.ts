@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import path from "node:path";
 import { z } from "zod";
 import { resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
@@ -7,6 +8,54 @@ import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { formatSemanticDocSearchResults } from "./format.js";
+
+const ALLOW_OUTSIDE_WORKSPACE_ENV = "BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE";
+
+function allowOutsideWorkspace(): boolean {
+  return process.env[ALLOW_OUTSIDE_WORKSPACE_ENV] === "1";
+}
+
+function isInsideWorkspace(workspaceRoot: string, targetPath: string): boolean {
+  const relative = path.relative(workspaceRoot, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function pathRestrictionError(toolName: string, parameterName: string, received: string | undefined, resolved: string, workspaceRoot: string): Error {
+  const value = received ?? "<default workspaceRoot>";
+  return new Error(`MCP path restriction: ${toolName} parameter "${parameterName}" must resolve inside workspaceRoot (${workspaceRoot}). Received ${value}; resolved to ${resolved}. Set ${ALLOW_OUTSIDE_WORKSPACE_ENV}=1 to explicitly allow indexing outside the workspace.`);
+}
+
+function normalizeProjectRoot(paths: RuntimePaths, root?: string): string {
+  const workspaceRoot = path.resolve(paths.workspaceRoot);
+  const resolvedRoot = path.resolve(root ?? workspaceRoot);
+  if (!allowOutsideWorkspace() && !isInsideWorkspace(workspaceRoot, resolvedRoot)) {
+    throw pathRestrictionError("bitrix_index_project", "root", root, resolvedRoot, workspaceRoot);
+  }
+  return resolvedRoot;
+}
+
+function containsParentSegment(inputPath: string): boolean {
+  return inputPath.split(/[\\/]+/u).includes("..");
+}
+
+function normalizeTemplateRoot(paths: RuntimePaths, templatePath?: string): string {
+  const workspaceRoot = path.resolve(paths.workspaceRoot);
+  if (!templatePath) return workspaceRoot;
+
+  const resolvedRoot = path.resolve(workspaceRoot, templatePath);
+  if (!allowOutsideWorkspace()) {
+    if (path.isAbsolute(templatePath)) {
+      throw new Error(`MCP path restriction: bitrix_index_template parameter "templatePath" must be relative to workspaceRoot (${workspaceRoot}); absolute paths are disabled by default. Received ${templatePath}. Set ${ALLOW_OUTSIDE_WORKSPACE_ENV}=1 to explicitly allow indexing outside the workspace.`);
+    }
+    if (containsParentSegment(templatePath)) {
+      throw new Error(`MCP path restriction: bitrix_index_template parameter "templatePath" must not contain ".." path segments by default. Received ${templatePath}; resolved to ${resolvedRoot}. Set ${ALLOW_OUTSIDE_WORKSPACE_ENV}=1 to explicitly allow indexing outside the workspace.`);
+    }
+    if (!isInsideWorkspace(workspaceRoot, resolvedRoot)) {
+      throw pathRestrictionError("bitrix_index_template", "templatePath", templatePath, resolvedRoot, workspaceRoot);
+    }
+  }
+  return resolvedRoot;
+}
 
 const searchFormatSchema = {
   includeSignature: z.boolean().optional().describe("Include the compact signature field; enabled by default."),
@@ -55,7 +104,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       root: z.string().optional()
     },
     async ({ root }) => {
-      return runWorkerTask("bitrix_index_project", { name: "indexProject", paths, root });
+      const resolvedRoot = normalizeProjectRoot(paths, root);
+      return runWorkerTask("bitrix_index_project", { name: "indexProject", paths, root: resolvedRoot });
     }
   );
 
@@ -67,7 +117,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       root: z.string().optional().describe("Deprecated: use templatePath instead. Temporary compatibility alias for a template path relative to the project root.")
     },
     async ({ templatePath, root }) => {
-      return runWorkerTask("bitrix_index_template", { name: "indexTemplate", paths, templatePath, root });
+      const resolvedRoot = normalizeTemplateRoot(paths, templatePath ?? root);
+      return runWorkerTask("bitrix_index_template", { name: "indexTemplate", paths, templatePath: resolvedRoot });
     }
   );
 
@@ -104,7 +155,6 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
-
 
   server.tool(
     "bitrix_index_docs",
