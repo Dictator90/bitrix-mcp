@@ -4,12 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { addPathDocSource, indexDocResourcesToSqlite, listDocResources } from "../src/resources/docs.js";
+import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
+import { runDoctor } from "../src/indexer/actions.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
@@ -103,6 +105,61 @@ test("documentation markdown chunks preserve section heading metadata", async ()
     assert.equal(row?.relative_path, path.join("framework", "markdown-headings.md"));
   } finally {
     db.close();
+  }
+});
+
+
+test("documentation chunks are prepared as embeddings documents", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-embedding-docs-"));
+  await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
+
+  const chunks = await indexDocResourcesToSqlite(dataDir, [], { force: true });
+  const documents = await prepareEmbeddingDocumentsFromSqlite(dataDir);
+
+  assert.equal(documents.length, chunks);
+  const headingDocument = documents.find((document) => document.text.includes("unique-heading-preservation-token"));
+  assert.ok(headingDocument);
+  assert.match(headingDocument.id, /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md#chunk-\d+$/);
+  assert.equal(headingDocument.metadata?.headingPath, "Framework Guide > Caching > Managed Cache Details");
+  assert.equal(headingDocument.metadata?.sectionAnchor, "managed-cache-details");
+  assert.equal(headingDocument.metadata?.relativePath, path.join("framework", "markdown-headings.md"));
+});
+
+
+test("doctor warns when embeddings document count differs from SQLite chunks", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doctor-embeddings-"));
+  await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
+  const chunks = await indexDocResourcesToSqlite(dataDir, [], { force: true });
+
+  const server = createServer((request, response) => {
+    if (request.url === "/health") {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ status: "ok", model: "test-model", documents: Math.max(0, chunks - 1) }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const checks = await runDoctor({
+      workspaceRoot: fixtureRoot,
+      dataDir,
+      docsDir: path.join(fixtureRoot, "docs"),
+      docsPaths: [path.join(fixtureRoot, "docs")],
+      embeddingsUrl: `http://127.0.0.1:${address.port}`,
+      semanticEnabled: false,
+      officialDocsEnabled: false
+    });
+
+    const embeddingsCheck = checks.find((check) => check.name === "embeddingsService");
+    assert.equal(embeddingsCheck?.status, "warning");
+    assert.match(embeddingsCheck?.message ?? "", /SQLite has \d+ documentation chunks/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
 

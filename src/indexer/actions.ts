@@ -5,7 +5,7 @@ import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { buildIndex, DEFAULT_BITRIX_PATTERNS, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
 import { getIndexStatus, ensureSqliteStore, type IndexStatus } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
-import { indexDocResourcesToSqlite, listDocSources } from "../resources/docs.js";
+import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
 
 export interface IndexAllResult {
   projectFiles: number;
@@ -88,6 +88,18 @@ export async function readIndexStatus(paths: RuntimePaths): Promise<IndexStatus>
   return getIndexStatus(sqlitePath(paths.dataDir));
 }
 
+export interface IndexEmbeddingsResult {
+  indexed: number;
+  sqliteDocChunks: number;
+  embeddingsUrl: string;
+}
+
+export async function indexEmbeddings(paths: RuntimePaths): Promise<IndexEmbeddingsResult> {
+  const documents = await prepareEmbeddingDocumentsFromSqlite(paths.dataDir);
+  const result = await new EmbeddingsClient(paths.embeddingsUrl).index(documents);
+  return { indexed: result.indexed, sqliteDocChunks: documents.length, embeddingsUrl: paths.embeddingsUrl };
+}
+
 export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
 
@@ -136,10 +148,18 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
   }
 
   try {
-    const health = await new EmbeddingsClient(paths.embeddingsUrl).health();
-    checks.push(health.status === "ok"
-      ? { name: "embeddingsService", status: "ok", message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}.` }
-      : { name: "embeddingsService", status: "warning", message: `Embeddings service responded at ${paths.embeddingsUrl} with status ${health.status}.` });
+    const [health, sqliteDocChunks] = await Promise.all([new EmbeddingsClient(paths.embeddingsUrl).health(), countDocChunks(paths.dataDir)]);
+    if (health.status !== "ok") {
+      checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service responded at ${paths.embeddingsUrl} with status ${health.status}.` });
+    } else if (health.documents !== undefined && health.documents !== sqliteDocChunks) {
+      checks.push({
+        name: "embeddingsService",
+        status: "warning",
+        message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}, but has ${health.documents} document${health.documents === 1 ? "" : "s"}; SQLite has ${sqliteDocChunks} documentation chunk${sqliteDocChunks === 1 ? "" : "s"}. Run bitrix-mcp index-embeddings after bitrix-mcp index-docs.`
+      });
+    } else {
+      checks.push({ name: "embeddingsService", status: "ok", message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}; indexed documents match SQLite chunks (${sqliteDocChunks}).` });
+    }
   } catch (error) {
     checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service is unavailable at ${paths.embeddingsUrl}: ${error instanceof Error ? error.message : String(error)}` });
   }
@@ -154,6 +174,7 @@ export function formatIndexStatus(status: IndexStatus): string {
     `Symbols: ${status.symbols}`,
     `Events: ${status.events}`,
     `Documents: ${status.documents}`,
+    `Documentation chunks: ${status.docChunks}`,
     `Last indexed: ${status.lastIndexedAt ?? "never"}`
   ].join("\n");
 }
@@ -175,4 +196,12 @@ export function formatDoctor(checks: DoctorCheck[]): string {
 
 export function hasDoctorErrors(checks: DoctorCheck[]): boolean {
   return checks.some((check) => check.status === "error");
+}
+
+export function formatIndexEmbeddingsResult(result: IndexEmbeddingsResult): string {
+  return [
+    `Indexed embeddings documents: ${result.indexed}`,
+    `SQLite documentation chunks: ${result.sqliteDocChunks}`,
+    `Embeddings service: ${result.embeddingsUrl}`
+  ].join("\n");
 }

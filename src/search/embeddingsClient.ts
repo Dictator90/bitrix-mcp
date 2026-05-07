@@ -5,11 +5,21 @@ export interface SemanticSearchHit {
   metadata: Record<string, unknown>;
 }
 
+export interface EmbeddingsDocument {
+  id: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface EmbeddingsHealth {
   status: string;
   model?: string;
   documents?: number;
   loaded?: boolean;
+}
+
+export interface EmbeddingsIndexResult {
+  indexed: number;
 }
 
 export class EmbeddingsClient {
@@ -19,6 +29,26 @@ export class EmbeddingsClient {
     const response = await fetch(new URL("/health", this.baseUrl));
     if (!response.ok) {
       throw new Error(`Embeddings health-check failed: ${response.status} ${await response.text()}`);
+    }
+    return (await response.json()) as EmbeddingsHealth;
+  }
+
+  async index(documents: EmbeddingsDocument[]): Promise<EmbeddingsIndexResult> {
+    const response = await fetch(new URL("/index", this.baseUrl), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ documents })
+    });
+    if (!response.ok) {
+      throw new Error(`Embeddings index failed: ${response.status} ${await response.text()}`);
+    }
+    return (await response.json()) as EmbeddingsIndexResult;
+  }
+
+  async reload(): Promise<EmbeddingsHealth> {
+    const response = await fetch(new URL("/reload", this.baseUrl), { method: "POST" });
+    if (!response.ok) {
+      throw new Error(`Embeddings reload failed: ${response.status} ${await response.text()}`);
     }
     return (await response.json()) as EmbeddingsHealth;
   }

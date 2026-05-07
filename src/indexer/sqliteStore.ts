@@ -524,6 +524,7 @@ export interface IndexStatus {
   symbols: number;
   events: number;
   documents: number;
+  docChunks: number;
   lastIndexedAt?: string;
 }
 
@@ -543,6 +544,7 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
       symbols: countRows(db, "symbols"),
       events: countRows(db, "events"),
       documents: countRows(db, "docs"),
+      docChunks: countRows(db, "doc_chunks"),
       lastIndexedAt: lastIndexedRow.last_indexed_at ?? undefined
     };
   } finally {

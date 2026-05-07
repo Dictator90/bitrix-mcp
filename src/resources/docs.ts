@@ -6,6 +6,7 @@ import fg from "fast-glob";
 import { frameworkDocsCheckoutPath, sqlitePath } from "../config/paths.js";
 import { ensureSqliteStore, readExistingDocsBySource, writeDocsToSqlite, type DocIndexChunk } from "../indexer/sqliteStore.js";
 import type { DocResource, DocSource } from "../types.js";
+import type { EmbeddingsDocument } from "../search/embeddingsClient.js";
 
 export const OFFICIAL_DOCS_GIT_URL = "https://github.com/bitrix-tools/framework-docs.git";
 
@@ -416,12 +417,69 @@ export interface IndexDocResourcesOptions {
   force?: boolean;
 }
 
-async function countDocChunks(dataDir: string): Promise<number> {
+export async function countDocChunks(dataDir: string): Promise<number> {
   await ensureSqliteStore(sqlitePath(dataDir));
   const db = openDatabase(sqlitePath(dataDir));
   try {
     const row = db.prepare("SELECT COUNT(*) AS count FROM doc_chunks").get() as { count: number };
     return row.count;
+  } finally {
+    db.close();
+  }
+}
+
+interface EmbeddingDocChunkRow {
+  chunk_id: number;
+  uri: string;
+  title: string | null;
+  path: string | null;
+  source_name: string | null;
+  chunk_index: number;
+  text: string;
+  heading_path: string | null;
+  section_anchor: string | null;
+  source_uri: string | null;
+  relative_path: string | null;
+}
+
+export async function prepareEmbeddingDocumentsFromSqlite(dataDir: string): Promise<EmbeddingsDocument[]> {
+  await ensureSqliteStore(sqlitePath(dataDir));
+  const db = openDatabase(sqlitePath(dataDir));
+  try {
+    const rows = db.prepare(`
+      SELECT
+        doc_chunks.id AS chunk_id,
+        docs.uri,
+        docs.title,
+        docs.path,
+        docs.source_name,
+        doc_chunks.chunk_index,
+        doc_chunks.text,
+        doc_chunks.heading_path,
+        doc_chunks.section_anchor,
+        doc_chunks.source_uri,
+        doc_chunks.relative_path
+      FROM doc_chunks
+      JOIN docs ON docs.id = doc_chunks.doc_id
+      ORDER BY docs.uri, doc_chunks.chunk_index
+    `).all() as unknown as EmbeddingDocChunkRow[];
+
+    return rows.map((row) => ({
+      id: `${row.uri}#chunk-${row.chunk_index}`,
+      text: row.text,
+      metadata: {
+        chunkId: row.chunk_id,
+        uri: row.uri,
+        title: row.title ?? undefined,
+        path: row.path ?? undefined,
+        sourceName: row.source_name ?? undefined,
+        chunkIndex: row.chunk_index,
+        headingPath: row.heading_path ?? undefined,
+        sectionAnchor: row.section_anchor ?? undefined,
+        sourceUri: row.source_uri ?? row.uri,
+        relativePath: row.relative_path ?? undefined
+      }
+    }));
   } finally {
     db.close();
   }

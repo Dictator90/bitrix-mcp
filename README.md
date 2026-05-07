@@ -111,6 +111,11 @@ npx bitrix-mcp docs-add-path /path/to/local/docs
 npx bitrix-mcp docs-update
 npx bitrix-mcp index-docs
 
+# Send SQLite documentation chunks to the embeddings service
+npx bitrix-mcp index-embeddings
+# Or reindex SQLite docs and embeddings together when the service is running
+npx bitrix-mcp index-docs --embeddings
+
 # Show index counters or run environment diagnostics
 npx bitrix-mcp status
 npx bitrix-mcp doctor
@@ -147,7 +152,7 @@ Override paths and optional features with environment variables:
 Bitrix MCP supports two documentation search modes:
 
 1. **Local SQLite FTS (default)** — run `bitrix-mcp index-docs`, `bitrix-mcp index-all`, or the MCP tool `bitrix_index_docs` to clone/pull the official Bitrix Framework documentation repository, index registered Markdown/text documentation into `.bitrix-mcp/bitrix-mcp.sqlite`, and search it with `bitrix_docs_search`. This mode does not need Python or the embeddings service; it needs network access only when cloning or pulling Git documentation sources.
-2. **Semantic embeddings (optional)** — start the Python FastAPI service from `embeddings/`, index documents into that service, and set `BITRIX_MCP_SEMANTIC_ENABLED=1` for the MCP server. This registers the additional `bitrix_semantic_docs_search` MCP tool, which calls `BITRIX_MCP_EMBEDDINGS_URL`.
+2. **Semantic embeddings (optional)** — first run `bitrix-mcp index-docs` so SQLite contains the canonical documentation chunks, start the Python FastAPI service from `embeddings/`, run `bitrix-mcp index-embeddings` (or `bitrix-mcp index-docs --embeddings`) to POST those same chunks to `/index`, and then set `BITRIX_MCP_SEMANTIC_ENABLED=1` for the MCP server. This registers the additional `bitrix_semantic_docs_search` MCP tool, which calls `BITRIX_MCP_EMBEDDINGS_URL`.
 
 Use local FTS as the baseline documentation search. Enable semantic mode only when you need embedding-based ranking and can run the Python service alongside the MCP server.
 
@@ -342,7 +347,29 @@ pip install -r requirements.txt
 uvicorn service:app --host 127.0.0.1 --port 8765
 ```
 
-Index documents by POSTing chunks to `/index`:
+Recommended semantic indexing sequence:
+
+```bash
+# 1. Populate SQLite with documentation chunks.
+bitrix-mcp index-docs
+
+# 2. Start the embeddings service in another shell.
+cd embeddings
+uvicorn service:app --host 127.0.0.1 --port 8765
+
+# 3. Send the SQLite chunks to the embeddings service.
+bitrix-mcp index-embeddings
+# Or combine steps 1 and 3 when the service is already running:
+bitrix-mcp index-docs --embeddings
+
+# 4. Enable the semantic MCP tool before starting the MCP server.
+export BITRIX_MCP_SEMANTIC_ENABLED=1
+bitrix-mcp serve
+```
+
+`bitrix-mcp doctor` checks both the embeddings service health and whether the service document count matches the current SQLite documentation chunk count. If the counts differ, rerun `bitrix-mcp index-embeddings` after `bitrix-mcp index-docs`.
+
+You can also POST chunks to `/index` manually:
 
 ```json
 {

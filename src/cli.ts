@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
-import { formatDoctor, formatIndexAllResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
+import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { initAndServe } from "./init/init.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
@@ -22,7 +22,8 @@ Commands:
   docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
   docs-add-path <path>          Register a local documentation directory
   docs-update                   Clone or pull registered Git documentation sources
-  index-docs [--force]          Index registered documentation sources into SQLite
+  index-docs [--force] [--embeddings] Index registered documentation sources into SQLite, optionally then into embeddings
+  index-embeddings              Send SQLite documentation chunks to the embeddings service
   status                        Show SQLite DB path and index counters
   doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and embeddings
 
@@ -39,7 +40,8 @@ Environment:
 
 async function main(argv: string[]): Promise<void> {
   const force = argv.includes("--force");
-  const positional = argv.filter((value) => value !== "--force");
+  const embeddings = argv.includes("--embeddings");
+  const positional = argv.filter((value) => value !== "--force" && value !== "--embeddings");
   const [command, arg] = positional;
   const paths = resolveRuntimePaths();
 
@@ -123,6 +125,14 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-docs") {
     const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force });
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
+    if (embeddings) {
+      console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));
+    }
+    return;
+  }
+
+  if (command === "index-embeddings") {
+    console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));
     return;
   }
 
