@@ -39,6 +39,14 @@ function nullable(value: string | undefined): string | null {
   return value ?? null;
 }
 
+function canonicalDocGitUrl(url: string): string {
+  const normalized = url.trim().replace(/\/+$/u, "");
+  if (/^(https?:\/\/github\.com\/|git@github\.com:)bitrix-tools\/framework-docs(?:\.git)?$/iu.test(normalized)) {
+    return OFFICIAL_DOCS_GIT_URL;
+  }
+  return normalized;
+}
+
 function sourceNameForPath(root: string, index?: number): string {
   const basename = path.basename(root) || "local-docs";
   return index == null ? basename : `${basename}-${index + 1}`;
@@ -132,16 +140,18 @@ async function directoryExists(dir: string): Promise<boolean> {
 }
 
 async function gitCheckoutRoot(dataDir: string, url: string, requestedCheckoutPath?: string): Promise<string> {
+  const canonicalUrl = canonicalDocGitUrl(url);
   if (requestedCheckoutPath) return expandHome(requestedCheckoutPath);
-  if (url === OFFICIAL_DOCS_GIT_URL) return frameworkDocsCheckoutPath(dataDir);
-  const safeName = url.replace(/\.git$/i, "").split(/[/:]/).filter(Boolean).pop()?.replace(/[^a-z0-9._-]+/gi, "-") || "git-docs";
+  if (canonicalUrl === OFFICIAL_DOCS_GIT_URL) return frameworkDocsCheckoutPath(dataDir);
+  const safeName = canonicalUrl.replace(/\.git$/i, "").split(/[/:]/).filter(Boolean).pop()?.replace(/[^a-z0-9._-]+/gi, "-") || "git-docs";
   return path.join(path.dirname(frameworkDocsCheckoutPath(dataDir)), safeName);
 }
 
 export async function addGitDocSource(dataDir: string, url = OFFICIAL_DOCS_GIT_URL, checkoutPath?: string, name?: string): Promise<DocSource> {
+  const canonicalUrl = canonicalDocGitUrl(url);
   await ensureSqliteStore(sqlitePath(dataDir));
   const now = new Date().toISOString();
-  const checkoutRoot = await gitCheckoutRoot(dataDir, url, checkoutPath);
+  const checkoutRoot = await gitCheckoutRoot(dataDir, canonicalUrl, checkoutPath);
   const db = openDatabase(sqlitePath(dataDir));
   try {
     const row = db.prepare(`
@@ -153,7 +163,7 @@ export async function addGitDocSource(dataDir: string, url = OFFICIAL_DOCS_GIT_U
         name = coalesce(excluded.name, doc_sources.name),
         updated_at = excluded.updated_at
       RETURNING id, type, uri, root_path, checkout_path, name, created_at, updated_at
-    `).get(url, checkoutRoot, checkoutRoot, nullable(name), now, now) as unknown as DocSourceRow;
+    `).get(canonicalUrl, checkoutRoot, checkoutRoot, nullable(name), now, now) as unknown as DocSourceRow;
     return rowToSource(row);
   } finally {
     db.close();
@@ -278,9 +288,21 @@ export async function readDocResource(dataDir: string, uri: string): Promise<{ c
   return { contents: await fs.readFile(resource.path, "utf8"), resource };
 }
 
-export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: string[] = []): Promise<number> {
+export interface IndexDocResourcesOptions {
+  includeOfficialDocs?: boolean;
+  updateGitSources?: boolean;
+  officialDocsUrl?: string;
+}
+
+export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: string[] = [], options: IndexDocResourcesOptions = {}): Promise<number> {
+  if (options.includeOfficialDocs) {
+    await addGitDocSource(dataDir, options.officialDocsUrl ?? OFFICIAL_DOCS_GIT_URL);
+  }
   if (docsPaths.length > 0) {
     await addPathDocSources(dataDir, docsPaths);
+  }
+  if (options.updateGitSources ?? options.includeOfficialDocs) {
+    await updateDocSources(dataDir);
   }
   const sources = await listDocSources(dataDir);
   const chunks: DocIndexChunk[] = [];

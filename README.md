@@ -81,12 +81,13 @@ Override paths with environment variables:
 - `BITRIX_ROOT` — default Bitrix project root for `index-bitrix`, `index-code`, and `index-all`.
 - `BITRIX_MCP_EMBEDDINGS_URL` — Python embeddings service URL, default `http://127.0.0.1:8765`.
 - `BITRIX_MCP_SEMANTIC_ENABLED` — enables the optional `bitrix_semantic_docs_search` MCP tool when set to `1`, `true`, `yes`, or `on`; disabled by default.
+- `BITRIX_MCP_OFFICIAL_DOCS_ENABLED` — automatically registers, clones or pulls, and indexes the official Bitrix Framework documentation repository during `index-docs`, `index-all`, and `bitrix_index_docs`; enabled by default, set to `0` to use only explicitly registered/local docs.
 
 ## Documentation search modes
 
 Bitrix MCP supports two documentation search modes:
 
-1. **Local SQLite FTS (default)** — run `bitrix-mcp index-docs` or the MCP tool `bitrix_index_docs` to index registered Markdown/text documentation into `.bitrix-mcp/bitrix-mcp.sqlite`. Use the `bitrix_docs_search` MCP tool for token-free full-text search. This mode does not need Python, network access, or the embeddings service.
+1. **Local SQLite FTS (default)** — run `bitrix-mcp index-docs`, `bitrix-mcp index-all`, or the MCP tool `bitrix_index_docs` to clone/pull the official Bitrix Framework documentation repository, index registered Markdown/text documentation into `.bitrix-mcp/bitrix-mcp.sqlite`, and search it with `bitrix_docs_search`. This mode does not need Python or the embeddings service; it needs network access only when cloning or pulling Git documentation sources.
 2. **Semantic embeddings (optional)** — start the Python FastAPI service from `embeddings/`, index documents into that service, and set `BITRIX_MCP_SEMANTIC_ENABLED=1` for the MCP server. This registers the additional `bitrix_semantic_docs_search` MCP tool, which calls `BITRIX_MCP_EMBEDDINGS_URL`.
 
 Use local FTS as the baseline documentation search. Enable semantic mode only when you need embedding-based ranking and can run the Python service alongside the MCP server.
@@ -140,17 +141,17 @@ Generated append-style files preserve existing content and replace only the `bit
 }
 ```
 
-After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, and starts the MCP server over stdio.
+After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, clones or pulls and indexes documentation sources including the official Bitrix Framework docs repository, and starts the MCP server over stdio.
 
 ## MCP tools
 
 - `bitrix_liveapi_search` — search indexed PHP symbols.
 - `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function.
 - `bitrix_index_project` — index the current project from an agent.
-- `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and registered documentation sources.
+- `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
 - `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
 - `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
-- `bitrix_index_docs` — index registered local/Git documentation sources into SQLite.
+- `bitrix_index_docs` — clone/pull and index documentation sources into SQLite, including the official Bitrix Framework docs repository when official docs are enabled.
 - `bitrix_docs_search` — default local SQLite FTS documentation search.
 - `bitrix_semantic_docs_search` — optional semantic documentation search through embeddings; available only when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
 
@@ -159,7 +160,7 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix-docs://index` — JSON list of local documentation resources.
 - `bitrix-docs://framework/getting-started.md` — bundled starter reference.
 
-Place additional `.md` or `.txt` files under `docs/` to expose them through the documentation index.
+By default documentation indexing uses `https://github.com/bitrix-tools/framework-docs.git` plus any local `docs/` directory and registered docs sources. Place additional `.md` or `.txt` files under `docs/` to expose them through the documentation index, or set `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0` to skip the official repository.
 
 ## Python embeddings service
 

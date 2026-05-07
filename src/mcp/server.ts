@@ -103,10 +103,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
   server.tool(
     "bitrix_index_docs",
-    "Index registered Bitrix documentation sources into the local SQLite documentation index.",
+    "Clone/pull and index Bitrix documentation sources into the local SQLite documentation index, including the official Bitrix Framework docs repository when enabled.",
     {},
     async () => {
-      const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
+      const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
       return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
     }
   );

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
@@ -10,6 +12,23 @@ import { addPathDocSource, indexDocResourcesToSqlite, listDocResources } from ".
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
+const execFileAsync = promisify(execFile);
+
+async function createGitDocsRepository(): Promise<string> {
+  const repo = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-git-"));
+  await execFileAsync("git", ["init"], { cwd: repo });
+  await execFileAsync("git", ["config", "user.email", "tests@example.com"], { cwd: repo });
+  await execFileAsync("git", ["config", "user.name", "Tests"], { cwd: repo });
+  await fs.mkdir(path.join(repo, "pages", "framework"), { recursive: true });
+  await fs.writeFile(
+    path.join(repo, "pages", "framework", "routing.md"),
+    "# Роутинг\n\nМиграция с устаревшего urlrewrite.php использует bitrix/routing_index.php и PublicPageController.\n",
+    "utf8"
+  );
+  await execFileAsync("git", ["add", "."], { cwd: repo });
+  await execFileAsync("git", ["commit", "-m", "Add routing docs"], { cwd: repo });
+  return repo;
+}
 
 test("buildIndex indexes project PHP symbols", async () => {
   const root = fixtureRoot;
@@ -81,6 +100,19 @@ test("documentation index supports multiple registered local paths", async () =>
 });
 
 
+
+test("documentation index can bootstrap and search a Git docs source", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-git-data-"));
+  const docsRepo = await createGitDocsRepository();
+
+  const chunks = await indexDocResourcesToSqlite(dataDir, [], { includeOfficialDocs: true, officialDocsUrl: docsRepo });
+  const results = await searchSqliteDocs(sqlitePath(dataDir), { query: "Миграция urlrewrite.php PublicPageController", limit: 5 });
+  const resources = await listDocResources(dataDir);
+
+  assert.equal(chunks, 1);
+  assert.match(results?.[0]?.item.text ?? "", /Миграция с устаревшего urlrewrite\.php/);
+  assert.ok(resources.some((resource) => resource.path.endsWith(path.join("pages", "framework", "routing.md"))));
+});
 
 test("documentation index scans multiple runtime docs paths", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-runtime-docs-"));
@@ -161,13 +193,25 @@ test("bitrix and install indexes include downloaded core ignored by project .git
   assert.deepEqual(installManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/install/js/admin/panel.ts"]);
 });
 
-test("template index uses template-specific patterns", async () => {
-  const root = fixtureRoot;
+test("template index uses Bitrix template-specific patterns", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-template-root-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-template-"));
   const outFile = path.join(dataDir, "template-index.json");
+
+  await fs.mkdir(path.join(root, "local/templates/site"), { recursive: true });
+  await fs.mkdir(path.join(root, "bitrix/templates/legacy"), { recursive: true });
+  await fs.mkdir(path.join(root, "templates/not-bitrix"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/templates/site/template.php"), "<?php function local_template_helper(): void {}\n", "utf8");
+  await fs.writeFile(path.join(root, "bitrix/templates/legacy/template.php"), "<?php function bitrix_template_helper(): void {}\n", "utf8");
+  await fs.writeFile(path.join(root, "templates/not-bitrix/template.php"), "<?php function invalid_template_helper(): void {}\n", "utf8");
+
   const manifest = await buildIndex({ root, kind: "template", outFile });
-  assert.ok(manifest.files.every((file) => file.relativePath.includes("templates")));
-  assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "template_helper")));
+  const relativePaths = manifest.files.map((file) => file.relativePath);
+
+  assert.deepEqual(relativePaths, ["bitrix/templates/legacy/template.php", "local/templates/site/template.php"]);
+  assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "local_template_helper")));
+  assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "bitrix_template_helper")));
+  assert.ok(manifest.files.every((file) => file.symbols.every((symbol) => symbol.name !== "invalid_template_helper")));
 });
 
 
