@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stderr as output } from "node:process";
-import { indexPath, type RuntimePaths } from "../config/paths.js";
+import { sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex } from "../indexer/indexer.js";
+import { hasIndexMetadata } from "../indexer/sqliteStore.js";
 import { serveStdio } from "../mcp/server.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 
@@ -450,14 +451,14 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[]): Promise<void> {
-  const outFile = indexPath(paths.dataDir, kind);
-  if (await pathExists(outFile)) {
-    output.write(`Index ${kind} already exists: ${outFile}\n`);
+export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[]): Promise<void> {
+  const dbFile = sqlitePath(paths.dataDir);
+  if (await hasIndexMetadata(dbFile, kind)) {
+    output.write(`Index ${kind} already exists: ${dbFile}\n`);
     return;
   }
-  const manifest = await buildIndex({ root, kind, outFile, patterns });
-  output.write(`Indexed ${manifest.files.length} ${kind} files into ${outFile}\n`);
+  const manifest = await buildIndex({ root, kind, dbFile, patterns });
+  output.write(`Indexed ${manifest.files.length} ${kind} files into ${dbFile}\n`);
 }
 
 export async function initAndServe(): Promise<void> {
