@@ -41,3 +41,11 @@ test("cli index-template without an argument indexes standard template locations
   assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "template_helper")));
   assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
+
+test("cli help documents embeddings indexing commands", async () => {
+  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "--help"], { cwd: fixtureRoot });
+
+  assert.match(stdout, /index-docs \[--force\] \[--embeddings\]/);
+  assert.match(stdout, /index-embeddings/);
+});
+
