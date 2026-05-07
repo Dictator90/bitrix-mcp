@@ -151,6 +151,10 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE,
         chunk_index INTEGER NOT NULL,
         text TEXT NOT NULL,
+        heading_path TEXT,
+        section_anchor TEXT,
+        source_uri TEXT,
+        relative_path TEXT,
         embedding BLOB,
         UNIQUE(doc_id, chunk_index)
       );
@@ -232,6 +236,19 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       db.exec("ALTER TABLE docs ADD COLUMN mtime_ms REAL NOT NULL DEFAULT 0;");
     }
     db.exec("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source_id);");
+
+    const docChunkColumns = (db.prepare("PRAGMA table_info(doc_chunks)").all() as Array<{ name: string }>).map((column) => column.name);
+    for (const [column, definition] of [
+      ["heading_path", "TEXT"],
+      ["section_anchor", "TEXT"],
+      ["source_uri", "TEXT"],
+      ["relative_path", "TEXT"]
+    ] as const) {
+      if (!docChunkColumns.includes(column)) {
+        db.exec(`ALTER TABLE doc_chunks ADD COLUMN ${column} ${definition};`);
+      }
+    }
+
     const symbolColumns = (db.prepare("PRAGMA table_info(symbols)").all() as Array<{ name: string }>).map((column) => column.name);
     for (const [column, definition] of [
       ["handler_class", "TEXT"],
@@ -551,6 +568,10 @@ export interface DocIndexChunk {
   mtimeMs: number;
   chunkIndex: number;
   text: string;
+  headingPath?: string;
+  sectionAnchor?: string;
+  sourceUri?: string;
+  relativePath?: string;
 }
 
 export interface WriteDocsOptions {
@@ -594,9 +615,14 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
       RETURNING id
     `);
     const insertChunk = db.prepare(`
-      INSERT INTO doc_chunks (doc_id, chunk_index, text)
-      VALUES (?, ?, ?)
-      ON CONFLICT(doc_id, chunk_index) DO UPDATE SET text = excluded.text
+      INSERT INTO doc_chunks (doc_id, chunk_index, text, heading_path, section_anchor, source_uri, relative_path)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(doc_id, chunk_index) DO UPDATE SET
+        text = excluded.text,
+        heading_path = excluded.heading_path,
+        section_anchor = excluded.section_anchor,
+        source_uri = excluded.source_uri,
+        relative_path = excluded.relative_path
       RETURNING id
     `);
     const insertFts = db.prepare("INSERT INTO docs_fts (rowid, uri, title, path, text) VALUES (?, ?, ?, ?, ?)");
@@ -634,7 +660,15 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
 
       for (const chunk of chunks) {
         const doc = insertDoc.get(chunk.sourceId ?? null, nullable(chunk.sourceName), chunk.uri, nullable(chunk.title), nullable(chunk.path), nullable(chunk.mimeType), chunk.size, chunk.mtimeMs, indexedAt) as { id: number };
-        const row = insertChunk.get(doc.id, chunk.chunkIndex, chunk.text) as { id: number };
+        const row = insertChunk.get(
+          doc.id,
+          chunk.chunkIndex,
+          chunk.text,
+          nullable(chunk.headingPath),
+          nullable(chunk.sectionAnchor),
+          nullable(chunk.sourceUri),
+          nullable(chunk.relativePath)
+        ) as { id: number };
         insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
       }
       const totalChunks = (db.prepare("SELECT COUNT(*) AS count FROM doc_chunks").get() as { count: number }).count;

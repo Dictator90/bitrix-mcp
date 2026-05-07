@@ -136,6 +136,9 @@ export function formatDocSearchResults(results: SearchResult<DocSearchResult>[] 
     title: result.item.title,
     uri: result.item.uri,
     path: result.item.path,
+    headingPath: result.item.headingPath,
+    sectionAnchor: result.item.sectionAnchor,
+    relativePath: result.item.relativePath,
     chunkIndex: result.item.chunkIndex,
     excerpt: excerptText(result.item.text, normalized.query, normalized.maxTextChars)
   }));

@@ -32,6 +32,7 @@ interface DocResourceRow {
 }
 
 interface ScannedDocResource extends DocResource {
+  relativePath: string;
   size: number;
   mtimeMs: number;
 }
@@ -104,16 +105,124 @@ function titleFromText(text: string, fallback: string): string {
   return text.match(/^#\s+(.+)$/m)?.[1].trim() ?? fallback;
 }
 
-function splitDocChunks(text: string): string[] {
+interface MarkdownDocChunk {
+  text: string;
+  headingPath?: string;
+  sectionAnchor?: string;
+}
+
+interface MarkdownSection {
+  text: string;
+  headingPath: string[];
+  sectionAnchor?: string;
+}
+
+function markdownAnchor(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[`*_~[\]()]/gu, "")
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")
+    .replace(/\s+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
+}
+
+function markdownHeading(line: string): { level: number; title: string } | undefined {
+  const match = line.match(/^ {0,3}(#{1,3})\s+(.+?)\s*#*\s*$/u);
+  if (!match) return undefined;
+  return { level: match[1].length, title: match[2].trim() };
+}
+
+function splitMarkdownSections(text: string): MarkdownSection[] {
+  const lines = text.replace(/\r\n?/gu, "\n").trim().split("\n");
+  const sections: MarkdownSection[] = [];
+  const headingPath: string[] = [];
+  let sectionLines: string[] = [];
+  let currentHeadingPath: string[] = [];
+  let currentAnchor: string | undefined;
+  let inFence = false;
+
+  const flush = () => {
+    const sectionText = sectionLines.join("\n").trim();
+    if (sectionText) {
+      sections.push({ text: sectionText, headingPath: currentHeadingPath, sectionAnchor: currentAnchor });
+    }
+    sectionLines = [];
+  };
+
+  for (const line of lines) {
+    if (/^ {0,3}```/u.test(line) || /^ {0,3}~~~/u.test(line)) {
+      inFence = !inFence;
+    }
+
+    const heading = inFence ? undefined : markdownHeading(line);
+    if (heading) {
+      flush();
+      headingPath[heading.level - 1] = heading.title;
+      headingPath.length = heading.level;
+      currentHeadingPath = [...headingPath];
+      currentAnchor = markdownAnchor(heading.title);
+    }
+
+    sectionLines.push(line);
+  }
+  flush();
+  return sections;
+}
+
+function splitLargeMarkdownSection(section: MarkdownSection): MarkdownDocChunk[] {
+  if (section.text.length <= DOC_CHUNK_SIZE) {
+    return [{ text: section.text, headingPath: section.headingPath.join(" > ") || undefined, sectionAnchor: section.sectionAnchor }];
+  }
+
+  const prefix = section.headingPath.length > 0 ? `Heading path: ${section.headingPath.join(" > ")}\n\n` : "";
+  const chunks: MarkdownDocChunk[] = [];
+  const blocks = section.text.split(/\n{2,}/u);
+  let current = "";
+
+  const pushCurrent = () => {
+    const text = current.trim();
+    if (text) {
+      chunks.push({ text, headingPath: section.headingPath.join(" > ") || undefined, sectionAnchor: section.sectionAnchor });
+    }
+    current = "";
+  };
+
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length <= DOC_CHUNK_SIZE) {
+      current = candidate;
+      continue;
+    }
+
+    pushCurrent();
+    if (block.length <= DOC_CHUNK_SIZE) {
+      current = prefix && !block.startsWith(prefix) ? `${prefix}${block}` : block;
+      continue;
+    }
+
+    const chunkSize = Math.max(1, DOC_CHUNK_SIZE - prefix.length);
+    const step = Math.max(1, chunkSize - DOC_CHUNK_OVERLAP);
+    for (let start = 0; start < block.length; start += step) {
+      const text = `${prefix}${block.slice(start, start + chunkSize)}`.trim();
+      if (text) {
+        chunks.push({ text, headingPath: section.headingPath.join(" > ") || undefined, sectionAnchor: section.sectionAnchor });
+      }
+    }
+  }
+
+  pushCurrent();
+  return chunks.filter((chunk) => chunk.text.length > 0);
+}
+
+function splitDocChunks(text: string): MarkdownDocChunk[] {
   const normalized = text.trim();
   if (!normalized) {
     return [];
   }
-  const chunks: string[] = [];
-  for (let start = 0; start < normalized.length; start += DOC_CHUNK_SIZE - DOC_CHUNK_OVERLAP) {
-    chunks.push(normalized.slice(start, start + DOC_CHUNK_SIZE).trim());
-  }
-  return chunks.filter(Boolean);
+
+  return splitMarkdownSections(normalized).flatMap(splitLargeMarkdownSection);
 }
 
 async function runGit(args: string[], cwd?: string): Promise<string> {
@@ -257,6 +366,7 @@ async function docsFromSource(source: DocSource): Promise<ScannedDocResource[]> 
       description: `Bitrix Framework documentation: ${name}`,
       mimeType: mimeTypeFor(relativePath),
       path: fullPath,
+      relativePath,
       size: stat.size,
       mtimeMs: stat.mtimeMs
     });
@@ -342,12 +452,12 @@ export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: stri
 
       const contents = await fs.readFile(resource.path, "utf8");
       const title = titleFromText(contents, resource.name);
-      const chunkTexts = splitDocChunks(contents);
-      if (chunkTexts.length === 0) {
+      const chunks = splitDocChunks(contents);
+      if (chunks.length === 0) {
         continue;
       }
       currentUris.push(resource.uri);
-      chunkTexts.forEach((text, chunkIndex) => {
+      chunks.forEach((chunk, chunkIndex) => {
         changedChunks.push({
           uri: resource.uri,
           sourceId: source.id,
@@ -358,7 +468,11 @@ export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: stri
           size: resource.size,
           mtimeMs: resource.mtimeMs,
           chunkIndex,
-          text
+          text: chunk.text,
+          headingPath: chunk.headingPath,
+          sectionAnchor: chunk.sectionAnchor,
+          sourceUri: resource.uri,
+          relativePath: resource.relativePath
         });
       });
     }
