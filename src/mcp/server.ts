@@ -57,6 +57,9 @@ function normalizeTemplateRoot(paths: RuntimePaths, templatePath?: string): stri
   return resolvedRoot;
 }
 
+const indexKindSchema = z.enum(["project", "bitrix", "template", "install"]);
+const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1)]);
+
 const searchFormatSchema = {
   includeSignature: z.boolean().optional().describe("Include the compact signature field; enabled by default."),
   maxSignatureChars: z.number().int().min(20).max(2_000).optional().describe("Maximum characters for compact signatures; default is 160."),
@@ -74,12 +77,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       query: z.string().min(1),
       type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]).optional(),
       module: z.string().optional(),
-      kind: z.enum(["project", "bitrix", "template", "install"]).optional(),
+      kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
+      preferLocal: z.boolean().optional().describe("When true (default), boost project and template matches ahead of Bitrix core/install matches with equal relevance."),
       limit: z.number().int().min(1).max(100).default(20),
       ...searchFormatSchema
     },
-    async ({ query, type, module, kind, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
-      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
+    async ({ query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
 
@@ -89,11 +93,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     {
       query: z.string().min(1),
       module: z.string().optional(),
+      kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
+      preferLocal: z.boolean().optional().describe("When true (default), boost project and template handlers ahead of Bitrix core/install handlers with equal relevance."),
       limit: z.number().int().min(1).max(100).default(20),
       ...searchFormatSchema
     },
-    async ({ query, module, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
-      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
+    async ({ query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
     }
   );
 

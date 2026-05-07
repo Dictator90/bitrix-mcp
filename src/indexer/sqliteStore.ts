@@ -34,6 +34,7 @@ interface FileRow {
 }
 
 interface SymbolRow {
+  kind: IndexKind;
   type: SymbolRecord["type"];
   language: string | null;
   name: string;
@@ -59,6 +60,7 @@ function openDatabase(dbFile: string): DatabaseSync {
 
 function rowToSymbol(row: SymbolRow): SymbolRecord {
   return {
+    kind: row.kind,
     type: row.type,
     language: row.language ?? undefined,
     name: row.name,
@@ -516,7 +518,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,

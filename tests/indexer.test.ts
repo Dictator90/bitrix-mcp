@@ -124,6 +124,38 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
   assert.match(docResults?.[0]?.item.text ?? "", /managed cache/);
 });
 
+test("LiveAPI search filters by kind arrays and prefers local results", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-kind-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-kind-filter-"));
+  await fs.mkdir(path.join(root, "bitrix/modules/main/lib"), { recursive: true });
+  await fs.mkdir(path.join(root, "local/modules/vendor.module/install/js/admin"), { recursive: true });
+  await fs.writeFile(path.join(root, "index.php"), "<?php\nfunction duplicate_boost_target(): void {}\nAddEventHandler('main', 'OnKindFilter', ['ProjectKindHandler', 'run']);\n", "utf8");
+  await fs.writeFile(path.join(root, "bitrix/modules/main/lib/core.php"), "<?php\nfunction duplicate_boost_target(): void {}\nAddEventHandler('main', 'OnKindFilter', ['BitrixKindHandler', 'run']);\n", "utf8");
+  await fs.writeFile(path.join(root, "local/modules/vendor.module/install/js/admin/widget.ts"), "export class InstallKindWidget {}\n", "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+  await buildIndex({ root, kind: "bitrix", outFile: path.join(dataDir, "bitrix-index.json"), patterns: ["bitrix/modules/**/*.php"] });
+  await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json") });
+
+  const defaultResults = await searchLiveApi(sqlitePath(dataDir), { query: "duplicate_boost_target", type: "function", limit: 5 });
+  assert.equal(defaultResults?.[0]?.item.name, "duplicate_boost_target");
+  assert.equal(defaultResults?.[0]?.item.kind, "project");
+
+  const bitrixOnlyResults = await searchLiveApi(sqlitePath(dataDir), { query: "duplicate_boost_target", type: "function", kind: ["bitrix"], limit: 5 });
+  assert.ok(bitrixOnlyResults?.length);
+  assert.ok(bitrixOnlyResults?.every((result) => result.item.kind === "bitrix"));
+
+  const installOnlyResults = await searchLiveApi(sqlitePath(dataDir), { query: "InstallKindWidget", type: "class", kind: ["install"], limit: 5 });
+  assert.equal(installOnlyResults?.[0]?.item.kind, "install");
+
+  const defaultEventResults = await searchSqliteEvents(sqlitePath(dataDir), { query: "KindHandler", module: "main", limit: 5 });
+  assert.equal(defaultEventResults?.[0]?.item.kind, "project");
+
+  const bitrixEventResults = await searchSqliteEvents(sqlitePath(dataDir), { query: "KindHandler", module: "main", kind: "bitrix", limit: 5 });
+  assert.ok(bitrixEventResults?.length);
+  assert.ok(bitrixEventResults?.every((result) => result.item.kind === "bitrix"));
+});
+
 test("documentation markdown chunks preserve section heading metadata", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-markdown-docs-"));
   await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));

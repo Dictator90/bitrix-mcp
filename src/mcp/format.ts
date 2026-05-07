@@ -99,6 +99,7 @@ export function formatLiveApiSearchResults(results: SearchResult<SymbolRecord>[]
   return results?.map((result) => compactObject({
     score: result.score,
     type: result.item.type,
+    kind: result.item.kind,
     name: result.item.name,
     module: result.item.module,
     file: result.item.file,
@@ -116,6 +117,7 @@ export function formatEventSearchResults(results: SearchResult<EventRecord>[] | 
   return results?.map((result) => compactObject({
     score: result.score,
     type: "event",
+    kind: result.item.kind,
     name: result.item.eventName,
     module: result.item.module,
     file: result.item.file,
