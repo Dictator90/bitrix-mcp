@@ -75,7 +75,7 @@ export async function indexCode(paths: RuntimePaths, options: { force?: boolean 
 
 export async function indexAll(paths: RuntimePaths, options: { force?: boolean } = {}): Promise<IndexAllResult> {
   const codeResult = await indexCode(paths, options);
-  const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
+  const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force: options.force });
   return { ...codeResult, docChunks };
 }
 

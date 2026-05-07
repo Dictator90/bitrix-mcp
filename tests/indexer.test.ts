@@ -97,6 +97,79 @@ test("documentation index supports multiple registered local paths", async () =>
 });
 
 
+test("documentation index skips unchanged docs and updates changed/deleted docs", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-docs-"));
+  const docsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-incremental-root-"));
+  const unchangedPath = path.join(docsRoot, "unchanged.md");
+  const changedPath = path.join(docsRoot, "changed.md");
+  const deletedPath = path.join(docsRoot, "deleted.md");
+
+  await fs.writeFile(unchangedPath, "# Unchanged\nstable managed cache text\n", "utf8");
+  await fs.writeFile(changedPath, "# Changed\nold token\n", "utf8");
+  await fs.writeFile(deletedPath, "# Deleted\nremoved token\n", "utf8");
+
+  await addPathDocSource(dataDir, docsRoot, "incremental-docs");
+  assert.equal(await indexDocResourcesToSqlite(dataDir), 3);
+
+  const dbFile = sqlitePath(dataDir);
+  const before = new DatabaseSync(dbFile);
+  let unchangedIndexedAt: string;
+  let changedIndexedAt: string;
+  try {
+    const rows = before.prepare("SELECT path, size, mtime_ms, indexed_at FROM docs ORDER BY path").all() as Array<{ path: string; size: number; mtime_ms: number; indexed_at: string }>;
+    assert.equal(rows.length, 3);
+    assert.ok(rows.every((row) => row.size > 0));
+    assert.ok(rows.every((row) => row.mtime_ms > 0));
+    unchangedIndexedAt = rows.find((row) => row.path === unchangedPath)?.indexed_at ?? "";
+    changedIndexedAt = rows.find((row) => row.path === changedPath)?.indexed_at ?? "";
+    assert.ok(unchangedIndexedAt);
+    assert.ok(changedIndexedAt);
+  } finally {
+    before.close();
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await fs.writeFile(changedPath, "# Changed\nnew searchable token appears\n", "utf8");
+  await fs.rm(deletedPath);
+
+  assert.equal(await indexDocResourcesToSqlite(dataDir), 2);
+
+  const after = new DatabaseSync(dbFile);
+  try {
+    const rows = after.prepare("SELECT path, indexed_at FROM docs ORDER BY path").all() as Array<{ path: string; indexed_at: string }>;
+    assert.deepEqual(rows.map((row) => row.path), [changedPath, unchangedPath]);
+    assert.equal(rows.find((row) => row.path === unchangedPath)?.indexed_at, unchangedIndexedAt);
+    assert.notEqual(rows.find((row) => row.path === changedPath)?.indexed_at, changedIndexedAt);
+
+    const deletedChunks = after.prepare(`
+      SELECT COUNT(*) AS count
+      FROM doc_chunks c
+      JOIN docs d ON d.id = c.doc_id
+      WHERE d.path = ?
+    `).get(deletedPath) as { count: number };
+    assert.equal(deletedChunks.count, 0);
+  } finally {
+    after.close();
+  }
+
+  const results = await searchSqliteDocs(dbFile, { query: "new searchable token", limit: 5 });
+  assert.equal(results?.[0]?.item.path, changedPath);
+
+  assert.equal(await indexDocResourcesToSqlite(dataDir), 2);
+});
+
+test("documentation index force option reindexes unchanged docs", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-force-docs-"));
+  const docsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-force-root-"));
+  const docPath = path.join(docsRoot, "force.md");
+
+  await fs.writeFile(docPath, "# Force\nmanaged cache force text\n", "utf8");
+  await addPathDocSource(dataDir, docsRoot, "force-docs");
+  assert.equal(await indexDocResourcesToSqlite(dataDir), 1);
+  assert.equal(await indexDocResourcesToSqlite(dataDir), 1);
+  assert.equal(await indexDocResourcesToSqlite(dataDir, [], { force: true }), 1);
+});
+
 
 test("documentation index can bootstrap and search a Git docs source", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-git-data-"));
