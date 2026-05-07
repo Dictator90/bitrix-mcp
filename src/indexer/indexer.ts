@@ -4,10 +4,10 @@ import fg from "fast-glob";
 import ignore from "ignore";
 import { sqlitePath } from "../config/paths.js";
 import { parseJsSymbols } from "../liveapi/jsParser.js";
-import { parsePhpSymbols } from "../liveapi/phpParser.js";
+import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
-import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
+import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../types.js";
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
@@ -96,6 +96,8 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
   });
 
   const files: IndexFile[] = [];
+  const warnings: IndexWarning[] = [];
+  const debugParse = process.env.BITRIX_MCP_DEBUG_PARSE === "1";
   for (const relativePath of entries.sort()) {
     if (ig.ignores(relativePath)) {
       continue;
@@ -106,7 +108,19 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     const existing = existingByPath.get(absolutePath);
     const shouldParseSymbols = !existing || existing.size !== stat.size || existing.mtimeMs !== stat.mtimeMs;
     const source = shouldParseSymbols && (language === "php" || language === "javascript" || language === "typescript") ? await fs.readFile(absolutePath, "utf8") : "";
-    const symbols = shouldParseSymbols ? language === "php" ? parsePhpSymbols(source, absolutePath) : language === "javascript" || language === "typescript" ? parseJsSymbols(source, absolutePath) : [] : [];
+    let symbols: SymbolRecord[] = [];
+    if (shouldParseSymbols && language === "php") {
+      const result = parsePhpSymbolsWithDiagnostics(source, absolutePath);
+      symbols = result.symbols;
+      warnings.push(...result.warnings);
+      if (debugParse) {
+        for (const warning of result.warnings) {
+          console.warn(`[bitrix-mcp] PHP parse fallback: ${warning.file}: ${warning.message}`);
+        }
+      }
+    } else if (shouldParseSymbols && (language === "javascript" || language === "typescript")) {
+      symbols = parseJsSymbols(source, absolutePath);
+    }
     files.push({
       path: absolutePath,
       relativePath,
@@ -123,7 +137,8 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     generatedAt: new Date().toISOString(),
     root,
     kind: options.kind,
-    files
+    files,
+    warnings
   };
 
   await writeIndexToSqlite(dbFile, manifest, { force: options.force });

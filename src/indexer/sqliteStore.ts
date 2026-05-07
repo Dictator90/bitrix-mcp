@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { IndexFile, IndexKind, IndexManifest, SymbolRecord } from "../types.js";
+import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -312,6 +312,26 @@ export interface WriteIndexOptions {
   force?: boolean;
 }
 
+function warningMetaValue(warnings: IndexWarning[] | undefined): string {
+  const diagnostics = warnings ?? [];
+  return JSON.stringify({
+    phpParseFallbackFiles: new Set(diagnostics.map((warning) => warning.file)).size,
+    diagnostics
+  });
+}
+
+function parseWarningMeta(value: string): { phpParseFallbackFiles: number; diagnostics: IndexWarning[] } {
+  try {
+    const parsed = JSON.parse(value) as { phpParseFallbackFiles?: unknown; diagnostics?: unknown };
+    return {
+      phpParseFallbackFiles: typeof parsed.phpParseFallbackFiles === "number" ? parsed.phpParseFallbackFiles : 0,
+      diagnostics: Array.isArray(parsed.diagnostics) ? parsed.diagnostics.filter((entry): entry is IndexWarning => typeof entry === "object" && entry !== null && (entry as { type?: unknown }).type === "php_parse_fallback" && typeof (entry as { file?: unknown }).file === "string" && typeof (entry as { message?: unknown }).message === "string") : []
+    };
+  } catch {
+    return { phpParseFallbackFiles: 0, diagnostics: [] };
+  }
+}
+
 export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest, options: WriteIndexOptions = {}): Promise<void> {
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
@@ -451,6 +471,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         }
       }
       setMeta.run(`index:${manifest.kind}`, JSON.stringify({ version: manifest.version, generatedAt: manifest.generatedAt, root: manifest.root, kind: manifest.kind, files: manifest.files.length }), manifest.generatedAt);
+      setMeta.run(`index:${manifest.kind}:warnings`, warningMetaValue(manifest.warnings), manifest.generatedAt);
       setMeta.run("schema_version", "3", manifest.generatedAt);
       db.exec("COMMIT;");
     } catch (error) {
@@ -505,12 +526,14 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       language: file.language,
       symbols: (symbolSelect.all(file.id) as unknown as SymbolRow[]).map(rowToSymbol)
     }));
+    const warningRow = db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
     return {
       version: 1,
       generatedAt: fileRows[0].indexed_at,
       root: fileRows[0].root,
       kind,
-      files
+      files,
+      warnings: warningRow ? parseWarningMeta(warningRow.value).diagnostics : []
     };
   } finally {
     db.close();
@@ -525,12 +548,31 @@ export interface IndexStatus {
   events: number;
   documents: number;
   docChunks: number;
+  phpParseFallbackFiles: number;
   lastIndexedAt?: string;
 }
 
 function countRows(db: DatabaseSync, table: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
   return row.count;
+}
+
+function countPhpParseFallbackFiles(db: DatabaseSync): number {
+  const rows = db.prepare("SELECT value FROM index_meta WHERE key LIKE 'index:%:warnings'").all() as Array<{ value: string }>;
+  return rows.reduce((sum, row) => sum + parseWarningMeta(row.value).phpParseFallbackFiles, 0);
+}
+
+export async function readIndexWarnings(dbFile: string, kind?: IndexKind): Promise<IndexWarning[]> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const rows = kind
+      ? db.prepare("SELECT value FROM index_meta WHERE key = ?").all(`index:${kind}:warnings`) as Array<{ value: string }>
+      : db.prepare("SELECT value FROM index_meta WHERE key LIKE 'index:%:warnings'").all() as Array<{ value: string }>;
+    return rows.flatMap((row) => parseWarningMeta(row.value).diagnostics);
+  } finally {
+    db.close();
+  }
 }
 
 export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
@@ -545,6 +587,7 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
       events: countRows(db, "events"),
       documents: countRows(db, "docs"),
       docChunks: countRows(db, "doc_chunks"),
+      phpParseFallbackFiles: countPhpParseFallbackFiles(db),
       lastIndexedAt: lastIndexedRow.last_indexed_at ?? undefined
     };
   } finally {

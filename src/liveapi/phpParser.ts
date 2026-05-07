@@ -1,4 +1,4 @@
-import type { SymbolRecord } from "../types.js";
+import type { IndexWarning, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst } from "./phpAstParser.js";
 
@@ -87,10 +87,28 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
   return symbols;
 }
 
-export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[] {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export interface PhpParseResult {
+  symbols: SymbolRecord[];
+  warnings: IndexWarning[];
+}
+
+export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string): PhpParseResult {
   try {
-    return parsePhpSymbolsWithAst(source, filePath);
-  } catch {
-    return parsePhpSymbolsWithRegex(source, filePath);
+    return { symbols: parsePhpSymbolsWithAst(source, filePath), warnings: [] };
+  } catch (error) {
+    const warning: IndexWarning = {
+      type: "php_parse_fallback",
+      file: filePath,
+      message: errorMessage(error)
+    };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), warnings: [warning] };
   }
+}
+
+export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[] {
+  return parsePhpSymbolsWithDiagnostics(source, filePath).symbols;
 }

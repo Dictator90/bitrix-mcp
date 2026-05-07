@@ -43,12 +43,19 @@ export interface SearchResult<T = unknown> {
   item: T;
 }
 
+export interface IndexWarning {
+  type: "php_parse_fallback";
+  file: string;
+  message: string;
+}
+
 export interface IndexManifest {
   version: 1;
   generatedAt: string;
   root: string;
   kind: IndexKind;
   files: IndexFile[];
+  warnings?: IndexWarning[];
 }
 
 export interface DocResource {
