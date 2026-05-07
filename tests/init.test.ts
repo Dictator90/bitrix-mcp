@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { envConfig, writeMcpServersConfig } from "../src/init/init.js";
+import { envConfig, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
 
 test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
   const projectRoot = path.join(os.tmpdir(), "bitrix-mcp-project");
@@ -71,4 +71,51 @@ test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers"
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_MCP_DOCS_DIR, path.join(projectRoot, "docs"));
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_ROOT, projectRoot);
   assert.equal(updated.mcpServers["bitrix-mcp"].env.BITRIX_MCP_SEMANTIC_ENABLED, "0");
+});
+
+
+test("writeAgentGuidance creates a project skill and Cursor rule", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-guidance-cursor-"));
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  const results = await writeAgentGuidance("cursor", context);
+
+  assert.deepEqual(
+    results.map((result) => path.relative(projectRoot, result.path)),
+    [path.join(".bitrix-mcp", "skills", "bitrix-mcp", "SKILL.md"), path.join(".cursor", "rules", "bitrix-mcp.mdc")]
+  );
+  const skill = await fs.readFile(path.join(projectRoot, ".bitrix-mcp", "skills", "bitrix-mcp", "SKILL.md"), "utf8");
+  assert.match(skill, /^---\nname: bitrix-mcp/m);
+  assert.match(skill, /bitrix_liveapi_search/);
+
+  const rule = await fs.readFile(path.join(projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), "utf8");
+  assert.match(rule, /alwaysApply: true/);
+  assert.match(rule, /bitrix_docs_search/);
+});
+
+test("writeAgentGuidance upserts append-style rules without deleting user content", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-guidance-codex-"));
+  const agentsPath = path.join(projectRoot, "AGENTS.md");
+  await fs.writeFile(agentsPath, "# Existing project rules\n\nKeep this section.\n", "utf8");
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  await writeAgentGuidance("codex", context);
+  await writeAgentGuidance("codex", context);
+
+  const rule = await fs.readFile(agentsPath, "utf8");
+  assert.match(rule, /Keep this section\./);
+  assert.equal((rule.match(/bitrix-mcp:init-guidance:start/g) ?? []).length, 1);
+  assert.match(rule, /bitrix_index_status/);
 });

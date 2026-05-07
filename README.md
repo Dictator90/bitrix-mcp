@@ -116,7 +116,22 @@ The command uses the current working directory as the project root, creates `<pr
 - Kilo Code — `~/.kilocode/cli/global/settings/mcp_settings.json`.
 - Other MCP clients — a custom JSON path entered during setup.
 
-For supported JSON clients, `init` reads the existing MCP config and adds or updates only the `bitrix-mcp` entry, preserving other MCP servers and unrelated settings. The `bitrix-mcp` server runs:
+For supported JSON clients, `init` reads the existing MCP config and adds or updates only the `bitrix-mcp` entry, preserving other MCP servers and unrelated settings. For every selected agent, `init` also creates a reusable Bitrix MCP skill at `.bitrix-mcp/skills/bitrix-mcp/SKILL.md` and writes an agent-specific rule file so the agent knows when to call the MCP tools:
+
+- Cursor — `.cursor/rules/bitrix-mcp.mdc`.
+- Claude Desktop / Claude Code — managed section in `CLAUDE.md`.
+- PhpStorm / JetBrains — managed section in `.junie/guidelines.md`.
+- VS Code / GitHub Copilot — managed section in `.github/copilot-instructions.md`.
+- Windsurf — `.windsurf/rules/bitrix-mcp.md`.
+- Cline — `.clinerules/bitrix-mcp.md`.
+- Roo Code — `.roo/rules/bitrix-mcp.md`.
+- Continue — `.continue/rules/bitrix-mcp.md`.
+- Gemini CLI — managed section in `GEMINI.md`.
+- OpenAI Codex — managed section in `AGENTS.md`.
+- Kilo Code — `.kilocode/rules/bitrix-mcp.md`.
+- Other MCP clients — `.bitrix-mcp/rules/bitrix-mcp.md`.
+
+Generated append-style files preserve existing content and replace only the `bitrix-mcp:init-guidance` managed section on reruns. The `bitrix-mcp` server runs:
 
 ```json
 {
