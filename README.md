@@ -214,6 +214,86 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix_docs_search` — default local SQLite FTS documentation search.
 - `bitrix_semantic_docs_search` — optional semantic documentation search through embeddings; available only when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
 
+### Search result formats
+
+Search tools support shared response-shaping options:
+
+- `format`: `"compact"` (default) or `"full"`.
+- `includeSignature`: include the compact `signature` field for symbol/event results; defaults to `true`.
+- `maxSignatureChars`: truncate compact signatures to this many characters; defaults to `160`.
+- `maxTextChars`: truncate documentation excerpts to this many characters; defaults to `500`.
+
+Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `name`, `module`, `file`, `line`, and a truncated `signature` when available:
+
+```json
+{
+  "query": "CIBlockElement::GetList",
+  "limit": 3
+}
+```
+
+Example compact response shape:
+
+```json
+[
+  {
+    "score": 1,
+    "type": "method",
+    "name": "CIBlockElement::GetList",
+    "module": "iblock",
+    "file": "bitrix/modules/iblock/classes/general/iblockelement.php",
+    "line": 785,
+    "signature": "CIBlockElement::GetList($arOrder = [], $arFilter = [], $arGroupBy = false, $arNavStartParams = false, $arSelectFields = [])"
+  }
+]
+```
+
+Documentation search compact mode returns an `excerpt` instead of the full indexed chunk. Matching query terms are highlighted when possible; otherwise the chunk is truncated:
+
+```json
+{
+  "query": "sale order event",
+  "limit": 2,
+  "maxTextChars": 300
+}
+```
+
+Example compact documentation response shape:
+
+```json
+[
+  {
+    "score": 0.9,
+    "type": "doc",
+    "title": "Sale events",
+    "uri": "bitrix-docs://framework/sale/events.md",
+    "path": "sale/events.md",
+    "chunkIndex": 0,
+    "excerpt": "...register handlers for **sale** **order** **event** callbacks..."
+  }
+]
+```
+
+Use full mode when you need the raw indexed payload, including full symbol metadata or full documentation chunk text:
+
+```json
+{
+  "query": "CIBlockElement::GetList",
+  "limit": 1,
+  "format": "full"
+}
+```
+
+To reduce symbol/event output further while staying in compact mode, disable signatures explicitly:
+
+```json
+{
+  "query": "OnSaleOrderSaved",
+  "format": "compact",
+  "includeSignature": false
+}
+```
+
 ## MCP resources
 
 - `bitrix-docs://index` — JSON list of local documentation resources.

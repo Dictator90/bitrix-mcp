@@ -69,16 +69,24 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
 
   await tools.bitrix_index_project.handler({});
   const result = await tools.bitrix_liveapi_search.handler({ query: "demo_helper", limit: 5 });
-  const results = JSON.parse(result.content[0].text) as Array<{ item: { name: string } }>;
+  const results = JSON.parse(result.content[0].text) as Array<{ name: string; type: string; file: string; line: number }>;
 
-  assert.equal(results[0]?.item.name, "demo_helper");
+  assert.equal(results[0]?.name, "demo_helper");
+  assert.equal(results[0]?.type, "function");
+  assert.ok(results[0]?.file);
+  assert.ok(results[0]?.line);
 
   const eventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5 });
-  const eventResults = JSON.parse(eventResult.content[0].text) as Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }>;
+  const eventResults = JSON.parse(eventResult.content[0].text) as Array<{ type: string; name: string; module: string; file: string; line: number }>;
 
-  assert.equal(eventResults[0]?.item.eventName, "OnBeforeProlog");
-  assert.equal(eventResults[0]?.item.handlerClass, "Demo");
-  assert.equal(eventResults[0]?.item.handlerMethod, "handler");
+  assert.equal(eventResults[0]?.type, "event");
+  assert.equal(eventResults[0]?.name, "OnBeforeProlog");
+  assert.equal(eventResults[0]?.module, "main");
+
+  const fullEventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5, format: "full" });
+  const fullEventResults = JSON.parse(fullEventResult.content[0].text) as Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }>;
+  assert.equal(fullEventResults[0]?.item.handlerClass, "Demo");
+  assert.equal(fullEventResults[0]?.item.handlerMethod, "handler");
 });
 
 test("MCP bitrix_docs_search searches local docs without embeddings service", async () => {
@@ -97,9 +105,11 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
 
   await tools.bitrix_index_docs.handler({});
   const result = await tools.bitrix_docs_search.handler({ query: "managed cache", limit: 5 });
-  const results = JSON.parse(result.content[0].text) as Array<{ item: { text: string } }>;
+  const results = JSON.parse(result.content[0].text) as Array<{ excerpt: string; type: string; uri: string }>;
 
-  assert.match(results[0]?.item.text ?? "", /managed cache/);
+  assert.equal(results[0]?.type, "doc");
+  assert.match(results[0]?.excerpt ?? "", /\*\*managed\*\* \*\*cache\*\*/i);
+  assert.equal("item" in (results[0] ?? {}), false);
 });
 
 test("MCP semantic docs search tool is optional", async () => {

@@ -5,15 +5,16 @@ import { buildIndex } from "../indexer/indexer.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
+import { formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
   | { name: "indexTemplate"; paths: RuntimePaths; templatePath?: string; root?: string }
   | { name: "indexAll"; paths: RuntimePaths }
   | { name: "indexDocs"; paths: RuntimePaths }
-  | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery }
-  | { name: "searchEvents"; paths: RuntimePaths; query: { query: string; module?: string; limit?: number } }
-  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } };
+  | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
+  | { name: "searchEvents"; paths: RuntimePaths; query: { query: string; module?: string; limit?: number } & SearchFormatOptions }
+  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
@@ -36,15 +37,15 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     }
     case "searchLiveApi": {
       const results = await searchLiveApi(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(formatLiveApiSearchResults(results, task.query), null, 2) }] };
     }
     case "searchEvents": {
       const results = await searchSqliteEvents(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(formatEventSearchResults(results, task.query), null, 2) }] };
     }
     case "searchDocs": {
       const results = await searchSqliteDocs(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      return { content: [{ type: "text", text: JSON.stringify(formatDocSearchResults(results, task.query), null, 2) }] };
     }
   }
 }
