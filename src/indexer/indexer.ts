@@ -11,7 +11,7 @@ import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
 
 export const DEFAULT_INDEX_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
 const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**"];
-const TEMPLATE_HINTS = ["local/templates/**", "bitrix/templates/**", "templates/**"];
+const TEMPLATE_HINTS = ["local/templates/**", "bitrix/templates/**"];
 
 export interface IndexOptions {
   root: string;
