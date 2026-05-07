@@ -9,7 +9,7 @@ import { hasIndexMetadata } from "../indexer/sqliteStore.js";
 import { serveStdio } from "../mcp/server.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 
-type Agent =
+export type Agent =
   | "cursor"
   | "claude-desktop"
   | "claude-code"
@@ -30,7 +30,7 @@ interface AgentChoice {
   description: string;
 }
 
-const AGENT_CHOICES: AgentChoice[] = [
+export const AGENT_CHOICES: AgentChoice[] = [
   { id: "cursor", label: "Cursor", description: "project config in .cursor/mcp.json" },
   { id: "claude-desktop", label: "Claude Desktop", description: "global Claude Desktop config" },
   { id: "claude-code", label: "Claude Code", description: "project config in .mcp.json" },
@@ -46,7 +46,7 @@ const AGENT_CHOICES: AgentChoice[] = [
   { id: "generic-json", label: "Другой MCP-клиент", description: "custom JSON config path with an mcpServers object" }
 ];
 
-interface InitContext {
+export interface InitContext {
   projectRoot: string;
   dataDir: string;
   docsDir: string;
@@ -55,13 +55,13 @@ interface InitContext {
   semanticEnabled: boolean;
 }
 
-interface WrittenConfig {
+export interface WrittenConfig {
   label: string;
   path?: string;
   note?: string;
 }
 
-interface AgentGuidanceResult {
+export interface AgentGuidanceResult {
   label: string;
   path: string;
 }
@@ -418,7 +418,7 @@ async function writeAgentConfig(agent: Agent, context: InitContext, rl: readline
   };
 }
 
-function parseAgentSelection(answer: string): Agent[] {
+export function parseAgentSelection(answer: string): Agent[] {
   const tokens = answer
     .split(/[\s,]+/)
     .map((token) => token.trim())
@@ -451,6 +451,152 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+function isTruthyEnv(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
+}
+
+export function parseAgentIds(values: string[]): Agent[] {
+  const aliases = new Map<string, Agent>(AGENT_CHOICES.map((choice) => [choice.id, choice.id]));
+  aliases.set("claude", "claude-code");
+  aliases.set("phpstorm", "jetbrains");
+  aliases.set("jetbrains-ai", "jetbrains");
+  aliases.set("copilot", "vscode");
+  aliases.set("vs-code", "vscode");
+  aliases.set("roo", "roo-code");
+  aliases.set("gemini", "gemini-cli");
+  aliases.set("openai-codex", "codex");
+  aliases.set("kilo", "kilo-code");
+  aliases.set("other", "generic-json");
+
+  const agents = values
+    .flatMap((value) => value.split(/[,\s]+/))
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .map((value) => aliases.get(value))
+    .filter((agent): agent is Agent => Boolean(agent));
+  return [...new Set(agents)];
+}
+
+export interface InitOptions {
+  agents?: Agent[];
+  allAgents?: boolean;
+  yes?: boolean;
+  index?: boolean;
+  docs?: boolean;
+  officialDocs?: boolean;
+  serve?: boolean;
+}
+
+export interface InitDependencies {
+  serveStdio?: (paths: RuntimePaths) => Promise<void>;
+}
+
+export function allConfigurableAgents(): Agent[] {
+  return AGENT_CHOICES.map((choice) => choice.id).filter((agent) => agent !== "generic-json");
+}
+
+export async function createInitContext(projectRoot = process.cwd()): Promise<InitContext> {
+  const dataDir = path.join(projectRoot, ".bitrix-mcp");
+  const docsDir = path.join(projectRoot, "docs");
+  const embeddingsUrl = process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
+  const semanticEnabled = isTruthyEnv(process.env.BITRIX_MCP_SEMANTIC_ENABLED);
+  const bitrixRoot = (await pathExists(path.join(projectRoot, "bitrix"))) ? projectRoot : undefined;
+
+  process.env.BITRIX_MCP_DATA_DIR = dataDir;
+  process.env.BITRIX_MCP_WORKSPACE = projectRoot;
+  process.env.BITRIX_MCP_DOCS_DIR = docsDir;
+  if (bitrixRoot) {
+    process.env.BITRIX_ROOT = bitrixRoot;
+  }
+
+  await fs.mkdir(dataDir, { recursive: true });
+  return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled };
+}
+
+function runtimePathsFromContext(context: InitContext, officialDocsEnabled: boolean): RuntimePaths {
+  return {
+    workspaceRoot: context.projectRoot,
+    dataDir: context.dataDir,
+    docsDir: context.docsDir,
+    docsPaths: [context.docsDir],
+    bitrixRoot: context.bitrixRoot,
+    embeddingsUrl: context.embeddingsUrl,
+    semanticEnabled: context.semanticEnabled,
+    officialDocsEnabled
+  };
+}
+
+async function resolveAgents(options: InitOptions): Promise<{ agents: Agent[]; rl?: readline.Interface }> {
+  if (options.allAgents) {
+    return { agents: allConfigurableAgents() };
+  }
+  if (options.agents?.length) {
+    return { agents: options.agents };
+  }
+  if (options.yes) {
+    return { agents: ["cursor"] };
+  }
+  return askAgents();
+}
+
+function defaultShouldServe(options: InitOptions): boolean {
+  if (options.serve !== undefined) {
+    return options.serve;
+  }
+  return !isTruthyEnv(process.env.CI) && !isTruthyEnv(process.env.GITHUB_ACTIONS);
+}
+
+export async function writeConfigs(agents: Agent[], context: InitContext, rl?: readline.Interface): Promise<WrittenConfig[]> {
+  const fallbackRl = rl ?? readline.createInterface({ input, output });
+  const shouldClose = !rl;
+  try {
+    const results: WrittenConfig[] = [];
+    for (const agent of agents) {
+      results.push(await writeAgentConfig(agent, context, fallbackRl));
+    }
+    return results;
+  } finally {
+    if (shouldClose) {
+      fallbackRl.close();
+    }
+  }
+}
+
+export async function writeGuidance(agents: Agent[], context: InitContext): Promise<AgentGuidanceResult[]> {
+  const guidanceResults: AgentGuidanceResult[] = [];
+  for (const agent of agents) {
+    guidanceResults.push(...(await writeAgentGuidance(agent, context)));
+  }
+  return guidanceResults;
+}
+
+function printConfigureResults(configResults: WrittenConfig[], guidanceResults: AgentGuidanceResult[]): void {
+  for (const configResult of configResults) {
+    if (configResult.path) {
+      output.write(`${configResult.label} MCP config updated: ${configResult.path}\n`);
+    }
+    if (configResult.note) {
+      output.write(`${configResult.label}:\n${configResult.note}\n`);
+    }
+  }
+  const uniqueGuidancePaths = [...new Set(guidanceResults.map((result) => result.path))];
+  for (const guidancePath of uniqueGuidancePaths) {
+    output.write(`Bitrix MCP guidance updated: ${guidancePath}\n`);
+  }
+}
+
+export async function configureAgents(options: InitOptions = {}): Promise<void> {
+  const context = await createInitContext();
+  const { agents, rl } = await resolveAgents(options);
+  try {
+    const configResults = await writeConfigs(agents, context, rl);
+    const guidanceResults = await writeGuidance(agents, context);
+    printConfigureResults(configResults, guidanceResults);
+  } finally {
+    rl?.close();
+  }
+}
+
 export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[]): Promise<void> {
   const dbFile = sqlitePath(paths.dataDir);
   if (await hasIndexMetadata(dbFile, kind)) {
@@ -461,62 +607,55 @@ export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "tem
   output.write(`Indexed ${manifest.files.length} ${kind} files into ${dbFile}\n`);
 }
 
-export async function initAndServe(): Promise<void> {
-  const projectRoot = process.cwd();
-  const dataDir = path.join(projectRoot, ".bitrix-mcp");
-  const docsDir = path.join(projectRoot, "docs");
-  const embeddingsUrl = process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
-  const semanticEnabled = ["1", "true", "yes", "on"].includes((process.env.BITRIX_MCP_SEMANTIC_ENABLED ?? "").trim().toLowerCase());
-  const bitrixRoot = (await pathExists(path.join(projectRoot, "bitrix"))) ? projectRoot : undefined;
-
-  process.env.BITRIX_MCP_DATA_DIR = dataDir;
-  process.env.BITRIX_MCP_WORKSPACE = projectRoot;
-  process.env.BITRIX_MCP_DOCS_DIR = docsDir;
-  if (bitrixRoot) {
-    process.env.BITRIX_ROOT = bitrixRoot;
-  }
-
-  const context: InitContext = { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled };
-  await fs.mkdir(dataDir, { recursive: true });
-
-  const { agents, rl } = await askAgents();
-  try {
-    const configResults: WrittenConfig[] = [];
-    const guidanceResults: AgentGuidanceResult[] = [];
-    for (const agent of agents) {
-      configResults.push(await writeAgentConfig(agent, context, rl));
-      guidanceResults.push(...(await writeAgentGuidance(agent, context)));
-    }
-
-    for (const configResult of configResults) {
-      if (configResult.path) {
-        output.write(`${configResult.label} MCP config updated: ${configResult.path}\n`);
-      }
-      if (configResult.note) {
-        output.write(`${configResult.label}:\n${configResult.note}\n`);
-      }
-    }
-    const uniqueGuidancePaths = [...new Set(guidanceResults.map((result) => result.path))];
-    for (const guidancePath of uniqueGuidancePaths) {
-      output.write(`Bitrix MCP guidance updated: ${guidancePath}\n`);
-    }
-  } finally {
-    rl.close();
-  }
-
-  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl, semanticEnabled, officialDocsEnabled: true };
-
-  await indexIfMissing(paths, "project", projectRoot);
-  await indexIfMissing(paths, "template", projectRoot);
-  if (bitrixRoot) {
-    await indexIfMissing(paths, "bitrix", bitrixRoot, ["bitrix/modules/**/*.php", "local/modules/**/*.php"]);
+export async function indexCode(paths: RuntimePaths): Promise<void> {
+  await indexIfMissing(paths, "project", paths.workspaceRoot);
+  await indexIfMissing(paths, "template", paths.workspaceRoot);
+  if (paths.bitrixRoot) {
+    await indexIfMissing(paths, "bitrix", paths.bitrixRoot, ["bitrix/modules/**/*.php", "local/modules/**/*.php"]);
   } else {
     output.write("Bitrix root was not detected at <projectRoot>/bitrix; skipping Bitrix index.\n");
   }
+}
 
-  const docChunks = await indexDocResourcesToSqlite(dataDir, [docsDir], { includeOfficialDocs: true });
-  output.write(`Indexed ${docChunks} documentation chunks into ${dataDir}\n`);
+export async function indexDocs(paths: RuntimePaths): Promise<void> {
+  const docChunks = await indexDocResourcesToSqlite(paths.dataDir, [paths.docsDir], { includeOfficialDocs: paths.officialDocsEnabled });
+  output.write(`Indexed ${docChunks} documentation chunks into ${paths.dataDir}\n`);
+}
 
+export async function serve(paths: RuntimePaths, deps: InitDependencies = {}): Promise<void> {
   output.write("Starting bitrix-mcp over stdio...\n");
-  await serveStdio(paths);
+  await (deps.serveStdio ?? serveStdio)(paths);
+}
+
+export async function initAndServe(options: InitOptions = {}, deps: InitDependencies = {}): Promise<void> {
+  const context = await createInitContext();
+  const includeOfficialDocs = options.officialDocs ?? true;
+  const paths = runtimePathsFromContext(context, includeOfficialDocs);
+
+  const { agents, rl } = await resolveAgents(options);
+  try {
+    const configResults = await writeConfigs(agents, context, rl);
+    const guidanceResults = await writeGuidance(agents, context);
+    printConfigureResults(configResults, guidanceResults);
+  } finally {
+    rl?.close();
+  }
+
+  if (options.index ?? true) {
+    await indexCode(paths);
+  } else {
+    output.write("Skipping code indexing because --no-index was passed.\n");
+  }
+
+  if (options.docs ?? true) {
+    await indexDocs(paths);
+  } else {
+    output.write("Skipping documentation indexing because --no-docs was passed.\n");
+  }
+
+  if (defaultShouldServe(options)) {
+    await serve(paths, deps);
+  } else {
+    output.write("Skipping stdio server start. Run `bitrix-mcp serve` when your MCP client starts the server.\n");
+  }
 }

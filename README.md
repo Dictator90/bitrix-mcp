@@ -51,11 +51,12 @@ npm run build
 # 2. Go to the Bitrix project you want to index
 cd /path/to/bitrix/project
 
-# 3. Configure your MCP client, create .bitrix-mcp indexes, and start the server
-npx bitrix-mcp init
+# 3. Configure your MCP client and create .bitrix-mcp indexes
+# In CI or scripts, --no-serve avoids taking over stdio after setup.
+npx bitrix-mcp init --agent cursor --no-serve
 ```
 
-During `init`, select one or more AI agents from the prompt. Bitrix MCP writes or updates that agent's MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio.
+During interactive `init`, select one or more AI agents from the prompt. For non-interactive setup, pass `--agent <id>` (repeat or comma-separate IDs), `--all-agents`, or `--yes` for the default Cursor setup. Bitrix MCP writes or updates the selected agents' MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio unless `--no-serve` is passed or a CI environment is detected.
 
 After setup, open your AI client and ask it to use Bitrix MCP. A good first prompt is:
 
@@ -82,6 +83,12 @@ npx bitrix-mcp serve
 ```bash
 # Configure an agent, create .bitrix-mcp indexes, and start stdio server
 npx bitrix-mcp init
+
+# Non-interactive init for scripts/CI: configure Cursor, skip serving after setup
+npx bitrix-mcp init --agent cursor --no-serve
+
+# Configure MCP config and guidance only; do not index or start the server
+npx bitrix-mcp configure --agent cursor
 
 # Start MCP server over stdio for Cursor, PhpStorm, Claude Desktop, Kilo, etc.
 npx bitrix-mcp serve
@@ -205,7 +212,19 @@ Generated append-style files preserve existing content and replace only the `bit
 }
 ```
 
-After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, clones or pulls and indexes documentation sources including the official Bitrix Framework docs repository, and starts the MCP server over stdio.
+### `init` and `configure` flags
+
+- `--agent <id>` — select agents without a prompt. Repeat it or use commas, for example `--agent cursor,codex`. Supported IDs are `cursor`, `claude-desktop`, `claude-code`, `jetbrains`, `vscode`, `windsurf`, `cline`, `roo-code`, `continue`, `gemini-cli`, `codex`, `kilo-code`, and `generic-json`.
+- `--all-agents` — configure every built-in agent that does not need an extra custom path prompt.
+- `--yes` / `-y` — accept the default non-interactive agent choice (`cursor`).
+- `--no-index` — skip project/template/Bitrix code indexing during `init`.
+- `--no-docs` — skip documentation indexing during `init`.
+- `--no-official-docs` — index only local/registered documentation sources and do not clone or update the official Bitrix Framework docs during `init`.
+- `--no-serve` — write configs and run selected indexing steps without starting the MCP stdio server.
+
+Use `bitrix-mcp configure` with the same agent-selection flags when you only want MCP configuration and guidance files. `configure` never indexes code/docs and never starts the server.
+
+After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, clones or pulls and indexes documentation sources including the official Bitrix Framework docs repository, and starts the MCP server over stdio by default for local interactive runs. In CI (`CI=1` or `GITHUB_ACTIONS=1`) the server start is skipped automatically; pass `--no-serve` explicitly in scripts to make this behavior obvious.
 
 ## MCP tools
 
