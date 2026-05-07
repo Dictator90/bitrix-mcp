@@ -163,3 +163,35 @@ test("resolveRuntimePaths enables optional semantic mode from BITRIX_MCP_SEMANTI
     assert.equal(resolveRuntimePaths({ workspaceRoot }).semanticEnabled, false);
   });
 });
+
+
+function withOfficialDocsEnv<T>(value: string | undefined, callback: () => T): T {
+  const previous = process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED;
+  if (value === undefined) {
+    delete process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED;
+  } else {
+    process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED = value;
+  }
+
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED;
+    } else {
+      process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED = previous;
+    }
+  }
+}
+
+test("resolveRuntimePaths enables official docs indexing by default and supports opt-out", () => {
+  const workspaceRoot = tempWorkspace();
+
+  withOfficialDocsEnv(undefined, () => {
+    assert.equal(resolveRuntimePaths({ workspaceRoot }).officialDocsEnabled, true);
+  });
+
+  withOfficialDocsEnv("0", () => {
+    assert.equal(resolveRuntimePaths({ workspaceRoot }).officialDocsEnabled, false);
+  });
+});

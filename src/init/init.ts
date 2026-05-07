@@ -6,6 +6,7 @@ import { stdin as input, stderr as output } from "node:process";
 import { indexPath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { serveStdio } from "../mcp/server.js";
+import { indexDocResourcesToSqlite } from "../resources/docs.js";
 
 type Agent =
   | "cursor"
@@ -231,7 +232,8 @@ export function envConfig(context: InitContext): Record<string, string> {
     BITRIX_MCP_DOCS_DIR: context.docsDir,
     ...(context.bitrixRoot ? { BITRIX_ROOT: context.bitrixRoot } : {}),
     BITRIX_MCP_EMBEDDINGS_URL: context.embeddingsUrl,
-    BITRIX_MCP_SEMANTIC_ENABLED: context.semanticEnabled ? "1" : "0"
+    BITRIX_MCP_SEMANTIC_ENABLED: context.semanticEnabled ? "1" : "0",
+    BITRIX_MCP_OFFICIAL_DOCS_ENABLED: "1"
   };
 }
 
@@ -501,7 +503,7 @@ export async function initAndServe(): Promise<void> {
     rl.close();
   }
 
-  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl, semanticEnabled };
+  const paths: RuntimePaths = { workspaceRoot: projectRoot, dataDir, docsDir, docsPaths: [docsDir], bitrixRoot, embeddingsUrl, semanticEnabled, officialDocsEnabled: true };
 
   await indexIfMissing(paths, "project", projectRoot);
   await indexIfMissing(paths, "template", projectRoot);
@@ -510,6 +512,9 @@ export async function initAndServe(): Promise<void> {
   } else {
     output.write("Bitrix root was not detected at <projectRoot>/bitrix; skipping Bitrix index.\n");
   }
+
+  const docChunks = await indexDocResourcesToSqlite(dataDir, [docsDir], { includeOfficialDocs: true });
+  output.write(`Indexed ${docChunks} documentation chunks into ${dataDir}\n`);
 
   output.write("Starting bitrix-mcp over stdio...\n");
   await serveStdio(paths);

@@ -10,6 +10,7 @@ export interface RuntimePaths {
   bitrixRoot?: string;
   embeddingsUrl: string;
   semanticEnabled: boolean;
+  officialDocsEnabled?: boolean;
 }
 
 export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): RuntimePaths {
@@ -22,6 +23,7 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
   const bitrixRoot = explicitBitrixRoot ?? detectWorkspaceBitrixRoot(workspaceRoot);
   const embeddingsUrl = overrides.embeddingsUrl ?? process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
   const semanticEnabled = overrides.semanticEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_SEMANTIC_ENABLED);
+  const officialDocsEnabled = overrides.officialDocsEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED, true);
 
   return {
     workspaceRoot,
@@ -30,12 +32,13 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
     docsPaths,
     bitrixRoot: bitrixRoot ? resolveBitrixProjectRoot(bitrixRoot) : undefined,
     embeddingsUrl,
-    semanticEnabled
+    semanticEnabled,
+    officialDocsEnabled
   };
 }
 
-function parseBooleanEnv(value: string | undefined): boolean {
-  if (!value) return false;
+function parseBooleanEnv(value: string | undefined, defaultValue = false): boolean {
+  if (!value) return defaultValue;
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 

@@ -79,7 +79,7 @@ export async function indexCode(paths: RuntimePaths): Promise<Omit<IndexAllResul
 
 export async function indexAll(paths: RuntimePaths): Promise<IndexAllResult> {
   const codeResult = await indexCode(paths);
-  const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
+  const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
   return { ...codeResult, docChunks };
 }
 

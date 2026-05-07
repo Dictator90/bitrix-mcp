@@ -32,6 +32,7 @@ Environment:
   BITRIX_MCP_DOCS_DIR           Legacy directory with local Bitrix documentation
   BITRIX_MCP_EMBEDDINGS_URL     Python embeddings service URL
   BITRIX_MCP_SEMANTIC_ENABLED   Enable optional semantic MCP tool (1/true/yes/on)
+  BITRIX_MCP_OFFICIAL_DOCS_ENABLED Auto-register/update official Bitrix docs during docs indexing (default on)
   BITRIX_ROOT                   Bitrix project root for LiveAPI indexing
 `;
 }
@@ -118,7 +119,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-docs") {
-    const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths);
+    const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false });
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     return;
   }
