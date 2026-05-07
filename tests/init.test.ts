@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { envConfig, indexIfMissing, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
+import { configureAgents, envConfig, indexIfMissing, initAndServe, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
 import { ensureSqliteStore } from "../src/indexer/sqliteStore.js";
 
 test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
@@ -162,4 +162,45 @@ test("indexIfMissing skips buildIndex when SQLite metadata exists", async () => 
   } finally {
     after.close();
   }
+});
+
+test("configureAgents supports non-interactive agent selection", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-configure-agent-"));
+  const previousCwd = process.cwd();
+  process.chdir(projectRoot);
+  try {
+    await configureAgents({ agents: ["vscode"] });
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  const config = JSON.parse(await fs.readFile(path.join(projectRoot, ".vscode", "mcp.json"), "utf8"));
+  assert.equal(config.servers["bitrix-mcp"].command, "bitrix-mcp");
+  assert.deepEqual(config.servers["bitrix-mcp"].args, ["serve"]);
+  assert.equal(config.servers["bitrix-mcp"].env.BITRIX_MCP_WORKSPACE, projectRoot);
+
+  const guidance = await fs.readFile(path.join(projectRoot, ".github", "copilot-instructions.md"), "utf8");
+  assert.match(guidance, /bitrix_liveapi_search/);
+});
+
+test("initAndServe does not start server when --no-serve behavior is requested", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-no-serve-"));
+  const previousCwd = process.cwd();
+  let serveCalled = false;
+  process.chdir(projectRoot);
+  try {
+    await initAndServe(
+      { agents: ["cursor"], index: false, docs: false, serve: false },
+      {
+        serveStdio: async () => {
+          serveCalled = true;
+        }
+      }
+    );
+  } finally {
+    process.chdir(previousCwd);
+  }
+
+  assert.equal(serveCalled, false);
+  await fs.access(path.join(projectRoot, ".cursor", "mcp.json"));
 });
