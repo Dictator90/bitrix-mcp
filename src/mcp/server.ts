@@ -14,15 +14,16 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
   server.tool(
     "bitrix_liveapi_search",
-    "Search indexed Bitrix PHP symbols: functions, classes, methods, events, components, and constants.",
+    "Search indexed Bitrix symbols: functions, classes, methods, events, components, constants, and frontend exports.",
     {
       query: z.string().min(1),
       type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]).optional(),
       module: z.string().optional(),
+      kind: z.enum(["project", "bitrix", "template", "install"]).optional(),
       limit: z.number().int().min(1).max(100).default(20)
     },
-    async ({ query, type, module, limit }) => {
-      const results = await searchLiveApi(sqlitePath(paths.dataDir), { query, type, module, limit }) ?? [];
+    async ({ query, type, module, kind, limit }) => {
+      const results = await searchLiveApi(sqlitePath(paths.dataDir), { query, type, module, kind, limit }) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }
   );

@@ -9,9 +9,29 @@ import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
 import type { IndexFile, IndexKind, IndexManifest } from "../types.js";
 
-export const DEFAULT_INDEX_PATTERNS = ["**/*.{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}"];
+const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
+export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
 const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**"];
-const TEMPLATE_HINTS = ["local/templates/**", "bitrix/templates/**"];
+const PROJECT_KIND_IGNORES = [
+  "bitrix/modules/**",
+  "local/modules/**",
+  "bitrix/templates/**",
+  "local/templates/**",
+  "bitrix/components/**",
+  "local/components/**"
+];
+const BITRIX_KIND_IGNORES = ["bitrix/modules/*/install/**", "local/modules/*/install/**"];
+export const DEFAULT_TEMPLATE_PATTERNS = [
+  `bitrix/templates/**/*.${CODE_EXTENSIONS}`,
+  `local/templates/**/*.${CODE_EXTENSIONS}`,
+  `bitrix/components/**/*.${CODE_EXTENSIONS}`,
+  `local/components/**/*.${CODE_EXTENSIONS}`
+];
+export const DEFAULT_BITRIX_PATTERNS = ["bitrix/modules/**/*.php", "local/modules/**/*.php"];
+export const DEFAULT_INSTALL_ASSET_PATTERNS = [
+  `bitrix/modules/*/install/**/*.${CODE_EXTENSIONS}`,
+  `local/modules/*/install/**/*.${CODE_EXTENSIONS}`
+];
 
 export interface IndexOptions {
   root: string;
@@ -19,11 +39,12 @@ export interface IndexOptions {
   outFile?: string;
   dbFile?: string;
   patterns?: string[];
+  ignores?: string[];
   force?: boolean;
 }
 
-async function loadIgnore(root: string, options: { useGitignore?: boolean } = {}) {
-  const ig = ignore().add(DEFAULT_IGNORES.map((entry) => entry.replace(/^\*\*\//, "")));
+async function loadIgnore(root: string, options: { useGitignore?: boolean; extraIgnores?: string[] } = {}) {
+  const ig = ignore().add([...DEFAULT_IGNORES, ...(options.extraIgnores ?? [])].map((entry) => entry.replace(/^\*\*\//, "")));
   const ignoreFiles = [
     options.useGitignore === false ? undefined : ".gitignore",
     ".bitrixmcpignore"
@@ -42,21 +63,36 @@ async function loadIgnore(root: string, options: { useGitignore?: boolean } = {}
   return ig;
 }
 
+function defaultPatternsForKind(kind: IndexKind): string[] {
+  if (kind === "template") return DEFAULT_TEMPLATE_PATTERNS;
+  if (kind === "bitrix") return DEFAULT_BITRIX_PATTERNS;
+  if (kind === "install") return DEFAULT_INSTALL_ASSET_PATTERNS;
+  return DEFAULT_INDEX_PATTERNS;
+}
+
+function defaultIgnoresForKind(kind: IndexKind): string[] {
+  if (kind === "project") return PROJECT_KIND_IGNORES;
+  if (kind === "bitrix") return BITRIX_KIND_IGNORES;
+  return [];
+}
+
 export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
   const root = path.resolve(options.root);
-  const patterns = options.patterns ?? (options.kind === "template" ? TEMPLATE_HINTS : DEFAULT_INDEX_PATTERNS);
+  const patterns = options.patterns ?? defaultPatternsForKind(options.kind);
+  const kindIgnores = [...defaultIgnoresForKind(options.kind), ...(options.ignores ?? [])];
   const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
   const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
   const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
   const ig = await loadIgnore(root, {
-    useGitignore: options.kind !== "bitrix" && options.kind !== "install"
+    useGitignore: options.kind !== "bitrix" && options.kind !== "install",
+    extraIgnores: kindIgnores
   });
   const entries = await fg(patterns, {
     cwd: root,
     onlyFiles: true,
     dot: true,
     followSymbolicLinks: false,
-    ignore: DEFAULT_IGNORES
+    ignore: [...DEFAULT_IGNORES, ...kindIgnores]
   });
 
   const files: IndexFile[] = [];

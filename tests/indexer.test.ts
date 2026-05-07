@@ -35,22 +35,19 @@ test("buildIndex indexes project PHP symbols", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-project-"));
   const outFile = path.join(dataDir, "project-index.json");
   const manifest = await buildIndex({ root, kind: "project", outFile });
-  assert.ok(manifest.files.length >= 2);
+  assert.ok(manifest.files.length >= 1);
   await assert.rejects(fs.access(outFile));
   const sqliteManifest = await readIndex(outFile, "project");
   assert.equal(sqliteManifest?.root, root);
   const results = await searchLiveApi(sqlitePath(dataDir), { query: "demo_helper" });
   assert.equal(results?.[0]?.item.name, "demo_helper");
-
-  const jsFile = manifest.files.find((file) => file.relativePath === "local/modules/vendor.module/install/js/admin/widget.ts");
-  assert.equal(jsFile?.language, "typescript");
-  assert.ok(jsFile?.symbols.some((symbol) => symbol.type === "class" && symbol.name === "VendorWidget" && symbol.module === "vendor.module" && symbol.language === "typescript"));
 });
 
 test("SQLite FTS searches classes, methods, events, and docs", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-fts-"));
   const outFile = path.join(dataDir, "project-index.json");
   await buildIndex({ root: fixtureRoot, kind: "project", outFile });
+  await buildIndex({ root: fixtureRoot, kind: "install", outFile: path.join(dataDir, "install-index.json") });
 
   const classResults = await searchLiveApi(sqlitePath(dataDir), { query: "DemoComponent", type: "class", limit: 5 });
   assert.equal(classResults?.[0]?.item.name, "DemoComponent");
@@ -58,12 +55,12 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
   const methodResults = await searchLiveApi(sqlitePath(dataDir), { query: "execute", type: "method", limit: 5 });
   assert.equal(methodResults?.[0]?.item.name, "executeComponent");
 
-  const jsResults = await searchLiveApi(sqlitePath(dataDir), { query: "VendorWidget", type: "class", limit: 5 });
+  const jsResults = await searchLiveApi(sqlitePath(dataDir), { query: "VendorWidget", type: "class", kind: "install", limit: 5 });
   assert.equal(jsResults?.[0]?.item.name, "VendorWidget");
   assert.equal(jsResults?.[0]?.item.module, "vendor.module");
   assert.equal(jsResults?.[0]?.item.language, "typescript");
 
-  const objectMethodResults = await searchLiveApi(sqlitePath(dataDir), { query: "helpers.prepare", type: "object_method", module: "vendor.module", limit: 5 });
+  const objectMethodResults = await searchLiveApi(sqlitePath(dataDir), { query: "helpers.prepare", type: "object_method", module: "vendor.module", kind: "install", limit: 5 });
   assert.equal(objectMethodResults?.[0]?.item.name, "helpers.prepare");
 
   const eventResults = await searchLiveApi(sqlitePath(dataDir), { query: "OnBefore", type: "event", module: "main", limit: 5 });
@@ -191,6 +188,33 @@ test("bitrix and install indexes include downloaded core ignored by project .git
 
   const installManifest = await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json"), patterns: ["bitrix/modules/*/install/**/*.{js,ts}"] });
   assert.deepEqual(installManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/install/js/admin/panel.ts"]);
+});
+
+
+test("kind-specific indexes do not duplicate fixture files", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-kind-dedup-"));
+
+  const projectManifest = await buildIndex({ root: fixtureRoot, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+  const templateManifest = await buildIndex({ root: fixtureRoot, kind: "template", outFile: path.join(dataDir, "template-index.json") });
+  const installManifest = await buildIndex({ root: fixtureRoot, kind: "install", outFile: path.join(dataDir, "install-index.json") });
+
+  const indexedByRelativePath = new Map<string, string[]>();
+  for (const manifest of [projectManifest, templateManifest, installManifest]) {
+    for (const file of manifest.files) {
+      indexedByRelativePath.set(file.relativePath, [...(indexedByRelativePath.get(file.relativePath) ?? []), manifest.kind]);
+    }
+  }
+
+  assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["docs/framework/search.md", "index.php"]);
+  assert.deepEqual(indexedByRelativePath.get("index.php"), ["project"]);
+  assert.deepEqual(indexedByRelativePath.get("local/modules/vendor.module/install/js/admin/widget.ts"), ["install"]);
+  assert.deepEqual(indexedByRelativePath.get("local/templates/main/components/bitrix/news.list/.default/template.php"), ["template"]);
+  assert.ok([...indexedByRelativePath.values()].every((kinds) => kinds.length === 1));
+
+  const projectInstallResults = await searchLiveApi(sqlitePath(dataDir), { query: "VendorWidget", type: "class", kind: "project", limit: 5 });
+  const installResults = await searchLiveApi(sqlitePath(dataDir), { query: "VendorWidget", type: "class", kind: "install", limit: 5 });
+  assert.equal(projectInstallResults?.length ?? 0, 0);
+  assert.equal(installResults?.[0]?.item.name, "VendorWidget");
 });
 
 test("template index uses Bitrix template-specific patterns", async () => {
