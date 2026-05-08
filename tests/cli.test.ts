@@ -49,3 +49,53 @@ test("cli help documents embeddings indexing commands", async () => {
   assert.match(stdout, /index-embeddings/);
 });
 
+test("cli config prints resolved runtime paths and MCP config file presence", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-config-"));
+  await fs.mkdir(path.join(fixtureRoot, ".cursor"), { recursive: true });
+  await fs.writeFile(path.join(fixtureRoot, ".cursor", "mcp.json"), "{}\n", "utf8");
+  try {
+    const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "config"], {
+      cwd: fixtureRoot,
+      env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir, BITRIX_MCP_SEMANTIC_ENABLED: "1" }
+    });
+
+    assert.ok(stdout.includes(`workspaceRoot: ${fixtureRoot}`));
+    assert.ok(stdout.includes(`dataDir: ${dataDir}`));
+    assert.match(stdout, /sqlitePath: .*bitrix-mcp\.sqlite/);
+    assert.match(stdout, /semanticEnabled: true/);
+    assert.match(stdout, /present Cursor \[project\]: .*\.cursor.*mcp\.json/);
+    assert.match(stdout, /MCP config files:/);
+  } finally {
+    await fs.rm(path.join(fixtureRoot, ".cursor"), { recursive: true, force: true });
+  }
+});
+
+test("cli config --json emits script-friendly diagnostics", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-config-json-"));
+  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "config", "--json"], {
+    cwd: fixtureRoot,
+    env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir, BITRIX_MCP_OFFICIAL_DOCS_ENABLED: "0" }
+  });
+
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.runtime.workspaceRoot, fixtureRoot);
+  assert.equal(parsed.runtime.dataDir, dataDir);
+  assert.equal(parsed.runtime.sqlitePath, sqlitePath(dataDir));
+  assert.deepEqual(parsed.runtime.docsPaths, [path.join(fixtureRoot, "docs")]);
+  assert.equal(parsed.runtime.officialDocsEnabled, false);
+  assert.ok(parsed.mcpConfigFiles.some((entry: { client: string; path?: string; exists: boolean }) => entry.client === "Claude Code" && entry.path === path.join(fixtureRoot, ".mcp.json") && entry.exists === false));
+});
+
+test("cli doctor --json includes checks and config diagnostics", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doctor-json-"));
+  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "doctor", "--json"], {
+    cwd: fixtureRoot,
+    env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
+  });
+
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.runtime.workspaceRoot, fixtureRoot);
+  assert.ok(Array.isArray(parsed.checks));
+  assert.ok(parsed.checks.some((check: { name: string }) => check.name === "workspace"));
+  assert.ok(Array.isArray(parsed.mcpConfigFiles));
+});

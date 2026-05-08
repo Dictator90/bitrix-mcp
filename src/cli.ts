@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
@@ -13,6 +14,7 @@ function usage(): string {
 Commands:
   init [options]                Configure MCP clients, index the project/docs, and start stdio server
   configure [options]           Configure MCP clients and guidance only (no indexing or server)
+  config [--json]               Show resolved runtime paths and MCP client config file presence
   serve                         Start MCP server over stdio
   index-all [--force]           Index project, templates, Bitrix modules, install assets, and docs
   index-code [--force]          Index project, templates, Bitrix modules, and install assets
@@ -26,7 +28,7 @@ Commands:
   index-docs [--force] [--embeddings] Index registered documentation sources into SQLite, optionally then into embeddings
   index-embeddings              Send SQLite documentation chunks to the embeddings service
   status                        Show SQLite DB path and index counters
-  doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
+  doctor [--json] [--verbose]   Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
@@ -129,6 +131,12 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "config") {
+    const diagnostics = await collectConfigDiagnostics(paths);
+    console.log(argv.includes("--json") ? JSON.stringify(diagnostics, null, 2) : formatConfigDiagnostics(diagnostics));
+    return;
+  }
+
   if (command === "serve") {
     await serveStdio(paths);
     return;
@@ -217,7 +225,14 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "doctor") {
     const checks = await runDoctor(paths);
-    console.log(formatDoctor(checks));
+    if (argv.includes("--json")) {
+      const diagnostics = await collectConfigDiagnostics(paths);
+      console.log(JSON.stringify({ ...diagnostics, checks }, null, 2));
+    } else if (argv.includes("--verbose")) {
+      console.log(`${formatDoctor(checks)}\n\n${formatConfigDiagnostics(await collectConfigDiagnostics(paths))}`);
+    } else {
+      console.log(formatDoctor(checks));
+    }
     if (hasDoctorErrors(checks)) {
       process.exitCode = 1;
     }

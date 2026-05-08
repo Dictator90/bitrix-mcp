@@ -70,8 +70,9 @@ If you only need to run or refresh indexes manually:
 # Index everything: project, templates, Bitrix modules, install assets, and docs
 npx bitrix-mcp index-all
 
-# Show index counters and diagnostics
+# Show index counters, resolved runtime paths, and diagnostics
 npx bitrix-mcp status
+npx bitrix-mcp config
 npx bitrix-mcp doctor
 
 # Start the MCP server after indexes already exist
@@ -123,8 +124,9 @@ npx bitrix-mcp index-embeddings
 # Or reindex SQLite docs and embeddings together when the service is running
 npx bitrix-mcp index-docs --embeddings
 
-# Show index counters or run environment diagnostics
+# Show index counters, resolved runtime paths, or environment diagnostics
 npx bitrix-mcp status
+npx bitrix-mcp config
 npx bitrix-mcp doctor
 ```
 
@@ -459,6 +461,22 @@ bitrix-mcp serve
 ```
 
 `bitrix-mcp doctor` checks the embeddings service health only when semantic mode is enabled with `BITRIX_MCP_SEMANTIC_ENABLED=1`; otherwise it reports that semantic search is disabled and skips the embeddings request. When enabled, it also verifies that the service document count matches the current SQLite documentation chunk count. If the counts differ, rerun `bitrix-mcp index-embeddings` after `bitrix-mcp index-docs`.
+
+### Troubleshooting runtime configuration
+
+Use `bitrix-mcp config` when an MCP client starts the server from a different directory than expected, writes indexes to an unexpected location, or cannot find documentation/Bitrix sources. The command prints the exact values resolved by `resolveRuntimePaths`: `workspaceRoot`, `dataDir`, `sqlitePath`, `docsPaths`, `bitrixRoot`, `embeddingsUrl`, `semanticEnabled`, and `officialDocsEnabled`. It also reports whether common MCP client config files are present for Cursor, Claude Desktop, Claude Code, VS Code/GitHub Copilot, Windsurf, Cline, Roo Code, Continue, Gemini CLI, OpenAI Codex, and Kilo Code.
+
+```bash
+bitrix-mcp config
+bitrix-mcp config --json
+```
+
+For a combined health check and configuration dump, run `bitrix-mcp doctor --verbose`. Scripts and CI jobs can use JSON output from `bitrix-mcp doctor --json`; the process still exits with a non-zero status when doctor detects an error.
+
+```bash
+bitrix-mcp doctor --verbose
+bitrix-mcp doctor --json
+```
 
 You can also POST chunks to `/index` manually:
 
