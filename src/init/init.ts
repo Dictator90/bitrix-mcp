@@ -109,28 +109,72 @@ async function writeTextFile(filePath: string, value: string): Promise<AgentGuid
   return { label: "Bitrix MCP guidance", path: filePath };
 }
 
-async function upsertMarkedSection(filePath: string, section: string): Promise<AgentGuidanceResult> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  let source = "";
+async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
   try {
-    source = await fs.readFile(filePath, "utf8");
+    return await fs.readFile(filePath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
     }
+    throw error;
   }
+}
 
-  const normalizedSection = `${GUIDANCE_SECTION_START}\n${section.trim()}\n${GUIDANCE_SECTION_END}`;
+function markedSection(section: string): string {
+  return `${GUIDANCE_SECTION_START}\n${section.trim()}\n${GUIDANCE_SECTION_END}`;
+}
+
+function upsertSection(source: string, section: string): string {
+  const normalizedSection = markedSection(section);
   const sectionPattern = new RegExp(`${GUIDANCE_SECTION_START}[\\s\\S]*?${GUIDANCE_SECTION_END}`);
-  const next = sectionPattern.test(source)
+  return sectionPattern.test(source)
     ? source.replace(sectionPattern, normalizedSection)
     : `${source.trimEnd()}${source.trim() ? "\n\n" : ""}${normalizedSection}\n`;
+}
+
+async function upsertMarkedSection(filePath: string, section: string, newFileTemplate?: string): Promise<AgentGuidanceResult> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const source = await readTextFileIfExists(filePath);
+  const next = source === undefined ? newFileTemplate ?? `${markedSection(section)}\n` : upsertSection(source, section);
+  await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  return { label: "Bitrix MCP guidance", path: filePath };
+}
+
+function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: string } {
+  if (!source.startsWith("---\n")) {
+    return { frontmatter: "", body: source };
+  }
+
+  const closingMarker = "\n---";
+  const closingIndex = source.indexOf(closingMarker, 4);
+  if (closingIndex === -1) {
+    return { frontmatter: "", body: source };
+  }
+
+  const closingLineEnd = source.indexOf("\n", closingIndex + closingMarker.length);
+  const frontmatterEnd = closingLineEnd === -1 ? source.length : closingLineEnd + 1;
+  return { frontmatter: source.slice(0, frontmatterEnd), body: source.slice(frontmatterEnd) };
+}
+
+async function upsertCursorRule(filePath: string, section: string): Promise<AgentGuidanceResult> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const source = await readTextFileIfExists(filePath);
+  const next = source === undefined ? cursorRuleContent() : (() => {
+    const { frontmatter, body } = splitMarkdownFrontmatter(source);
+    const updatedBody = upsertSection(body, section);
+    return `${frontmatter}${updatedBody}`;
+  })();
+
   await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
   return { label: "Bitrix MCP guidance", path: filePath };
 }
 
 async function writeProjectSkill(context: InitContext): Promise<AgentGuidanceResult> {
   return writeTextFile(path.join(context.dataDir, "skills", "bitrix-mcp", "SKILL.md"), BITRIX_MCP_SKILL);
+}
+
+function markdownRuleContent(): string {
+  return `${markedSection(BITRIX_MCP_RULES)}\n`;
 }
 
 function cursorRuleContent(): string {
@@ -140,51 +184,56 @@ function cursorRuleContent(): string {
     "alwaysApply: true",
     "---",
     "",
-    BITRIX_MCP_RULES
+    markedSection(BITRIX_MCP_RULES),
+    ""
   ].join("\n");
 }
 
-function agentRulePath(agent: Agent, context: InitContext): { path: string; mode: "write" | "append"; content: string } {
+type AgentRule = { path: string; mode: "managed" | "cursor"; content: string; newFileTemplate?: string };
+
+function agentRulePath(agent: Agent, context: InitContext): AgentRule {
   if (agent === "cursor") {
-    return { path: path.join(context.projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), mode: "write", content: cursorRuleContent() };
+    return { path: path.join(context.projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), mode: "cursor", content: BITRIX_MCP_RULES };
   }
   if (agent === "claude-code" || agent === "claude-desktop") {
-    return { path: path.join(context.projectRoot, "CLAUDE.md"), mode: "append", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, "CLAUDE.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "vscode") {
-    return { path: path.join(context.projectRoot, ".github", "copilot-instructions.md"), mode: "append", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".github", "copilot-instructions.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "windsurf") {
-    return { path: path.join(context.projectRoot, ".windsurf", "rules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".windsurf", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "cline") {
-    return { path: path.join(context.projectRoot, ".clinerules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".clinerules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "roo-code") {
-    return { path: path.join(context.projectRoot, ".roo", "rules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".roo", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "continue") {
-    return { path: path.join(context.projectRoot, ".continue", "rules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".continue", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "gemini-cli") {
-    return { path: path.join(context.projectRoot, "GEMINI.md"), mode: "append", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, "GEMINI.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "codex") {
-    return { path: path.join(context.projectRoot, "AGENTS.md"), mode: "append", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, "AGENTS.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "kilo-code") {
-    return { path: path.join(context.projectRoot, ".kilocode", "rules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".kilocode", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "jetbrains") {
-    return { path: path.join(context.projectRoot, ".junie", "guidelines.md"), mode: "append", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".junie", "guidelines.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
   }
-  return { path: path.join(context.dataDir, "rules", "bitrix-mcp.md"), mode: "write", content: BITRIX_MCP_RULES };
+  return { path: path.join(context.dataDir, "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
 }
 
 export async function writeAgentGuidance(agent: Agent, context: InitContext): Promise<AgentGuidanceResult[]> {
   const skill = await writeProjectSkill(context);
   const rule = agentRulePath(agent, context);
-  const ruleResult = rule.mode === "append" ? await upsertMarkedSection(rule.path, rule.content) : await writeTextFile(rule.path, rule.content);
+  const ruleResult = rule.mode === "cursor"
+    ? await upsertCursorRule(rule.path, rule.content)
+    : await upsertMarkedSection(rule.path, rule.content, rule.newFileTemplate);
   return [skill, ruleResult];
 }
 

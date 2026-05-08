@@ -123,6 +123,92 @@ test("writeAgentGuidance upserts append-style rules without deleting user conten
   assert.match(rule, /bitrix_index_status/);
 });
 
+
+test("writeAgentGuidance preserves custom text around managed markdown sections", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-guidance-managed-"));
+  const rulesPath = path.join(projectRoot, ".windsurf", "rules", "bitrix-mcp.md");
+  await fs.mkdir(path.dirname(rulesPath), { recursive: true });
+  await fs.writeFile(
+    rulesPath,
+    [
+      "# Team Windsurf rules",
+      "",
+      "Keep this preface.",
+      "",
+      "<!-- bitrix-mcp:init-guidance:start -->",
+      "Old generated rule text.",
+      "<!-- bitrix-mcp:init-guidance:end -->",
+      "",
+      "Keep this appendix.",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  await writeAgentGuidance("windsurf", context);
+  await writeAgentGuidance("windsurf", context);
+
+  const rule = await fs.readFile(rulesPath, "utf8");
+  assert.match(rule, /Keep this preface\./);
+  assert.match(rule, /Keep this appendix\./);
+  assert.doesNotMatch(rule, /Old generated rule text\./);
+  assert.equal((rule.match(/bitrix-mcp:init-guidance:start/g) ?? []).length, 1);
+  assert.match(rule, /bitrix_event_search/);
+});
+
+test("writeAgentGuidance preserves Cursor frontmatter and custom body text", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-guidance-cursor-existing-"));
+  const cursorRulePath = path.join(projectRoot, ".cursor", "rules", "bitrix-mcp.mdc");
+  await fs.mkdir(path.dirname(cursorRulePath), { recursive: true });
+  await fs.writeFile(
+    cursorRulePath,
+    [
+      "---",
+      "description: Custom Cursor rule description.",
+      "alwaysApply: false",
+      "globs: local/**/*.php",
+      "---",
+      "",
+      "# Custom Cursor notes",
+      "",
+      "Keep this body preface.",
+      "",
+      "<!-- bitrix-mcp:init-guidance:start -->",
+      "Old Cursor generated body.",
+      "<!-- bitrix-mcp:init-guidance:end -->",
+      "",
+      "Keep this body appendix.",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  await writeAgentGuidance("cursor", context);
+  await writeAgentGuidance("cursor", context);
+
+  const rule = await fs.readFile(cursorRulePath, "utf8");
+  assert.match(rule, /^---\ndescription: Custom Cursor rule description\.\nalwaysApply: false\nglobs: local\/\*\*\/\*.php\n---/);
+  assert.match(rule, /Keep this body preface\./);
+  assert.match(rule, /Keep this body appendix\./);
+  assert.doesNotMatch(rule, /Old Cursor generated body\./);
+  assert.equal((rule.match(/bitrix-mcp:init-guidance:start/g) ?? []).length, 1);
+  assert.match(rule, /bitrix_docs_search/);
+});
+
 test("indexIfMissing skips buildIndex when SQLite metadata exists", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-init-sqlite-"));
   const dataDir = path.join(projectRoot, ".bitrix-mcp");
