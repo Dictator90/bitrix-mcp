@@ -51,11 +51,12 @@ npm run build
 # 2. Перейдите в проект Битрикс, который нужно индексировать
 cd /path/to/bitrix/project
 
-# 3. Настройте MCP-клиент, создайте индексы .bitrix-mcp и запустите сервер
-npx bitrix-mcp init
+# 3. Настройте MCP-клиент и создайте индексы .bitrix-mcp
+# В CI и скриптах --no-serve не дает init занять stdio после настройки.
+npx bitrix-mcp init --agent cursor --no-serve
 ```
 
-Во время `init` выберите одного или несколько AI-агентов из списка. Bitrix MCP создаст или обновит конфигурацию MCP-клиента, добавит reusable-инструкции/rules, построит первичные индексы и запустит MCP-сервер через stdio.
+Во время интерактивного `init` выберите одного или несколько AI-агентов из списка. Для неинтерактивной настройки передайте `--agent <id>` (можно повторять или разделять ID запятыми), `--all-agents` или `--yes` для настройки Cursor по умолчанию. Bitrix MCP создаст или обновит конфигурацию MCP-клиента, добавит reusable-инструкции/rules, построит первичные индексы и запустит MCP-сервер через stdio, если не передан `--no-serve` и не обнаружена CI-среда.
 
 После настройки откройте AI-клиент и попросите его использовать Bitrix MCP. Первый проверочный промпт:
 
@@ -69,19 +70,45 @@ npx bitrix-mcp init
 # Индексировать всё: проект, шаблоны, модули Битрикс, install-ресурсы и документацию
 npx bitrix-mcp index-all
 
-# Показать счетчики индекса и диагностику окружения
+# Показать счетчики индекса, разрешенные runtime-пути и диагностику окружения
 npx bitrix-mcp status
+npx bitrix-mcp config
 npx bitrix-mcp doctor
 
 # Запустить MCP-сервер, если индексы уже созданы
 npx bitrix-mcp serve
 ```
 
+## Типовые сценарии
+
+| Цель | Команда | Что изменяет | Когда использовать |
+| --- | --- | --- | --- |
+| Настроить один MCP-клиент и построить первичные индексы, не занимая stdio | `npx bitrix-mcp init --agent cursor --no-serve` | Обновляет MCP-конфиг выбранного клиента и guidance/rule-файлы, создает `.bitrix-mcp/`, индексирует отсутствующие области project/template/Bitrix code и документацию. | Рекомендуемый первый запуск для скриптов, CI-подобных shell-сессий и любых терминалов, где `init` не должен оставаться запущенным как MCP-сервер. |
+| Настроить только файлы клиента и инструкции | `npx bitrix-mcp configure --agent cursor` | Обновляет только MCP-конфиг и guidance/rule-файлы; не строит индексы и не запускает сервер. | Когда индексы уже есть или их будет строить другой процесс. |
+| Обновить все индексы с официальной документацией | `npx bitrix-mcp index-all` | Перестраивает/обновляет индексы проекта, шаблонов, модулей Битрикс, install-ресурсов и документации в `.bitrix-mcp/`; официальная документация регистрируется/обновляется по умолчанию. | После крупных изменений кода, обновления модулей/зависимостей или когда поиск по документации должен включать официальный репозиторий Bitrix Framework docs. |
+| Быстрый путь без official docs | `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all` | Перестраивает/обновляет все code-индексы и индексирует только локальные/явно зарегистрированные источники документации; не клонирует и не pull-ит официальный репозиторий. | Для offline-окружений, demo-первого запуска, CI без доступа в интернет или случаев, когда достаточно локальной документации. |
+| Обновить только код | `npx bitrix-mcp index-code` | Перестраивает/обновляет индексы проекта, шаблонов, модулей Битрикс и install-ресурсов; документацию не трогает. | После изменений PHP/шаблонов/модулей, если документация не менялась. |
+| Проверить конфигурацию и здоровье окружения | `npx bitrix-mcp doctor --verbose` | Не меняет файлы проекта; при необходимости создает/открывает SQLite DB и печатает health-checks вместе с runtime-конфигурацией. | Когда MCP-клиент не видит индексы/документацию, пути выглядят неверно или вы меняли переменные окружения. |
+
+Быстрый путь без official docs специально оставлен одной командой:
+
+```bash
+BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all
+```
+
+Если пакет не установлен глобально, используйте тот же env override с `npx`: `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 npx bitrix-mcp index-all`.
+
 ## Использование CLI
 
 ```bash
 # Настроить агента, создать .bitrix-mcp индексы и запустить stdio-сервер
 npx bitrix-mcp init
+
+# Неинтерактивный init для скриптов/CI: настроить Cursor и не запускать сервер после настройки
+npx bitrix-mcp init --agent cursor --no-serve
+
+# Настроить MCP-конфиг и guidance без индексации и запуска сервера
+npx bitrix-mcp configure --agent cursor
 
 # Запустить MCP-сервер через stdio для Cursor, PhpStorm, Claude Desktop, Kilo и т.д.
 npx bitrix-mcp serve
@@ -111,12 +138,30 @@ npx bitrix-mcp docs-add-path /path/to/local/docs
 npx bitrix-mcp docs-update
 npx bitrix-mcp index-docs
 
-# Показать счетчики индекса или выполнить диагностику окружения
+# Отправить SQLite chunks документации в embeddings-сервис
+npx bitrix-mcp index-embeddings
+# Или переиндексировать SQLite docs и embeddings вместе, если сервис запущен
+npx bitrix-mcp index-docs --embeddings
+
+# Показать счетчики индекса, runtime-пути или выполнить диагностику окружения
 npx bitrix-mcp status
+npx bitrix-mcp config
 npx bitrix-mcp doctor
 ```
 
 По умолчанию индексы создаются в `.bitrix-mcp/`. При индексации всегда применяются встроенные исключения для тяжелых и сгенерированных директорий: `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`. Также учитываются правила из `.gitignore`, если файл есть в проекте.
+
+Флаги `init`/`configure`:
+
+- `--agent <id>` — неинтерактивно настроить агента; флаг можно повторять или передавать ID через запятую.
+- `--all-agents` — настроить все встроенные агенты, которым не нужны дополнительные вопросы.
+- `--no-index` — пропустить индексацию проекта/шаблонов/кода Битрикс во время `init`.
+- `--no-docs` — пропустить индексацию документации во время `init`.
+- `--no-official-docs` — не клонировать и не обновлять официальный репозиторий Bitrix docs во время индексации документации в `init`.
+- `--no-serve` — записать конфиги и выполнить выбранные шаги индексации, но не запускать MCP stdio-сервер.
+- `--yes` / `-y` — принять значения по умолчанию для неинтерактивного `init`/`configure` (Cursor).
+
+`configure` принимает те же флаги выбора агентов, но никогда не индексирует код/документацию и никогда не запускает сервер.
 
 Чтобы исключить дополнительные файлы из LiveAPI-индекса и индекса шаблонов, добавьте файл `.bitrixmcpignore` в корень проекта. Синтаксис такой же, как у `.gitignore`; правила применяются вместе со встроенными исключениями и `.gitignore`:
 
@@ -160,7 +205,7 @@ cd /path/to/bitrix/project
 bitrix-mcp init
 ```
 
-Команда берет текущую директорию как корень проекта, создает `<projectRoot>/.bitrix-mcp`, задает `BITRIX_MCP_WORKSPACE=<projectRoot>`, `BITRIX_MCP_DATA_DIR=<projectRoot>/.bitrix-mcp` и `BITRIX_MCP_DOCS_DIR=<projectRoot>/docs`. Если существует `<projectRoot>/bitrix`, дополнительно задается `BITRIX_ROOT=<projectRoot>`. Затем команда спрашивает, каких AI-агентов настроить. Можно ввести один номер или несколько номеров через запятую; для каждого выбранного клиента создается или обновляется отдельная MCP-конфигурация:
+Команда берет текущую директорию как корень проекта, создает `<projectRoot>/.bitrix-mcp`, задает `BITRIX_MCP_WORKSPACE=<projectRoot>`, `BITRIX_MCP_DATA_DIR=<projectRoot>/.bitrix-mcp` и `BITRIX_MCP_DOCS_DIR=<projectRoot>/docs`. Если существует `<projectRoot>/bitrix`, дополнительно задается `BITRIX_ROOT=<projectRoot>`. В интерактивном режиме команда спрашивает, каких AI-агентов настроить; для неинтерактивного запуска используйте `--agent <id>`, `--all-agents` или `--yes`. Для каждого выбранного клиента создается или обновляется отдельная MCP-конфигурация:
 
 - Cursor — `.cursor/mcp.json`.
 - Claude Desktop — глобальный `claude_desktop_config.json`.
@@ -200,7 +245,7 @@ bitrix-mcp init
 }
 ```
 
-После записи конфигураций `init` создает `.bitrix-mcp/`, строит отсутствующие индексы проекта/шаблонов, строит индекс Битрикс при наличии локальной директории `bitrix/`, клонирует или обновляет и индексирует источники документации, включая официальный репозиторий Bitrix Framework docs, и запускает MCP-сервер через stdio.
+После записи конфигураций `init` создает `.bitrix-mcp/`, строит отсутствующие индексы проекта/шаблонов, строит индекс Битрикс при наличии локальной директории `bitrix/`, клонирует или обновляет и индексирует источники документации, включая официальный репозиторий Bitrix Framework docs, и запускает MCP-сервер через stdio по умолчанию для локальных интерактивных запусков. В CI (`CI=1` или `GITHUB_ACTIONS=1`) запуск сервера пропускается автоматически; в скриптах лучше явно передавать `--no-serve`. Используйте `--no-index`, `--no-docs` и `--no-official-docs`, чтобы отключить соответствующие шаги `init`.
 
 ## MCP-инструменты
 
@@ -277,6 +322,28 @@ uvicorn service:app --host 127.0.0.1 --port 8765
 ```
 
 Искать можно через `/search` или, если `BITRIX_MCP_SEMANTIC_ENABLED=1`, через MCP-инструмент `bitrix_semantic_docs_search`. Сервис также предоставляет `/health`, `/stats` и `/reload`; `/search` держит JSON-индекс и embedding matrix в памяти после load/reload и не перестраивает их на каждый запрос.
+
+### Troubleshooting runtime-конфигурации и warning-ов doctor
+
+Используйте `bitrix-mcp config`, если MCP-клиент запускает сервер не из той директории, пишет индексы в неожиданный путь или не находит документацию/источники Битрикс. Для общей проверки здоровья и конфигурации запустите:
+
+```bash
+bitrix-mcp doctor --verbose
+bitrix-mcp doctor --json
+```
+
+Частые warning-и `doctor` и исправления:
+
+| Warning | Что обычно означает | Что делать |
+| --- | --- | --- |
+| `WARNING bitrixRoot: Bitrix root was not detected` | В текущем workspace нет `./bitrix`, и `BITRIX_ROOT` не задан. Индексация проекта/шаблонов работает, но LiveAPI-индекс ядра пропускается. | Запускайте команды из корня проекта Битрикс, передайте root в `index-bitrix` или экспортируйте `BITRIX_ROOT=/path/to/bitrix/project`. |
+| `WARNING bitrixRoot: BITRIX_ROOT is set ... but .../bitrix is missing` | `BITRIX_ROOT` указывает не на тот каталог или на checkout без директории `bitrix/`. | Исправьте `BITRIX_ROOT`, повторите `bitrix-mcp doctor`, затем выполните `bitrix-mcp index-bitrix` или `bitrix-mcp index-code`. |
+| `WARNING docsSources: No documentation paths or registered documentation sources found` | Не настроен локальный путь к docs и нет зарегистрированных источников в `.bitrix-mcp/`. | Добавьте Markdown/text-файлы в `docs/`, выполните `bitrix-mcp docs-add-path /path/to/docs` или разрешите official docs командой `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=1 bitrix-mcp index-docs`. |
+| `WARNING docsSources: Missing documentation source directories` | Настроенный путь docs или Git checkout больше не существует. | Восстановите директорию, обновите `BITRIX_MCP_DOCS_PATHS`, удалите/добавьте источник заново или выполните `bitrix-mcp docs-update` для Git-источников. |
+| `WARNING bitrixmcpignore: .bitrixmcpignore is not present` | Это напоминание: Bitrix MCP применит только встроенные ignore-правила и `.gitignore`. | Опционально создайте `.bitrixmcpignore`, если нужно исключить приватные или сгенерированные файлы из индексов Bitrix MCP. |
+| `WARNING phpParse: ... used regex fallback` | Часть PHP-файлов не разобралась AST-парсером, поэтому Bitrix MCP проиндексировал их regex fallback-ом. | Переиндексируйте с `BITRIX_MCP_DEBUG_PARSE=1 bitrix-mcp index-code`, чтобы увидеть пути файлов; исправьте невалидный PHP при необходимости. Обычно fallback-результаты всё равно доступны в поиске. |
+| `WARNING embeddingsService: ... unavailable` | Семантический поиск включен, но Python embeddings-сервис недоступен. | Запустите сервис из `embeddings/`, проверьте `BITRIX_MCP_EMBEDDINGS_URL` или отключите `BITRIX_MCP_SEMANTIC_ENABLED`, если достаточно SQLite FTS. |
+| `WARNING embeddingsService: ... document count differs` | SQLite docs переиндексированы после последней загрузки embeddings. | Выполните `bitrix-mcp index-embeddings` после `bitrix-mcp index-docs` или `bitrix-mcp index-docs --embeddings`, когда сервис запущен. |
 
 ## Пример конфигурации агента
 
