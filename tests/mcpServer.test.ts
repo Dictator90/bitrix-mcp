@@ -35,6 +35,42 @@ async function withOutsideWorkspaceOptIn<T>(work: () => Promise<T>): Promise<T> 
   }
 }
 
+test("MCP bitrix_read_file_context reads fixture file context", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-read-context-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_read_file_context;
+
+  const result = await tool.handler({ file: "index.php", line: 7, before: 1, after: 2, maxChars: 1000 });
+  const context = JSON.parse(result.content[0].text) as {
+    metadata: { absolutePath: string; relativePath: string; language: string; startLine: number; endLine: number; totalLines: number; truncated: boolean };
+    numberedLines: string;
+  };
+
+  assert.equal(context.metadata.absolutePath, path.join(fixtureRoot, "index.php"));
+  assert.equal(context.metadata.relativePath, "index.php");
+  assert.equal(context.metadata.language, "php");
+  assert.equal(context.metadata.startLine, 6);
+  assert.equal(context.metadata.endLine, 9);
+  assert.equal(context.metadata.totalLines, 14);
+  assert.equal(context.metadata.truncated, false);
+  assert.match(context.numberedLines, /^7: function demo_helper\(string \$name\): string/m);
+  assert.match(context.numberedLines, /^9:     return \$name;/m);
+});
+
+test("MCP bitrix_read_file_context rejects path traversal outside workspace and data dir", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-read-context-guard-"));
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-read-context-outside-"));
+  const outsideFile = path.join(outsideDir, "secret.php");
+  await fs.writeFile(outsideFile, "<?php\n$secret = true;\n");
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_read_file_context;
+
+  await assert.rejects(
+    tool.handler({ file: path.relative(fixtureRoot, outsideFile), line: 1 }),
+    /MCP path restriction: bitrix_read_file_context parameter "file" must resolve inside one of the allowed roots/
+  );
+});
+
 test("MCP bitrix_index_template accepts templatePath", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-"));
   const paths: RuntimePaths = {

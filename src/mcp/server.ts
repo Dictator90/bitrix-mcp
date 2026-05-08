@@ -1,9 +1,11 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
+import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
@@ -57,6 +59,110 @@ function normalizeTemplateRoot(paths: RuntimePaths, templatePath?: string): stri
   return resolvedRoot;
 }
 
+interface FileContextResult {
+  metadata: {
+    absolutePath: string;
+    relativePath: string;
+    language: string;
+    startLine: number;
+    endLine: number;
+    totalLines: number;
+    truncated: boolean;
+  };
+  numberedLines: string;
+}
+
+function normalizeAllowRoot(root: string): string {
+  return path.resolve(root);
+}
+
+function resolveRequestedFilePath(paths: RuntimePaths, requestedFile: string): string {
+  const workspaceRoot = normalizeAllowRoot(paths.workspaceRoot);
+  return path.resolve(path.isAbsolute(requestedFile) ? requestedFile : path.join(workspaceRoot, requestedFile));
+}
+
+function readFileRestrictionError(received: string, resolved: string, allowedRoots: string[]): Error {
+  return new Error(`MCP path restriction: bitrix_read_file_context parameter "file" must resolve inside one of the allowed roots (${allowedRoots.join(", ")}). Received ${received}; resolved to ${resolved}.`);
+}
+
+async function assertFileInsideReadAllowlist(paths: RuntimePaths, requestedFile: string): Promise<{ absolutePath: string; relativePath: string }> {
+  const allowedRoots = [paths.workspaceRoot, paths.dataDir].map(normalizeAllowRoot);
+  const resolvedPath = resolveRequestedFilePath(paths, requestedFile);
+
+  let realFilePath: string;
+  try {
+    realFilePath = await fs.realpath(resolvedPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`MCP file read failed: ${resolvedPath} does not exist.`);
+    }
+    throw error;
+  }
+
+  const realAllowedRoots = await Promise.all(allowedRoots.map(async (root) => {
+    try {
+      return await fs.realpath(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return root;
+      }
+      throw error;
+    }
+  }));
+
+  const matchingRoot = realAllowedRoots.find((root) => isInsideWorkspace(root, realFilePath));
+  if (!matchingRoot) {
+    throw readFileRestrictionError(requestedFile, realFilePath, realAllowedRoots);
+  }
+
+  const workspaceRoot = realAllowedRoots[0] ?? allowedRoots[0];
+  const relativePath = isInsideWorkspace(workspaceRoot, realFilePath)
+    ? path.relative(workspaceRoot, realFilePath)
+    : path.relative(matchingRoot, realFilePath);
+
+  return { absolutePath: realFilePath, relativePath };
+}
+
+function buildFileContext(contents: string, absolutePath: string, relativePath: string, line: number, before: number, after: number, maxChars: number): FileContextResult {
+  const normalizedContents = contents.replace(/\r\n?/gu, "\n");
+  const lines = normalizedContents.split("\n");
+  if (lines.length > 1 && lines.at(-1) === "") {
+    lines.pop();
+  }
+  const totalLines = lines.length;
+  const targetLine = Math.min(Math.max(line, 1), Math.max(totalLines, 1));
+  const startLine = Math.max(1, targetLine - before);
+  const endLine = Math.min(totalLines, targetLine + after);
+  const lineNumberWidth = String(endLine).length;
+  const selectedLines: string[] = [];
+  let usedChars = 0;
+  let truncated = false;
+
+  for (let currentLine = startLine; currentLine <= endLine; currentLine += 1) {
+    const numberedLine = `${String(currentLine).padStart(lineNumberWidth, " ")}: ${lines[currentLine - 1] ?? ""}`;
+    const separatorChars = selectedLines.length === 0 ? 0 : 1;
+    if (usedChars + separatorChars + numberedLine.length > maxChars) {
+      truncated = true;
+      break;
+    }
+    selectedLines.push(numberedLine);
+    usedChars += separatorChars + numberedLine.length;
+  }
+
+  return {
+    metadata: {
+      absolutePath,
+      relativePath,
+      language: detectLanguage(absolutePath),
+      startLine,
+      endLine: startLine + selectedLines.length - 1,
+      totalLines,
+      truncated
+    },
+    numberedLines: selectedLines.join("\n")
+  };
+}
+
 const indexKindSchema = z.enum(["project", "bitrix", "template", "install"]);
 const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1)]);
 
@@ -69,6 +175,26 @@ const searchFormatSchema = {
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
   const server = new McpServer({ name: "bitrix-mcp", version: "0.1.0" });
+
+  server.tool(
+    "bitrix_read_file_context",
+    "Read a bounded source-code excerpt from a file inside the configured workspace or Bitrix MCP data directory, returning numbered lines and path/language metadata.",
+    {
+      file: z.string().min(1).describe("Path to read. Relative paths are resolved from workspaceRoot; absolute paths are allowed only inside workspaceRoot or dataDir."),
+      line: z.number().int().min(1).describe("1-based target line number to center the context around."),
+      before: z.number().int().min(0).max(500).default(5).describe("Number of lines to include before the target line; default is 5."),
+      after: z.number().int().min(0).max(500).default(20).describe("Number of lines to include after the target line; default is 20."),
+      maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Maximum characters of numbered line text to return; default is 12000.")
+    },
+    async ({ file, line, before, after, maxChars }) => {
+      return withMcpToolGuard("bitrix_read_file_context", async () => {
+        const { absolutePath, relativePath } = await assertFileInsideReadAllowlist(paths, file);
+        const contents = await fs.readFile(absolutePath, "utf8");
+        const context = buildFileContext(contents, absolutePath, relativePath, line, before, after, maxChars);
+        return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
+      });
+    }
+  );
 
   server.tool(
     "bitrix_liveapi_search",

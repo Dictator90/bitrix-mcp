@@ -233,6 +233,7 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 - `bitrix_index_project` — index the current project from an agent.
 - `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
 - `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
+- `bitrix_read_file_context` — read numbered source lines around a specific line from a file inside the configured workspace or Bitrix MCP data directory; returns absolute/relative path metadata and detected language.
 - `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
 - `bitrix_index_docs` — clone/pull and index documentation sources into SQLite, including the official Bitrix Framework docs repository when official docs are enabled.
 - `bitrix_docs_search` — default local SQLite FTS documentation search.
@@ -273,6 +274,35 @@ Example compact response shape:
     "signature": "CIBlockElement::GetList($arOrder = [], $arFilter = [], $arGroupBy = false, $arNavStartParams = false, $arSelectFields = [])"
   }
 ]
+```
+
+After a symbol search returns a `file` and `line`, call `bitrix_read_file_context` to inspect the surrounding implementation without exposing paths outside the configured workspace/data allowlist:
+
+```json
+{
+  "file": "bitrix/modules/iblock/classes/general/iblockelement.php",
+  "line": 785,
+  "before": 8,
+  "after": 24,
+  "maxChars": 12000
+}
+```
+
+Example response shape:
+
+```json
+{
+  "metadata": {
+    "absolutePath": "/path/to/project/bitrix/modules/iblock/classes/general/iblockelement.php",
+    "relativePath": "bitrix/modules/iblock/classes/general/iblockelement.php",
+    "language": "php",
+    "startLine": 777,
+    "endLine": 809,
+    "totalLines": 4230,
+    "truncated": false
+  },
+  "numberedLines": "777: ...\n785: public static function GetList(...)\n809: ..."
+}
 ```
 
 Documentation search compact mode returns an `excerpt` instead of the full indexed chunk. Matching query terms are highlighted when possible; otherwise the chunk is truncated:
