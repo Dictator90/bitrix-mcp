@@ -458,7 +458,7 @@ export BITRIX_MCP_SEMANTIC_ENABLED=1
 bitrix-mcp serve
 ```
 
-`bitrix-mcp doctor` checks both the embeddings service health and whether the service document count matches the current SQLite documentation chunk count. If the counts differ, rerun `bitrix-mcp index-embeddings` after `bitrix-mcp index-docs`.
+`bitrix-mcp doctor` checks the embeddings service health only when semantic mode is enabled with `BITRIX_MCP_SEMANTIC_ENABLED=1`; otherwise it reports that semantic search is disabled and skips the embeddings request. When enabled, it also verifies that the service document count matches the current SQLite documentation chunk count. If the counts differ, rerun `bitrix-mcp index-embeddings` after `bitrix-mcp index-docs`.
 
 You can also POST chunks to `/index` manually:
 

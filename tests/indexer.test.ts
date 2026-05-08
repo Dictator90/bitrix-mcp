@@ -12,7 +12,7 @@ import { sqlitePath } from "../src/config/paths.js";
 import { getIndexStatus, readIndexWarnings } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
-import { runDoctor } from "../src/indexer/actions.js";
+import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
@@ -203,7 +203,7 @@ test("documentation chunks are prepared as embeddings documents", async () => {
 });
 
 
-test("doctor warns when embeddings document count differs from SQLite chunks", async () => {
+test("doctor warns when semantic mode is enabled and embeddings document count differs from SQLite chunks", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doctor-embeddings-"));
   await addPathDocSource(dataDir, path.join(fixtureRoot, "docs"));
   const chunks = await indexDocResourcesToSqlite(dataDir, [], { force: true });
@@ -228,13 +228,53 @@ test("doctor warns when embeddings document count differs from SQLite chunks", a
       docsDir: path.join(fixtureRoot, "docs"),
       docsPaths: [path.join(fixtureRoot, "docs")],
       embeddingsUrl: `http://127.0.0.1:${address.port}`,
-      semanticEnabled: false,
+      semanticEnabled: true,
       officialDocsEnabled: false
     });
 
     const embeddingsCheck = checks.find((check) => check.name === "embeddingsService");
     assert.equal(embeddingsCheck?.status, "warning");
     assert.match(embeddingsCheck?.message ?? "", /SQLite has \d+ documentation chunks/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+
+test("doctor skips embeddings health check when semantic mode is disabled", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doctor-semantic-disabled-"));
+  let healthRequests = 0;
+
+  const server = createServer((request, response) => {
+    if (request.url === "/health") {
+      healthRequests += 1;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ status: "error", documents: 0 }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const checks = await runDoctor({
+      workspaceRoot: fixtureRoot,
+      dataDir,
+      docsDir: path.join(fixtureRoot, "docs"),
+      docsPaths: [path.join(fixtureRoot, "docs")],
+      embeddingsUrl: `http://127.0.0.1:${address.port}`,
+      semanticEnabled: false,
+      officialDocsEnabled: false
+    });
+
+    assert.equal(healthRequests, 0);
+    const embeddingsCheck = checks.find((check) => check.name === "embeddingsService");
+    assert.equal(embeddingsCheck?.status, "info");
+    assert.match(embeddingsCheck?.message ?? "", /Semantic search disabled/i);
+    assert.match(formatDoctor([embeddingsCheck!]), /^INFO embeddingsService:/);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
