@@ -18,7 +18,7 @@ export interface IndexAllResult {
 
 export interface DoctorCheck {
   name: string;
-  status: "ok" | "warning" | "error";
+  status: "ok" | "info" | "warning" | "error";
   message: string;
 }
 
@@ -152,21 +152,25 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
     checks.push({ name: "bitrixmcpignore", status: "warning", message: `.bitrixmcpignore is not present in ${paths.workspaceRoot}; only built-in ignores and .gitignore will apply.` });
   }
 
-  try {
-    const [health, sqliteDocChunks] = await Promise.all([new EmbeddingsClient(paths.embeddingsUrl).health(), countDocChunks(paths.dataDir)]);
-    if (health.status !== "ok") {
-      checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service responded at ${paths.embeddingsUrl} with status ${health.status}.` });
-    } else if (health.documents !== undefined && health.documents !== sqliteDocChunks) {
-      checks.push({
-        name: "embeddingsService",
-        status: "warning",
-        message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}, but has ${health.documents} document${health.documents === 1 ? "" : "s"}; SQLite has ${sqliteDocChunks} documentation chunk${sqliteDocChunks === 1 ? "" : "s"}. Run bitrix-mcp index-embeddings after bitrix-mcp index-docs.`
-      });
-    } else {
-      checks.push({ name: "embeddingsService", status: "ok", message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}; indexed documents match SQLite chunks (${sqliteDocChunks}).` });
+  if (paths.semanticEnabled === true) {
+    try {
+      const [health, sqliteDocChunks] = await Promise.all([new EmbeddingsClient(paths.embeddingsUrl).health(), countDocChunks(paths.dataDir)]);
+      if (health.status !== "ok") {
+        checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service responded at ${paths.embeddingsUrl} with status ${health.status}.` });
+      } else if (health.documents !== undefined && health.documents !== sqliteDocChunks) {
+        checks.push({
+          name: "embeddingsService",
+          status: "warning",
+          message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}, but has ${health.documents} document${health.documents === 1 ? "" : "s"}; SQLite has ${sqliteDocChunks} documentation chunk${sqliteDocChunks === 1 ? "" : "s"}. Run bitrix-mcp index-embeddings after bitrix-mcp index-docs.`
+        });
+      } else {
+        checks.push({ name: "embeddingsService", status: "ok", message: `Embeddings service is healthy at ${paths.embeddingsUrl}${health.model ? ` (${health.model})` : ""}; indexed documents match SQLite chunks (${sqliteDocChunks}).` });
+      }
+    } catch (error) {
+      checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service is unavailable at ${paths.embeddingsUrl}: ${error instanceof Error ? error.message : String(error)}` });
     }
-  } catch (error) {
-    checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service is unavailable at ${paths.embeddingsUrl}: ${error instanceof Error ? error.message : String(error)}` });
+  } else {
+    checks.push({ name: "embeddingsService", status: "info", message: "Semantic search disabled; embeddings service health check skipped. Enable BITRIX_MCP_SEMANTIC_ENABLED=1 to validate it." });
   }
 
   return checks;
@@ -197,7 +201,13 @@ export function formatIndexAllResult(result: IndexAllResult): string {
 }
 
 export function formatDoctor(checks: DoctorCheck[]): string {
-  return checks.map((check) => `${check.status.toUpperCase()} ${check.name}: ${check.message}`).join("\n");
+  const labels: Record<DoctorCheck["status"], string> = {
+    ok: "OK",
+    info: "INFO",
+    warning: "WARNING",
+    error: "ERROR"
+  };
+  return checks.map((check) => `${labels[check.status]} ${check.name}: ${check.message}`).join("\n");
 }
 
 export function hasDoctorErrors(checks: DoctorCheck[]): boolean {

@@ -26,7 +26,7 @@ Commands:
   index-docs [--force] [--embeddings] Index registered documentation sources into SQLite, optionally then into embeddings
   index-embeddings              Send SQLite documentation chunks to the embeddings service
   status                        Show SQLite DB path and index counters
-  doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and embeddings
+  doctor                        Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
