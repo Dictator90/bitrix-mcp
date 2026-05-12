@@ -139,6 +139,56 @@ function rowToBitrixRelation(row: BitrixRelationRow): BitrixRelationRecord {
   };
 }
 
+function eventHandlerTarget(symbol: SymbolRecord): { targetType: string; targetName: string; metadata?: Record<string, unknown> } | undefined {
+  if (symbol.handlerClass && symbol.handlerMethod) {
+    return { targetType: "method", targetName: `${symbol.handlerClass}::${symbol.handlerMethod}` };
+  }
+  if (symbol.handlerFunction) {
+    if (symbol.anonymous) {
+      return { targetType: "function", targetName: symbol.handlerFunction, metadata: { anonymous: true } };
+    }
+    return { targetType: "function", targetName: symbol.handlerFunction };
+  }
+  return undefined;
+}
+
+function eventRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "event") return [];
+  const eventName = symbol.eventName ?? (symbol.name.split(":").slice(1).join(":") || symbol.name);
+  const eventSourceName = symbol.module ? `${symbol.module}:${eventName}` : symbol.name;
+  const target = eventHandlerTarget(symbol);
+  const relations: BitrixRelationRecord[] = [];
+  if (target) {
+    relations.push({
+      sourceType: "event",
+      sourceName: eventSourceName,
+      targetType: target.targetType,
+      targetName: target.targetName,
+      relationType: "handles_event",
+      file: symbol.file,
+      line: symbol.line,
+      module: symbol.module,
+      kind: file.kind,
+      signature: symbol.signature,
+      metadata: target.metadata
+    });
+  }
+  relations.push({
+    sourceType: "file",
+    sourceName: file.relativePath,
+    targetType: "event",
+    targetName: eventSourceName,
+    relationType: "registers_event_handler",
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature,
+    metadata: symbol.anonymous ? { anonymous: true } : undefined
+  });
+  return relations;
+}
+
 export async function ensureSqliteStore(dbFile: string): Promise<void> {
   await fs.mkdir(path.dirname(dbFile), { recursive: true });
   const db = openDatabase(dbFile);
@@ -451,6 +501,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertRelation = db.prepare(`
+      INSERT INTO bitrix_relations (source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     const setMeta = db.prepare(`
       INSERT INTO index_meta (key, value, updated_at)
       VALUES (?, ?, ?)
@@ -463,6 +517,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteEventsFtsForFile = db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE file_id = ?)");
     const deleteEventsForFile = db.prepare("DELETE FROM events WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
+    const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
 
     db.exec("BEGIN IMMEDIATE;");
@@ -470,6 +525,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       if (options.force) {
         db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE kind = ?)").run(manifest.kind);
         db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
+        db.prepare("DELETE FROM bitrix_relations WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
         existingByPath.clear();
       } else {
@@ -477,6 +533,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           if (!currentPaths.has(file.path)) {
             deleteSymbolsFtsForFile.run(file.id);
             deleteEventsFtsForFile.run(file.id);
+            deleteRelationsForFile.run(file.path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
           }
@@ -494,6 +551,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteEventsFtsForFile.run(existing.id);
           deleteEventsForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
+          deleteRelationsForFile.run(file.path);
         }
 
         const fileRow = upsertFile.get(file.kind, manifest.root, file.path, file.relativePath, file.size, file.mtimeMs, file.language, manifest.generatedAt) as { id: number };
@@ -552,6 +610,21 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               nullable(symbol.signature),
               nullable(symbol.description)
             );
+            for (const relation of eventRelationsForSymbol(symbol, file)) {
+              insertRelation.run(
+                relation.sourceType,
+                relation.sourceName,
+                relation.targetType,
+                relation.targetName,
+                relation.relationType,
+                relation.file,
+                relation.line,
+                nullable(relation.module),
+                nullable(relation.kind),
+                nullable(relation.signature),
+                relationMetadataJson(relation)
+              );
+            }
           }
         }
       }

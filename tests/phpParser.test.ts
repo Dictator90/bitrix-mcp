@@ -147,3 +147,65 @@ EventManager::getInstance()
   const eventManagerCall = symbols.find((symbol) => symbol.type === "static_call" && symbol.name === "Bitrix\\Main\\EventManager::getInstance");
   assert.ok(eventManagerCall);
 });
+
+test("parsePhpSymbols handles all Bitrix event callback styles", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+AddEventHandler('main', 'OnFunctionString', 'plain_handler');
+AddEventHandler('main', 'OnArrayString', ['Vendor\\Module\\ArrayHandler', 'handle']);
+AddEventHandler('main', 'OnClassConstantArray', [SomeClass::class, 'methodName']);
+AddEventHandler('main', 'OnStaticString', '\\Vendor\\Module\\Handler::onEvent');
+AddEventHandler('main', 'OnLegacyArray', array('Vendor\\Module\\LegacyHandler', 'onEvent'));
+AddEventHandler('main', 'OnClosure', function () {
+    return ['commas, stay', ['nested' => true]];
+});
+`, "/srv/site/local/php_interface/init.php");
+
+  const byEvent = new Map(symbols.filter((symbol) => symbol.type === "event").map((symbol) => [symbol.eventName, symbol]));
+
+  assert.equal(byEvent.get("OnFunctionString")?.handlerFunction, "plain_handler");
+  assert.equal(byEvent.get("OnArrayString")?.handlerClass, "Vendor\\Module\\ArrayHandler");
+  assert.equal(byEvent.get("OnArrayString")?.handlerMethod, "handle");
+  assert.equal(byEvent.get("OnClassConstantArray")?.handlerClass, "SomeClass");
+  assert.equal(byEvent.get("OnClassConstantArray")?.handlerMethod, "methodName");
+  assert.equal(byEvent.get("OnStaticString")?.handlerClass, "\\Vendor\\Module\\Handler");
+  assert.equal(byEvent.get("OnStaticString")?.handlerMethod, "onEvent");
+  assert.equal(byEvent.get("OnLegacyArray")?.handlerClass, "Vendor\\Module\\LegacyHandler");
+  assert.equal(byEvent.get("OnLegacyArray")?.handlerMethod, "onEvent");
+  assert.equal(byEvent.get("OnClosure")?.handlerFunction, "closure");
+  assert.equal(byEvent.get("OnClosure")?.anonymous, true);
+});
+
+test("parsePhpSymbols handles D7 EventManager chains and Windows module paths", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+class WindowsPathHandler {}
+EventManager::getInstance()->addEventHandler(
+    'main',
+    'OnBeforeProlog',
+    [Handler::class, 'onBeforeProlog']
+);
+\Bitrix\Main\EventManager::getInstance()->addEventHandlerCompatible(
+    'sale',
+    'OnSaleOrderSaved',
+    ['Vendor\\Module\\Handler', 'onSaleOrderSaved']
+);
+RegisterModuleDependences('catalog', 'OnProductUpdate', 'vendor.module', 'Vendor\\Module\\CatalogHandler', 'onProductUpdate');
+`, String.raw`C:\site\local\modules\vendor.module\lib\events.php`);
+
+  const beforeProlog = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnBeforeProlog");
+  assert.equal(beforeProlog?.module, "main");
+  assert.equal(beforeProlog?.handlerClass, "Handler");
+  assert.equal(beforeProlog?.handlerMethod, "onBeforeProlog");
+
+  const saleSaved = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnSaleOrderSaved");
+  assert.equal(saleSaved?.module, "sale");
+  assert.equal(saleSaved?.handlerClass, "Vendor\\Module\\Handler");
+  assert.equal(saleSaved?.handlerMethod, "onSaleOrderSaved");
+
+  const productUpdate = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnProductUpdate");
+  assert.equal(productUpdate?.module, "catalog");
+  assert.equal(productUpdate?.handlerClass, "Vendor\\Module\\CatalogHandler");
+  assert.equal(productUpdate?.handlerMethod, "onProductUpdate");
+
+  const classSymbol = symbols.find((symbol) => symbol.type === "class");
+  assert.equal(classSymbol?.module, "vendor.module");
+});

@@ -716,3 +716,51 @@ test("readIndex falls back to legacy JSON files", async () => {
 
   assert.deepEqual(await readIndex(legacyFile, "project"), legacyManifest);
 });
+
+test("buildIndex writes event handler relations into bitrix_relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-event-relations-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-event-relations-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+EventManager::getInstance()->addEventHandler(
+    'main',
+    'OnBeforeProlog',
+    ['Vendor\\Module\\Handler', 'onBeforeProlog']
+);
+AddEventHandler('sale', 'OnSaleOrderSaved', function () {});
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+
+  const eventToHandler = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "event",
+    sourceName: "main:OnBeforeProlog",
+    relationType: "handles_event",
+    limit: 5
+  });
+  assert.equal(eventToHandler?.[0]?.targetType, "method");
+  assert.equal(eventToHandler?.[0]?.targetName, "Vendor\\Module\\Handler::onBeforeProlog");
+  assert.equal(eventToHandler?.[0]?.module, "main");
+  assert.equal(eventToHandler?.[0]?.kind, "project");
+
+  const fileToEvent = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "file",
+    sourceName: path.join("local", "php_interface", "init.php"),
+    targetType: "event",
+    targetName: "main:OnBeforeProlog",
+    relationType: "registers_event_handler",
+    limit: 5
+  });
+  assert.equal(fileToEvent?.[0]?.file, path.join(root, "local/php_interface/init.php"));
+  assert.match(fileToEvent?.[0]?.signature ?? "", /addEventHandler/);
+
+  const closureRelation = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "event",
+    sourceName: "sale:OnSaleOrderSaved",
+    relationType: "handles_event",
+    limit: 5
+  });
+  assert.equal(closureRelation?.[0]?.targetType, "function");
+  assert.equal(closureRelation?.[0]?.targetName, "closure");
+  assert.deepEqual(closureRelation?.[0]?.metadata, { anonymous: true });
+});
