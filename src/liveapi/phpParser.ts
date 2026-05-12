@@ -62,6 +62,116 @@ export function parsePhpModuleUsages(source: string, filePath: string): ModuleUs
   return usages.sort((a, b) => a.line - b.line || a.signature.localeCompare(b.signature));
 }
 
+
+function unquotePhpString(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  if ((quote !== "'" && quote !== '"') || trimmed.at(-1) !== quote) return undefined;
+  const inner = trimmed.slice(1, -1);
+  return quote === "'" ? inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\") : inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+function normalizeAgentName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const callable = value.trim().replace(/\s*;\s*$/u, "").replace(/\s*\(\s*\)\s*$/u, "").trim();
+  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*::[A-Za-z_][A-Za-z0-9_]*$/u.test(callable)) return callable;
+  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(callable)) return callable;
+  return undefined;
+}
+
+function splitTopLevelArgs(argsSource: string): string[] {
+  const args: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  for (const char of argsSource) {
+    if (quote) {
+      current += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === "(" || char === "[" || char === "{") depth += 1;
+    if (char === ")" || char === "]" || char === "}") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) {
+      args.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim() || argsSource.trim()) args.push(current.trim());
+  return args;
+}
+
+function findCallEnd(source: string, openParenIndex: number): number {
+  let depth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = openParenIndex; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return -1;
+}
+
+function parsePhpAgentsWithRegex(source: string, filePath: string): SymbolRecord[] {
+  const symbols: SymbolRecord[] = [];
+  const callRegex = /(?<![A-Za-z0-9_\\])\\?CAgent::(AddAgent|RemoveAgent|GetList)\s*\(/g;
+  for (const match of source.matchAll(callRegex)) {
+    const start = match.index ?? 0;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const args = splitTopLevelArgs(source.slice(openParenIndex + 1, end - 1));
+    const action = match[1] as "AddAgent" | "RemoveAgent" | "GetList";
+    const agentName = action === "GetList" ? undefined : normalizeAgentName(unquotePhpString(args[0]));
+    const intervalRaw = Number(args[3]);
+    symbols.push({
+      type: "agent",
+      name: agentName ?? `CAgent::${action}`,
+      module: unquotePhpString(args[1]),
+      agentAction: action,
+      periodic: unquotePhpString(args[2]),
+      interval: Number.isFinite(intervalRaw) ? intervalRaw : undefined,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+  return symbols;
+}
+
 function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
   const module = moduleFromPath(filePath);
@@ -134,6 +244,8 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
       signature: match[0]
     });
   }
+
+  symbols.push(...parsePhpAgentsWithRegex(source, filePath));
 
   return symbols;
 }

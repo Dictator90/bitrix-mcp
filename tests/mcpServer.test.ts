@@ -314,3 +314,32 @@ test("MCP bitrix_module_usage_search is registered and returns compact module us
     signature: "\\Bitrix\\Main\\Loader::includeModule('iblock')"
   });
 });
+
+test("MCP bitrix_agent_search is registered and returns compact agents", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-agents-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-agent-root-"));
+  const installFile = path.join(root, "local", "modules", "vendor.module", "install", "index.php");
+  await fs.mkdir(path.dirname(installFile), { recursive: true });
+  await fs.writeFile(installFile, String.raw`<?php
+CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400);
+`, "utf8");
+
+  const server = createMcpServer({ ...runtimePaths(dataDir, root), bitrixRoot: root });
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_agent_search);
+  await tools.bitrix_index_all.handler({});
+  const result = await tools.bitrix_agent_search.handler({ query: "Agent::run", module: "vendor.module", kind: "install", limit: 5 });
+  const compact = JSON.parse(result.content[0].text) as Array<{ name: string; module: string; periodic: string; interval: number; kind: string; file: string; line: number; signature: string }>;
+
+  assert.deepEqual(compact[0], {
+    name: "\\Vendor\\Module\\Agent::run",
+    module: "vendor.module",
+    periodic: "N",
+    interval: 86400,
+    kind: "install",
+    file: path.join("local", "modules", "vendor.module", "install", "index.php"),
+    line: 2,
+    signature: 'CAgent::AddAgent("\\\\Vendor\\\\Module\\\\Agent::run();", "vendor.module", "N", 86400);'
+  });
+});

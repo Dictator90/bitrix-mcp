@@ -136,6 +136,50 @@ function literalString(node: unknown, context: ParserContext): string | undefine
   return undefined;
 }
 
+
+function numericLiteral(node: unknown): number | undefined {
+  if (!isNode(node)) return undefined;
+  if (node.kind !== "number") return undefined;
+  const value = typeof node.value === "number" ? node.value : Number(node.value);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeAgentName(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const callable = trimmed.replace(/\s*;\s*$/u, "").replace(/\s*\(\s*\)\s*$/u, "").trim();
+  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*::[A-Za-z_][A-Za-z0-9_]*$/u.test(callable)) return callable;
+  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(callable)) return callable;
+  return undefined;
+}
+
+function maybeBitrixAgentSymbol(source: string, filePath: string, node: PhpNode, context: ParserContext): SymbolRecord | undefined {
+  const what = isNode(node.what) ? node.what : undefined;
+  if (!what || what.kind !== "staticlookup") return undefined;
+  const methodName = nodeName(what.offset);
+  const className = nodeName(what.what);
+  if (!methodName || !className || className.replace(/^\\/u, "").toLowerCase() !== "cagent") return undefined;
+
+  const normalizedMethod = methodName.toLowerCase();
+  const agentAction = normalizedMethod === "addagent" ? "AddAgent" : normalizedMethod === "removeagent" ? "RemoveAgent" : normalizedMethod === "getlist" ? "GetList" : undefined;
+  if (!agentAction) return undefined;
+
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+  const rawAgentName = agentAction === "GetList" ? undefined : literalString(args[0], context);
+  const agentName = normalizeAgentName(rawAgentName);
+  return {
+    type: "agent",
+    name: agentName ?? `CAgent::${agentAction}`,
+    module: literalString(args[1], context),
+    agentAction,
+    periodic: literalString(args[2], context),
+    interval: numericLiteral(args[3]),
+    file: filePath,
+    line: nodeLine(node),
+    signature: sourceSlice(source, node)
+  };
+}
+
 function arrayValues(node: unknown): PhpNode[] {
   if (!isNode(node) || node.kind !== "array" || !Array.isArray(node.items)) return [];
   return node.items
@@ -406,6 +450,9 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       return;
 
     case "call": {
+      const agent = maybeBitrixAgentSymbol(source, filePath, node, context);
+      if (agent) symbols.push(agent);
+
       const event = maybeEventSymbol(source, filePath, node, context);
       if (event) symbols.push(event);
 

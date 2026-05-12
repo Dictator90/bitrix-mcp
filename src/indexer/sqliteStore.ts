@@ -14,6 +14,14 @@ export interface SqliteSearchQuery {
   limit?: number;
 }
 
+export interface AgentSearchQuery {
+  query?: string;
+  module?: string;
+  kind?: IndexKind | IndexKind[];
+  file?: string;
+  limit?: number;
+}
+
 export interface ModuleUsageSearchQuery {
   module?: string;
   call?: string;
@@ -73,6 +81,10 @@ interface SymbolRow {
   line: number;
   signature: string | null;
   description: string | null;
+  agent_action?: SymbolRecord["agentAction"] | null;
+  periodic?: string | null;
+  interval?: number | null;
+  relative_file?: string | null;
 }
 
 interface ModuleUsageRow {
@@ -126,7 +138,11 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     file: row.file,
     line: row.line,
     signature: row.signature ?? undefined,
-    description: row.description ?? undefined
+    description: row.description ?? undefined,
+    agentAction: row.agent_action ?? undefined,
+    periodic: row.periodic ?? undefined,
+    interval: row.interval ?? undefined,
+    relativeFile: row.relative_file ?? undefined
   };
 }
 
@@ -171,6 +187,61 @@ function rowToBitrixRelation(row: BitrixRelationRow): BitrixRelationRecord {
     signature: row.signature ?? undefined,
     metadata: parseRelationMetadata(row.metadata_json)
   };
+}
+
+
+function staticAgentTarget(name: string): string | undefined {
+  return /^\\?[A-Za-z_][A-Za-z0-9_\\]*::[A-Za-z_][A-Za-z0-9_]*$/u.test(name) ? name : undefined;
+}
+
+function agentRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "agent") return [];
+  const relations: BitrixRelationRecord[] = [
+    {
+      sourceType: "file",
+      sourceName: file.relativePath,
+      targetType: "agent",
+      targetName: symbol.name,
+      relationType: symbol.agentAction === "RemoveAgent" ? "removes_agent" : symbol.agentAction === "GetList" ? "queries_agents" : "registers_agent",
+      file: symbol.file,
+      line: symbol.line,
+      module: symbol.module,
+      kind: file.kind,
+      signature: symbol.signature,
+      metadata: { action: symbol.agentAction, periodic: symbol.periodic, interval: symbol.interval }
+    }
+  ];
+  if (symbol.module) {
+    relations.push({
+      sourceType: "module",
+      sourceName: symbol.module,
+      targetType: "agent",
+      targetName: symbol.name,
+      relationType: symbol.agentAction === "RemoveAgent" ? "removes_agent" : symbol.agentAction === "GetList" ? "queries_agents" : "registers_agent",
+      file: symbol.file,
+      line: symbol.line,
+      module: symbol.module,
+      kind: file.kind,
+      signature: symbol.signature,
+      metadata: { action: symbol.agentAction, periodic: symbol.periodic, interval: symbol.interval }
+    });
+  }
+  const methodTarget = staticAgentTarget(symbol.name);
+  if (methodTarget && symbol.agentAction === "AddAgent") {
+    relations.push({
+      sourceType: "agent",
+      sourceName: symbol.name,
+      targetType: "method",
+      targetName: methodTarget,
+      relationType: "calls_method",
+      file: symbol.file,
+      line: symbol.line,
+      module: symbol.module,
+      kind: file.kind,
+      signature: symbol.signature
+    });
+  }
+  return relations;
 }
 
 function moduleUsageRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
@@ -274,6 +345,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         handler_method TEXT,
         handler_function TEXT,
         event_name TEXT,
+        agent_action TEXT,
+        periodic TEXT,
+        interval INTEGER,
         file TEXT NOT NULL,
         line INTEGER NOT NULL,
         signature TEXT,
@@ -458,6 +532,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       ["handler_method", "TEXT"],
       ["handler_function", "TEXT"],
       ["event_name", "TEXT"],
+      ["agent_action", "TEXT"],
+      ["periodic", "TEXT"],
+      ["interval", "INTEGER"],
       ["language", "TEXT"]
     ] as const) {
       if (!symbolColumns.includes(column)) {
@@ -553,8 +630,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       RETURNING id
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, periodic, interval, file, line, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -646,6 +723,9 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(symbol.handlerMethod),
             nullable(symbol.handlerFunction),
             nullable(symbol.eventName),
+            nullable(symbol.agentAction),
+            nullable(symbol.periodic),
+            symbol.interval ?? null,
             symbol.file,
             symbol.line,
             nullable(symbol.signature),
@@ -687,6 +767,23 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               nullable(symbol.description)
             );
             for (const relation of eventRelationsForSymbol(symbol, file)) {
+              insertRelation.run(
+                relation.sourceType,
+                relation.sourceName,
+                relation.targetType,
+                relation.targetName,
+                relation.relationType,
+                relation.file,
+                relation.line,
+                nullable(relation.module),
+                nullable(relation.kind),
+                nullable(relation.signature),
+                relationMetadataJson(relation)
+              );
+            }
+          }
+          if (symbol.type === "agent") {
+            for (const relation of agentRelationsForSymbol(symbol, file)) {
               insertRelation.run(
                 relation.sourceType,
                 relation.sourceName,
@@ -792,6 +889,55 @@ export async function writeBitrixRelations(dbFile: string, relations: BitrixRela
   }
 }
 
+
+
+export async function searchAgents(dbFile: string, query: AgentSearchQuery): Promise<SymbolRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = ["s.type = 'agent'"];
+    const params: Array<string | number> = [];
+
+    if (query.query !== undefined && query.query.trim()) {
+      const like = `%${query.query.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      filters.push("(s.name LIKE ? ESCAPE '\\' OR coalesce(s.module, '') LIKE ? ESCAPE '\\' OR coalesce(s.signature, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like);
+    }
+    if (query.module !== undefined) {
+      filters.push("s.module = ?");
+      params.push(query.module);
+    }
+    if (query.file !== undefined) {
+      filters.push("(s.file = ? OR f.relative_path = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const rows = db.prepare(`
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+             s.event_name, s.agent_action, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+      FROM symbols s
+      JOIN files f ON f.id = s.file_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY s.id DESC
+      LIMIT ?
+    `).all(...params) as unknown as SymbolRow[];
+    return rows.map(rowToSymbol);
+  } finally {
+    db.close();
+  }
+}
 
 export async function searchModuleUsages(dbFile: string, query: ModuleUsageSearchQuery): Promise<ModuleUsageRecord[] | undefined> {
   try {
@@ -937,7 +1083,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, periodic, interval, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
     const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,

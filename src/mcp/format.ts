@@ -164,6 +164,27 @@ export function formatSemanticDocSearchResults(results: SemanticSearchHit[], opt
 }
 
 
+export interface AgentSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatAgentSearchResults(results: SymbolRecord[] | undefined, options: AgentSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((agent) => compactObject({
+    name: agent.name,
+    module: agent.module,
+    periodic: agent.periodic,
+    interval: agent.interval,
+    kind: agent.kind,
+    file: agent.relativeFile ?? agent.file,
+    line: agent.line,
+    signature: agent.signature
+  }));
+}
+
 export interface ModuleUsageSearchFormatOptions {
   format?: "compact" | "full";
 }
