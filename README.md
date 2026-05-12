@@ -10,7 +10,7 @@ Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Des
 
 ## Capabilities
 
-- **LiveAPI search**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, and constants.
+- **LiveAPI search**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, constants, and Bitrix module include/check usage records.
 - **Project indexing**: indexes the current project from a terminal command or MCP tool.
 - **Template indexing**: separately indexes templates, components, scripts, styles, and layout assets.
 - **Documentation search**: exposes local Bitrix Framework documentation as MCP resources and searches indexed Markdown/text docs with SQLite FTS.
@@ -124,6 +124,9 @@ npx bitrix-mcp index-embeddings
 # Or reindex SQLite docs and embeddings together when the service is running
 npx bitrix-mcp index-docs --embeddings
 
+# Search indexed Bitrix module include/check API usages by module
+npx bitrix-mcp search-modules iblock
+
 # Show index counters, resolved runtime paths, or environment diagnostics
 npx bitrix-mcp status
 npx bitrix-mcp config
@@ -232,9 +235,10 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 - `bitrix_liveapi_search` — search indexed PHP symbols; use `kind` to limit sources to `project`, `template`, `bitrix`, `install`, or an array of those kinds.
 - `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function; use `kind` to search only project/template/core/install handlers.
+- `bitrix_module_usage_search` — search indexed Bitrix module include/check calls such as `Loader::includeModule`, `CModule::IncludeModule`, `IsModuleInstalled`, and `ModuleManager::isModuleInstalled`; filter by `module`, `call`, `kind`, or `file`.
 - `bitrix_index_project` — index the current project from an agent.
 - `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
-- `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
+- `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, module usages, documents, and last index timestamp.
 - `bitrix_read_file_context` — read numbered source lines around a specific line from a file inside the configured workspace or Bitrix MCP data directory; returns absolute/relative path metadata and detected language.
 - `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
 - `bitrix_index_docs` — clone/pull and index documentation sources into SQLite, including the official Bitrix Framework docs repository when official docs are enabled.
@@ -245,7 +249,7 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 Search tools support shared response-shaping options:
 
-- `kind`: for `bitrix_liveapi_search` and `bitrix_event_search`, restrict results to one index kind (`"project"`, `"template"`, `"bitrix"`, or `"install"`) or an array of kinds.
+- `kind`: for `bitrix_liveapi_search`, `bitrix_event_search`, and `bitrix_module_usage_search`, restrict results to one index kind (`"project"`, `"template"`, `"bitrix"`, or `"install"`) or an array of kinds.
 - `preferLocal`: for `bitrix_liveapi_search` and `bitrix_event_search`, boost `project` and `template` results ahead of equally relevant `bitrix` and `install` results; defaults to `true`.
 - `format`: `"compact"` (default) or `"full"`.
 - `includeSignature`: include the compact `signature` field for symbol/event results; defaults to `true`.
@@ -305,6 +309,31 @@ Example response shape:
   },
   "numberedLines": "777: ...\n785: public static function GetList(...)\n809: ..."
 }
+```
+
+
+Module usage compact mode returns the module name, API call, index kind, relative file, line, and exact call signature:
+
+```json
+{
+  "module": "iblock",
+  "limit": 5
+}
+```
+
+Example compact module usage response shape:
+
+```json
+[
+  {
+    "module": "iblock",
+    "call": "Loader::includeModule",
+    "kind": "project",
+    "file": "local/php_interface/init.php",
+    "line": 42,
+    "signature": "Loader::includeModule('iblock')"
+  }
+]
 ```
 
 Documentation search compact mode returns an `excerpt` instead of the full indexed chunk. Matching query terms are highlighted when possible; otherwise the chunk is truncated:

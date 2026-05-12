@@ -1,4 +1,4 @@
-import type { IndexWarning, SymbolRecord } from "../types.js";
+import type { IndexWarning, ModuleUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst } from "./phpAstParser.js";
 
@@ -10,6 +10,56 @@ function moduleFromPath(filePath: string): string | undefined {
   const normalized = filePath.replace(/\\/g, "/");
   const match = normalized.match(/\/bitrix\/modules\/([^/]+)/i) ?? normalized.match(/\/local\/modules\/([^/]+)/i);
   return match?.[1];
+}
+
+const MODULE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+function normalizeStaticModuleCall(className: string, methodName: string): ModuleUsageRecord["call"] | undefined {
+  const normalizedClass = className.replace(/^\\/, "").toLowerCase();
+  const shortClass = normalizedClass.split("\\").pop();
+  const normalizedMethod = methodName.toLowerCase();
+
+  if ((normalizedClass === "loader" || normalizedClass === "bitrix\\main\\loader") && normalizedMethod === "includemodule") {
+    return "Loader::includeModule";
+  }
+  if (shortClass === "cmodule" && normalizedMethod === "includemodule") {
+    return "CModule::IncludeModule";
+  }
+  if ((normalizedClass === "modulemanager" || normalizedClass === "bitrix\\main\\modulemanager") && normalizedMethod === "ismoduleinstalled") {
+    return "ModuleManager::isModuleInstalled";
+  }
+  return undefined;
+}
+
+function moduleUsageRecord(source: string, filePath: string, index: number, module: string, call: ModuleUsageRecord["call"], signature: string): ModuleUsageRecord | undefined {
+  if (!MODULE_NAME_PATTERN.test(module)) return undefined;
+  return {
+    type: "module_usage",
+    module,
+    file: filePath,
+    line: lineOf(source, index),
+    call,
+    signature: signature.trim()
+  };
+}
+
+export function parsePhpModuleUsages(source: string, filePath: string): ModuleUsageRecord[] {
+  const usages: ModuleUsageRecord[] = [];
+  const staticCallRegex = /(?<![A-Za-z0-9_\\])((?:\\?Bitrix\\Main\\)?(?:Loader|ModuleManager)|\\?CModule)::([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*(['"])([^'"]+)\3\s*\)/g;
+  for (const match of source.matchAll(staticCallRegex)) {
+    const call = normalizeStaticModuleCall(match[1], match[2]);
+    if (!call) continue;
+    const usage = moduleUsageRecord(source, filePath, match.index ?? 0, match[4], call, match[0]);
+    if (usage) usages.push(usage);
+  }
+
+  const functionCallRegex = /(?<![A-Za-z0-9_\\:>])IsModuleInstalled\s*\(\s*(['"])([^'"]+)\1\s*\)/g;
+  for (const match of source.matchAll(functionCallRegex)) {
+    const usage = moduleUsageRecord(source, filePath, match.index ?? 0, match[2], "IsModuleInstalled", match[0]);
+    if (usage) usages.push(usage);
+  }
+
+  return usages.sort((a, b) => a.line - b.line || a.signature.localeCompare(b.signature));
 }
 
 function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecord[] {
@@ -94,19 +144,20 @@ function errorMessage(error: unknown): string {
 
 export interface PhpParseResult {
   symbols: SymbolRecord[];
+  moduleUsages: ModuleUsageRecord[];
   warnings: IndexWarning[];
 }
 
 export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string): PhpParseResult {
   try {
-    return { symbols: parsePhpSymbolsWithAst(source, filePath), warnings: [] };
+    return { symbols: parsePhpSymbolsWithAst(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
   } catch (error) {
     const warning: IndexWarning = {
       type: "php_parse_fallback",
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [warning] };
   }
 }
 

@@ -182,6 +182,7 @@ export function formatIndexStatus(status: IndexStatus): string {
     `Files: ${status.files}`,
     `Symbols: ${status.symbols}`,
     `Events: ${status.events}`,
+    `Module usages: ${status.moduleUsages}`,
     `Documents: ${status.documents}`,
     `Documentation chunks: ${status.docChunks}`,
     `PHP parse fallback/errors: ${status.phpParseFallbackFiles}`,

@@ -8,6 +8,7 @@ export interface IndexFile {
   mtimeMs: number;
   language: string;
   symbols: SymbolRecord[];
+  moduleUsages?: ModuleUsageRecord[];
 }
 
 export interface SymbolRecord {
@@ -26,6 +27,17 @@ export interface SymbolRecord {
   line: number;
   signature?: string;
   description?: string;
+}
+
+export interface ModuleUsageRecord {
+  type: "module_usage";
+  module: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  call: "Loader::includeModule" | "CModule::IncludeModule" | "IsModuleInstalled" | "ModuleManager::isModuleInstalled";
+  kind?: IndexKind;
+  signature: string;
 }
 
 export interface EventRecord {

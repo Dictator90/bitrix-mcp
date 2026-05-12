@@ -230,6 +230,23 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
   );
 
 
+
+  server.tool(
+    "bitrix_module_usage_search",
+    "Search indexed Bitrix module include/check API usages by module, call, kind, or file.",
+    {
+      module: z.string().optional(),
+      call: z.string().optional(),
+      kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns module/call/kind/file/line/signature fields; full returns raw module usage records.")
+    },
+    async ({ module, call, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_module_usage_search", { name: "searchModuleUsages", paths, query: { module, call, kind, file, limit, format } });
+    }
+  );
+
   server.tool(
     "bitrix_relation_search",
     "Search stored generic Bitrix relations by source, target, relation type, module, kind, or file. Compact output is returned by default.",
