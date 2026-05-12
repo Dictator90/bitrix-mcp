@@ -11,6 +11,7 @@ export interface IndexFile {
   moduleUsages?: ModuleUsageRecord[];
   ormEntities?: OrmEntityRecord[];
   ormUsages?: OrmUsageRecord[];
+  iblockUsages?: IblockUsageRecord[];
 }
 
 export interface ComponentParamRecord {
@@ -69,6 +70,20 @@ export interface OrmEntityRecord {
   references: OrmFieldRecord[];
   kind?: IndexKind;
   signature?: string;
+}
+
+export interface IblockUsageRecord {
+  type: "iblock_usage";
+  iblockId: string;
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
+  component?: string;
 }
 
 export interface OrmUsageRecord {

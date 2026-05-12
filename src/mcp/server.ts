@@ -318,6 +318,23 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
   );
 
   server.tool(
+    "bitrix_iblock_usage_search",
+    "Search indexed Bitrix IBlock API usages by IBLOCK_ID, API call, kind, file, or free text.",
+    {
+      query: z.string().optional(),
+      iblockId: z.string().optional(),
+      api: z.string().optional(),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns iblockId/api/kind/file/line/context/signature; full returns raw IBlock usage records.")
+    },
+    async ({ query, iblockId, api, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_iblock_usage_search", { name: "searchIblockUsages", paths, query: { query, iblockId, api, kind, file, limit, format } });
+    }
+  );
+
+  server.tool(
     "bitrix_orm_search",
     "Search indexed Bitrix D7 ORM DataManager entities by class, table, module, kind, or free text.",
     {

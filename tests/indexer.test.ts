@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -961,6 +961,57 @@ Section::compileEntityByIblock(7);
   assert.ok(referenceRelations?.some((relation) => relation.targetName === "Vendor\\Module\\UserTable"));
   const usageRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "orm_entity", targetName: "Vendor\\Module\\ProductTable", relationType: "uses_orm_entity", limit: 10 });
   assert.ok((usageRelations?.length ?? 0) >= 6);
+});
+
+
+test("buildIndex indexes IBlock API usages and writes IBlock relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-iblock-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-iblock-data-"));
+  const usageFile = path.join(root, "local", "php_interface", "iblock.php");
+  await fs.mkdir(path.dirname(usageFile), { recursive: true });
+  await fs.writeFile(usageFile, String.raw`<?php
+const NEWS_IBLOCK_ID = 8;
+define('CATALOG_IBLOCK_ID', 12);
+class CatalogUsage
+{
+    public function load($iblockId) {
+        CIBlockElement::GetList([], ["IBLOCK_ID" => 12, "ACTIVE" => "Y"]);
+        CIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);
+        CIBlockSection::GetList([], ['IBLOCK_ID' => NEWS_IBLOCK_ID]);
+        CIBlockElement::SetPropertyValuesEx(1, $iblockId, ['COLOR' => 'red']);
+        \Bitrix\Iblock\ElementTable::getList(['filter' => ['IBLOCK_ID' => $iblockId]]);
+    }
+}
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const numericUsages = await searchIblockUsages(dbFile, { iblockId: "12", api: "CIBlockElement::GetList", limit: 10 });
+  assert.equal(numericUsages?.length, 1);
+  assert.equal(numericUsages?.[0]?.kind, "project");
+  assert.equal(numericUsages?.[0]?.relativeFile, path.join("local", "php_interface", "iblock.php"));
+
+  const constantUsages = await searchIblockUsages(dbFile, { iblockId: "CATALOG_IBLOCK_ID", limit: 10 });
+  assert.equal(constantUsages?.[0]?.api, "CIBlockElement::GetList");
+
+  const sectionUsages = await searchIblockUsages(dbFile, { api: "CIBlockSection::GetList", limit: 10 });
+  assert.equal(sectionUsages?.[0]?.iblockId, "NEWS_IBLOCK_ID");
+
+  const propertyUsages = await searchIblockUsages(dbFile, { api: "CIBlockElement::SetPropertyValuesEx", limit: 10 });
+  assert.equal(propertyUsages?.[0]?.iblockId, "unknown");
+
+  const d7Usages = await searchIblockUsages(dbFile, { api: "Bitrix\\Iblock\\ElementTable::getList", limit: 10 });
+  assert.equal(d7Usages?.[0]?.iblockId, "$iblockId");
+  assert.equal(d7Usages?.[0]?.contextName, "CatalogUsage::load");
+
+  const fileRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "iblock", targetName: "12", relationType: "uses_iblock", limit: 10 });
+  assert.equal(fileRelations?.[0]?.module, "iblock");
+  assert.equal(fileRelations?.[0]?.kind, "project");
+  assert.equal(fileRelations?.[0]?.metadata?.api, "CIBlockElement::GetList");
+
+  const methodRelations = await searchBitrixRelations(dbFile, { sourceType: "method", sourceName: "CatalogUsage::load", targetType: "iblock", targetName: "$iblockId", relationType: "uses_iblock", limit: 10 });
+  assert.ok((methodRelations?.length ?? 0) >= 1);
 });
 
 test("component template path resolution covers site and source templates", () => {

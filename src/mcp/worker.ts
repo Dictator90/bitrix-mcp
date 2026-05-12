@@ -3,11 +3,11 @@ import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOrmEntityResults, formatOrmUsageResults, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOrmEntityResults, formatOrmUsageResults, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -23,6 +23,7 @@ type WorkerTask =
   | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
   | { name: "searchMailEvents"; paths: RuntimePaths; query: MailEventSearchQuery & MailEventSearchFormatOptions }
   | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions }
+  | { name: "searchIblockUsages"; paths: RuntimePaths; query: IblockUsageSearchQuery & IblockUsageSearchFormatOptions }
   | { name: "searchOrmEntities"; paths: RuntimePaths; query: OrmSearchQuery & OrmSearchFormatOptions }
   | { name: "getOrmEntityMap"; paths: RuntimePaths; query: OrmEntityMapQuery & OrmSearchFormatOptions }
   | { name: "searchOrmUsages"; paths: RuntimePaths; query: OrmUsageSearchQuery & OrmSearchFormatOptions }
@@ -82,6 +83,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchModuleUsages": {
       const results = await searchModuleUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatModuleUsageSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchIblockUsages": {
+      const results = await searchIblockUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatIblockUsageSearchResults(results, task.query), null, 2) }] };
     }
     case "searchOrmEntities": {
       const results = await searchOrmEntities(sqlitePath(task.paths.dataDir), task.query) ?? [];

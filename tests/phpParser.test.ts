@@ -391,3 +391,26 @@ $APPLICATION->IncludeComponent('vendor:demo', '', ['IBLOCK_ID' => $dynamicIblock
   assert.equal(demo?.template, ".default");
   assert.deepEqual(demo?.params, [{ name: "IBLOCK_ID", value: "unknown" }]);
 });
+
+test("parsePhpSymbolsWithDiagnostics extracts common IBlock usages", () => {
+  const result = parsePhpSymbolsWithDiagnostics(String.raw`<?php
+class CatalogReader {
+    public function load($iblockId) {
+        CIBlockElement::GetList([], ["IBLOCK_ID" => 12]);
+        CIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);
+        CIBlockSection::GetList([], ['IBLOCK_ID' => NEWS_IBLOCK_ID]);
+        CIBlockElement::SetPropertyValuesEx($id, $iblockId, ['COLOR' => 'red']);
+        \Bitrix\Iblock\ElementTable::getList(['filter' => ['IBLOCK_ID' => $iblockId]]);
+    }
+}
+`, "/srv/site/local/php_interface/iblock.php");
+
+  assert.deepEqual(result.iblockUsages.map((usage) => [usage.api, usage.iblockId]), [
+    ["CIBlockElement::GetList", "12"],
+    ["CIBlockElement::GetList", "CATALOG_IBLOCK_ID"],
+    ["CIBlockSection::GetList", "NEWS_IBLOCK_ID"],
+    ["CIBlockElement::SetPropertyValuesEx", "unknown"],
+    ["Bitrix\\Iblock\\ElementTable::getList", "$iblockId"]
+  ]);
+  assert.ok(result.iblockUsages.every((usage) => usage.contextName === "CatalogReader::load"));
+});

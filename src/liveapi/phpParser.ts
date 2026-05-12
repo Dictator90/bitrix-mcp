@@ -1,4 +1,4 @@
-import type { ComponentParamRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
 
@@ -350,6 +350,54 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
   return symbols;
 }
 
+
+const IBLOCK_API_REGEX_MAP = new Map<string, string>([
+  ["ciblockelement::getlist", "CIBlockElement::GetList"],
+  ["ciblockelement::getbyid", "CIBlockElement::GetByID"],
+  ["ciblockelement::setpropertyvaluesex", "CIBlockElement::SetPropertyValuesEx"],
+  ["ciblockelement::add", "CIBlockElement::Add"],
+  ["ciblockelement::update", "CIBlockElement::Update"],
+  ["ciblocksection::getlist", "CIBlockSection::GetList"],
+  ["ciblocksection::add", "CIBlockSection::Add"],
+  ["ciblocksection::update", "CIBlockSection::Update"],
+  ["ciblockpropertyenum::getlist", "CIBlockPropertyEnum::GetList"],
+  ["bitrix\\iblock\\elementtable::getlist", "Bitrix\\Iblock\\ElementTable::getList"],
+  ["bitrix\\iblock\\sectiontable::getlist", "Bitrix\\Iblock\\SectionTable::getList"]
+]);
+
+function parseIblockIdFromArgs(argsSource: string): string {
+  const pattern = /["']IBLOCK_ID["']\s*=>\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\$[A-Za-z_][A-Za-z0-9_]*|\\?[A-Za-z_][A-Za-z0-9_\\]*|-?\d+)/i;
+  const match = argsSource.match(pattern);
+  if (!match) return "unknown";
+  const raw = match[1].trim();
+  return unquotePhpString(raw) ?? raw.replace(/^\\/u, "");
+}
+
+function parsePhpIblockUsagesWithRegex(source: string, filePath: string): IblockUsageRecord[] {
+  const usages: IblockUsageRecord[] = [];
+  const callRegex = /(?<![A-Za-z0-9_\\])((?:\\?Bitrix\\Iblock\\)?(?:CIBlockElement|CIBlockSection|CIBlockPropertyEnum|ElementTable|SectionTable))::([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  for (const match of source.matchAll(callRegex)) {
+    const start = match.index ?? 0;
+    const className = match[1].replace(/^\\/u, "");
+    const normalizedClass = className.includes("\\") ? className : className;
+    const api = IBLOCK_API_REGEX_MAP.get(`${normalizedClass.toLowerCase()}::${match[2].toLowerCase()}`);
+    if (!api) continue;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const argsSource = source.slice(openParenIndex + 1, end - 1);
+    usages.push({
+      type: "iblock_usage",
+      iblockId: parseIblockIdFromArgs(argsSource),
+      api,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+  return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -359,6 +407,7 @@ export interface PhpParseResult {
   moduleUsages: ModuleUsageRecord[];
   ormEntities: OrmEntityRecord[];
   ormUsages: OrmUsageRecord[];
+  iblockUsages: IblockUsageRecord[];
   warnings: IndexWarning[];
 }
 
@@ -372,7 +421,7 @@ export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string)
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), warnings: [warning] };
   }
 }
 

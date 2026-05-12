@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "./template.js";
-import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -70,6 +70,15 @@ export interface ModuleUsageSearchQuery {
   module?: string;
   call?: string;
   kind?: IndexKind | IndexKind[];
+  file?: string;
+  limit?: number;
+}
+
+export interface IblockUsageSearchQuery {
+  query?: string;
+  iblockId?: string;
+  api?: string;
+  kind?: IndexKind | IndexKind[] | string | string[];
   file?: string;
   limit?: number;
 }
@@ -171,6 +180,23 @@ interface ModuleUsageRow {
   relative_file: string | null;
   line: number;
   signature: string;
+}
+
+
+interface IblockUsageRow {
+  id: number;
+  file_id: number;
+  kind: IndexKind;
+  root: string;
+  iblock_id: string;
+  api: string;
+  file: string;
+  relative_file: string | null;
+  line: number;
+  signature: string;
+  context_type: IblockUsageRecord["contextType"] | null;
+  context_name: string | null;
+  component: string | null;
 }
 
 interface OrmEntityRow {
@@ -290,6 +316,23 @@ function parseJsonArray<T>(value: string | null): T[] {
   } catch {
     return [];
   }
+}
+
+
+function rowToIblockUsage(row: IblockUsageRow): IblockUsageRecord {
+  return {
+    type: "iblock_usage",
+    kind: row.kind,
+    iblockId: row.iblock_id,
+    api: row.api,
+    file: row.file,
+    relativeFile: row.relative_file ?? undefined,
+    line: row.line,
+    signature: row.signature,
+    contextType: row.context_type ?? undefined,
+    contextName: row.context_name ?? undefined,
+    component: row.component ?? undefined
+  };
 }
 
 function rowToOrmEntity(row: OrmEntityRow): OrmEntityRecord {
@@ -659,6 +702,22 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         signature TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS iblock_usages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        root TEXT NOT NULL,
+        iblock_id TEXT NOT NULL,
+        api TEXT NOT NULL,
+        file TEXT NOT NULL,
+        relative_file TEXT,
+        line INTEGER NOT NULL,
+        signature TEXT NOT NULL,
+        context_type TEXT,
+        context_name TEXT,
+        component TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL,
@@ -747,6 +806,11 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_orm_usages_method ON orm_usages(method);
       CREATE INDEX IF NOT EXISTS idx_orm_usages_kind ON orm_usages(kind);
       CREATE INDEX IF NOT EXISTS idx_orm_usages_file ON orm_usages(file);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_iblock_id ON iblock_usages(iblock_id);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_api ON iblock_usages(api);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_kind ON iblock_usages(kind);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_file ON iblock_usages(file);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_relative_file ON iblock_usages(relative_file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
@@ -937,6 +1001,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO orm_usages (file_id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertIblockUsage = db.prepare(`
+      INSERT INTO iblock_usages (file_id, kind, root, iblock_id, api, file, relative_file, line, signature, context_type, context_name, component)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     const insertSymbolFts = db.prepare(`
       INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -963,6 +1031,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteModuleUsagesForFile = db.prepare("DELETE FROM module_usages WHERE file_id = ?");
     const deleteOrmEntitiesForFile = db.prepare("DELETE FROM orm_entities WHERE file_id = ?");
     const deleteOrmUsagesForFile = db.prepare("DELETE FROM orm_usages WHERE file_id = ?");
+    const deleteIblockUsagesForFile = db.prepare("DELETE FROM iblock_usages WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
@@ -976,6 +1045,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         db.prepare("DELETE FROM module_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM orm_entities WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM orm_usages WHERE kind = ?").run(manifest.kind);
+        db.prepare("DELETE FROM iblock_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
         existingByPath.clear();
       } else {
@@ -986,6 +1056,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             deleteModuleUsagesForFile.run(file.id);
             deleteOrmEntitiesForFile.run(file.id);
             deleteOrmUsagesForFile.run(file.id);
+            deleteIblockUsagesForFile.run(file.id);
             deleteRelationsForFile.run(file.path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
@@ -1006,6 +1077,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteModuleUsagesForFile.run(existing.id);
           deleteOrmEntitiesForFile.run(existing.id);
           deleteOrmUsagesForFile.run(existing.id);
+          deleteIblockUsagesForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
           deleteRelationsForFile.run(file.path);
         }
@@ -1176,6 +1248,18 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         for (const usage of file.ormUsages ?? []) {
           insertOrmUsage.run(fileId, file.kind, manifest.root, usage.entity, usage.method, usage.usageKind, nullable(usage.module), usage.file, nullable(usage.relativeFile ?? file.relativePath), usage.line, nullable(usage.signature));
           insertRelation.run("file", file.relativePath, "orm_entity", usage.entity, "uses_orm_entity", usage.file, usage.line, nullable(usage.module), nullable(file.kind), nullable(usage.signature), JSON.stringify({ method: usage.method, usageKind: usage.usageKind }));
+        }
+        for (const usage of file.iblockUsages ?? []) {
+          const usageKind = usage.kind ?? file.kind;
+          const relativeFile = usage.relativeFile ?? file.relativePath;
+          insertIblockUsage.run(fileId, usageKind, manifest.root, usage.iblockId, usage.api, usage.file, nullable(relativeFile), usage.line, usage.signature, nullable(usage.contextType), nullable(usage.contextName), nullable(usage.component));
+          insertRelation.run("file", relativeFile, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          if (usage.contextType && usage.contextName) {
+            insertRelation.run(usage.contextType, usage.contextName, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          }
+          if (usage.component) {
+            insertRelation.run("component", usage.component, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          }
         }
         for (const relation of componentRelationsForFile(file)) {
           insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
@@ -1584,6 +1668,57 @@ function likeValue(value: string): string {
   return `%${value.trim().replace(/[\\%_]/g, "\\$&")}%`;
 }
 
+export async function searchIblockUsages(dbFile: string, query: IblockUsageSearchQuery): Promise<IblockUsageRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (query.query !== undefined && query.query.trim()) {
+      const like = `%${query.query.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      filters.push("(iblock_id LIKE ? ESCAPE '\\' OR api LIKE ? ESCAPE '\\' OR coalesce(signature, '') LIKE ? ESCAPE '\\' OR coalesce(context_name, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like);
+    }
+    if (query.iblockId !== undefined) {
+      filters.push("iblock_id = ?");
+      params.push(query.iblockId);
+    }
+    if (query.api !== undefined) {
+      filters.push("api = ?");
+      params.push(query.api);
+    }
+    if (query.file !== undefined) {
+      filters.push("(file = ? OR relative_file = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, file_id, kind, root, iblock_id, api, file, relative_file, line, signature, context_type, context_name, component
+      FROM iblock_usages
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as IblockUsageRow[];
+    return rows.map(rowToIblockUsage);
+  } finally {
+    db.close();
+  }
+}
+
 export async function searchOrmEntities(dbFile: string, query: OrmSearchQuery): Promise<OrmEntityRecord[] | undefined> {
   try {
     await fs.access(dbFile);
@@ -1745,6 +1880,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
     const ormEntitySelect = db.prepare("SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature FROM orm_entities WHERE file_id = ? ORDER BY id");
     const ormUsageSelect = db.prepare("SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature FROM orm_usages WHERE file_id = ? ORDER BY id");
+    const iblockUsageSelect = db.prepare("SELECT id, file_id, kind, root, iblock_id, api, file, relative_file, line, signature, context_type, context_name, component FROM iblock_usages WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,
@@ -1755,7 +1891,8 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       symbols: (symbolSelect.all(file.id) as unknown as SymbolRow[]).map(rowToSymbol),
       moduleUsages: (moduleUsageSelect.all(file.id) as unknown as ModuleUsageRow[]).map(rowToModuleUsage),
       ormEntities: (ormEntitySelect.all(file.id) as unknown as OrmEntityRow[]).map(rowToOrmEntity),
-      ormUsages: (ormUsageSelect.all(file.id) as unknown as OrmUsageRow[]).map(rowToOrmUsage)
+      ormUsages: (ormUsageSelect.all(file.id) as unknown as OrmUsageRow[]).map(rowToOrmUsage),
+      iblockUsages: (iblockUsageSelect.all(file.id) as unknown as IblockUsageRow[]).map(rowToIblockUsage)
     }));
     const warningRow = db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
     return {
