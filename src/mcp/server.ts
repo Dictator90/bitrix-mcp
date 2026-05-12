@@ -201,7 +201,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Search indexed Bitrix symbols: functions, classes, methods, events, components, constants, and frontend exports.",
     {
       query: z.string().min(1),
-      type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]).optional(),
+      type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant", "mail_event"]).optional(),
       module: z.string().optional(),
       kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
       preferLocal: z.boolean().optional().describe("When true (default), boost project and template matches ahead of Bitrix core/install matches with equal relevance."),
@@ -244,6 +244,25 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     },
     async ({ query, module, kind, file, limit, format }) => {
       return runWorkerTask("bitrix_agent_search", { name: "searchAgents", paths, query: { query, module, kind, file, limit, format } });
+    }
+  );
+
+
+  server.tool(
+    "bitrix_mail_event_search",
+    "Search indexed Bitrix mail event sending calls and optionally include mail-related OnBeforeEventSend/OnBeforeEventAdd handlers.",
+    {
+      query: z.string().optional(),
+      eventName: z.string().optional(),
+      api: z.string().optional(),
+      kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
+      file: z.string().optional(),
+      includeHandlers: z.boolean().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns eventName/api/kind/file/line/signature; full returns raw mail event symbol records.")
+    },
+    async ({ query, eventName, api, kind, file, includeHandlers, limit, format }) => {
+      return runWorkerTask("bitrix_mail_event_search", { name: "searchMailEvents", paths, query: { query, eventName, api, kind, file, includeHandlers, limit, format } });
     }
   );
 

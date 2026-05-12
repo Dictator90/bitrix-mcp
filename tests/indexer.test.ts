@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchAgents, searchBitrixRelations, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -829,4 +829,67 @@ ModuleManager::isModuleInstalled('sale');
   assert.equal(relations?.[0]?.module, "iblock");
   assert.equal(relations?.[0]?.kind, "project");
   assert.deepEqual(relations?.[0]?.metadata, { call: "Loader::includeModule" });
+});
+
+test("buildIndex indexes Bitrix mail events and writes mail handler relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-mail-events-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-mail-events-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/service.php"), String.raw`<?php
+CEvent::Send('SALE_NEW_ORDER', SITE_ID, $fields);
+CEvent::SendImmediate('SALE_STATUS_CHANGED', 's1', $fields);
+\CEvent::Send('SALE_CANCEL_ORDER', 's2', $fields);
+\Bitrix\Main\Mail\Event::send([
+    'EVENT_NAME' => 'SALE_DELIVERY',
+    'LID' => 's3',
+    'C_FIELDS' => ['ID' => 1],
+]);
+CEvent::Send($dynamicEvent, SITE_ID, $fields);
+`, "utf8");
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
+\Bitrix\Main\EventManager::getInstance()->addEventHandler('main', 'OnBeforeEventAdd', 'beforeEventAdd');
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const mailEvents = await searchMailEvents(dbFile, { eventName: "SALE_NEW_ORDER", includeHandlers: true, limit: 10 });
+  assert.equal(mailEvents?.length, 1);
+  assert.equal(mailEvents?.[0]?.api, "CEvent::Send");
+  assert.equal(mailEvents?.[0]?.siteId, "SITE_ID");
+  assert.equal(mailEvents?.[0]?.relativeFile, path.join("local", "php_interface", "service.php"));
+  assert.equal(mailEvents?.[0]?.handlers?.length, 2);
+  assert.ok(mailEvents?.[0]?.handlers?.some((handler) => handler.eventName === "OnBeforeEventSend" && handler.handlerClass === "MailHandlers"));
+
+  const immediateEvents = await searchMailEvents(dbFile, { api: "CEvent::SendImmediate", limit: 10 });
+  assert.equal(immediateEvents?.[0]?.eventName, "SALE_STATUS_CHANGED");
+
+  const d7Events = await searchMailEvents(dbFile, { query: "SALE_DELIVERY", limit: 10 });
+  assert.equal(d7Events?.[0]?.api, "Bitrix\\Main\\Mail\\Event::send");
+  assert.equal(d7Events?.[0]?.siteId, "s3");
+
+  const dynamicEvents = await searchMailEvents(dbFile, { query: "CEvent::Send", limit: 10 });
+  assert.ok(dynamicEvents?.some((event) => event.eventName === undefined && event.name === "CEvent::Send"));
+
+  const fileRelations = await searchBitrixRelations(dbFile, {
+    sourceType: "file",
+    sourceName: path.join("local", "php_interface", "service.php"),
+    targetType: "mail_event",
+    targetName: "SALE_NEW_ORDER",
+    relationType: "sends_mail_event",
+    limit: 10
+  });
+  assert.equal(fileRelations?.[0]?.metadata?.api, "CEvent::Send");
+  assert.equal(fileRelations?.[0]?.metadata?.siteId, "SITE_ID");
+
+  const handlerRelations = await searchBitrixRelations(dbFile, {
+    sourceType: "mail_event",
+    sourceName: "SALE_NEW_ORDER",
+    targetType: "event_handler",
+    relationType: "handled_by_event_handler",
+    limit: 10
+  });
+  assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventSend")));
+  assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventAdd")));
 });

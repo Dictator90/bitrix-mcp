@@ -12,7 +12,7 @@ export interface IndexFile {
 }
 
 export interface SymbolRecord {
-  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent";
+  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event";
   kind?: IndexKind;
   language?: string;
   name: string;
@@ -24,6 +24,8 @@ export interface SymbolRecord {
   anonymous?: boolean;
   eventName?: string;
   agentAction?: "AddAgent" | "RemoveAgent" | "GetList";
+  api?: string;
+  siteId?: string;
   periodic?: string;
   interval?: number;
   relativeFile?: string;

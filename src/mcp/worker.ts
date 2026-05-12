@@ -2,11 +2,11 @@ import { parentPort, workerData } from "node:worker_threads";
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { searchAgents, searchBitrixRelations, searchModuleUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ModuleUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatModuleUsageSearchResults, type ModuleUsageSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -18,6 +18,7 @@ type WorkerTask =
   | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions }
   | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions }
   | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
+  | { name: "searchMailEvents"; paths: RuntimePaths; query: MailEventSearchQuery & MailEventSearchFormatOptions }
   | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
@@ -58,6 +59,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchBitrixRelations": {
       const results = await searchBitrixRelations(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatBitrixRelationSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchMailEvents": {
+      const results = await searchMailEvents(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatMailEventSearchResults(results, task.query), null, 2) }] };
     }
     case "searchModuleUsages": {
       const results = await searchModuleUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];

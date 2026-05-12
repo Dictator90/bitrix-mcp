@@ -263,3 +263,43 @@ CAgent::AddAgent($dynamicName, $dynamicModule, $periodic, $interval);
   assert.ok(agents.some((agent) => agent.agentAction === "GetList"));
   assert.ok(agents.some((agent) => agent.agentAction === "AddAgent" && agent.name === "CAgent::AddAgent"));
 });
+
+test("parsePhpSymbols extracts Bitrix mail event sending calls", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+CEvent::Send('SALE_NEW_ORDER', SITE_ID, $fields);
+CEvent::SendImmediate('SALE_STATUS_CHANGED', 's1', $fields);
+\CEvent::Send('SALE_CANCEL_ORDER', 's2', $fields);
+\Bitrix\Main\Mail\Event::send([
+    'EVENT_NAME' => 'SALE_DELIVERY',
+    'LID' => 's3',
+    'C_FIELDS' => ['ID' => 1],
+]);
+CEvent::Send($dynamicEvent, SITE_ID, $fields);
+`, "/srv/site/local/modules/vendor.module/lib/mail.php");
+
+  const mailEvents = symbols.filter((symbol) => symbol.type === "mail_event");
+  assert.equal(mailEvents.length, 5);
+  assert.deepEqual(mailEvents.map((symbol) => symbol.eventName), ["SALE_NEW_ORDER", "SALE_STATUS_CHANGED", "SALE_CANCEL_ORDER", "SALE_DELIVERY", undefined]);
+  assert.equal(mailEvents[0].siteId, "SITE_ID");
+  assert.equal(mailEvents[0].api, "CEvent::Send");
+  assert.equal(mailEvents[1].api, "CEvent::SendImmediate");
+  assert.equal(mailEvents[1].siteId, "s1");
+  assert.equal(mailEvents[3].api, "Bitrix\\Main\\Mail\\Event::send");
+  assert.equal(mailEvents[3].siteId, "s3");
+  assert.equal(mailEvents[4].name, "CEvent::Send");
+});
+
+test("parsePhpSymbols extracts mail-related event handlers", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
+\Bitrix\Main\EventManager::getInstance()->addEventHandler('main', 'OnBeforeEventAdd', 'beforeEventAdd');
+`, "/srv/site/local/php_interface/init.php");
+
+  const beforeSend = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnBeforeEventSend");
+  assert.equal(beforeSend?.module, "main");
+  assert.equal(beforeSend?.handlerClass, "MailHandlers");
+  assert.equal(beforeSend?.handlerMethod, "beforeSend");
+
+  const beforeAdd = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnBeforeEventAdd");
+  assert.equal(beforeAdd?.handlerFunction, "beforeEventAdd");
+});

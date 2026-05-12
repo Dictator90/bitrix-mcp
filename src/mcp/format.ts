@@ -185,6 +185,37 @@ export function formatAgentSearchResults(results: SymbolRecord[] | undefined, op
   }));
 }
 
+
+export interface MailEventSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatMailEventSearchResults(results: SymbolRecord[] | undefined, options: MailEventSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((mailEvent) => compactObject({
+    eventName: mailEvent.eventName,
+    api: mailEvent.api,
+    siteId: mailEvent.siteId,
+    kind: mailEvent.kind,
+    file: mailEvent.relativeFile ?? mailEvent.file,
+    line: mailEvent.line,
+    signature: mailEvent.signature,
+    handlers: (mailEvent as SymbolRecord & { handlers?: SymbolRecord[] }).handlers?.map((handler) => compactObject({
+      eventName: handler.eventName,
+      handlerClass: handler.handlerClass,
+      handlerMethod: handler.handlerMethod,
+      handlerFunction: handler.handlerFunction,
+      kind: handler.kind,
+      file: handler.relativeFile ?? handler.file,
+      line: handler.line,
+      signature: handler.signature
+    }))
+  }));
+}
+
 export interface ModuleUsageSearchFormatOptions {
   format?: "compact" | "full";
 }

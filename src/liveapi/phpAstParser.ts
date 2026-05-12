@@ -180,6 +180,72 @@ function maybeBitrixAgentSymbol(source: string, filePath: string, node: PhpNode,
   };
 }
 
+
+function literalArrayValue(node: unknown, key: string, context: ParserContext): string | undefined {
+  if (!isNode(node) || node.kind !== "array" || !Array.isArray(node.items)) return undefined;
+  for (const item of node.items.filter(isNode)) {
+    const itemKey = literalString(item.key, context);
+    if (itemKey === key) {
+      return literalString(item.value, context);
+    }
+  }
+  return undefined;
+}
+
+function siteIdValue(node: unknown, context: ParserContext): string | undefined {
+  if (!isNode(node)) return literalString(node, context);
+  if (node.kind === "name") return nodeName(node)?.replace(/^\\/u, "");
+  return literalString(node, context);
+}
+
+function normalizedMailClassName(name: string): string {
+  return name.replace(/^\\/u, "").replace(/\\+/gu, "\\").toLowerCase();
+}
+
+function maybeMailEventSymbol(source: string, filePath: string, node: PhpNode, context: ParserContext): SymbolRecord | undefined {
+  const what = isNode(node.what) ? node.what : undefined;
+  if (!what || what.kind !== "staticlookup") return undefined;
+  const methodName = nodeName(what.offset);
+  const targetName = callTargetName(node, context);
+  if (!methodName || !targetName) return undefined;
+
+  const normalizedClass = normalizedMailClassName(targetName);
+  const normalizedMethod = methodName.toLowerCase();
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+
+  if (normalizedClass === "cevent" && (normalizedMethod === "send" || normalizedMethod === "sendimmediate")) {
+    const api = `CEvent::${methodName}`;
+    const eventName = literalString(args[0], context);
+    return {
+      type: "mail_event",
+      name: eventName ?? api,
+      eventName,
+      siteId: siteIdValue(args[1], context),
+      api,
+      file: filePath,
+      line: nodeLine(node),
+      signature: sourceSlice(source, node)
+    };
+  }
+
+  if (normalizedClass === "bitrix\\main\\mail\\event" && normalizedMethod === "send") {
+    const api = "Bitrix\\Main\\Mail\\Event::send";
+    const eventName = literalArrayValue(args[0], "EVENT_NAME", context);
+    return {
+      type: "mail_event",
+      name: eventName ?? api,
+      eventName,
+      siteId: literalArrayValue(args[0], "LID", context),
+      api,
+      file: filePath,
+      line: nodeLine(node),
+      signature: sourceSlice(source, node)
+    };
+  }
+
+  return undefined;
+}
+
 function arrayValues(node: unknown): PhpNode[] {
   if (!isNode(node) || node.kind !== "array" || !Array.isArray(node.items)) return [];
   return node.items
@@ -452,6 +518,9 @@ function visit(source: string, filePath: string, module: string | undefined, nod
     case "call": {
       const agent = maybeBitrixAgentSymbol(source, filePath, node, context);
       if (agent) symbols.push(agent);
+
+      const mailEvent = maybeMailEventSymbol(source, filePath, node, context);
+      if (mailEvent) symbols.push(mailEvent);
 
       const event = maybeEventSymbol(source, filePath, node, context);
       if (event) symbols.push(event);
