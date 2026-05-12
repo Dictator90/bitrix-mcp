@@ -1,5 +1,5 @@
 import phpParser from "php-parser";
-import type { EventRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, EventRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 type PhpNode = {
   kind: string;
@@ -474,6 +474,28 @@ function buildEvent(source: string, filePath: string, module: string | undefined
   };
 }
 
+
+const COMPONENT_PARAM_KEYS = new Set(["IBLOCK_ID", "CACHE_TYPE", "CACHE_TIME", "SEF_MODE", "AJAX_MODE"]);
+
+function normalizeComponentTemplate(value: string | undefined): string {
+  return value && value.trim() ? value : ".default";
+}
+
+function componentParams(node: unknown, context: ParserContext): ComponentParamRecord[] {
+  if (!isNode(node) || node.kind !== "array" || !Array.isArray(node.items)) return [];
+  const params: ComponentParamRecord[] = [];
+  for (const item of node.items.filter(isNode)) {
+    const key = literalString(item.key, context);
+    if (!key || !COMPONENT_PARAM_KEYS.has(key)) continue;
+    const value = literalValue(item.value, context);
+    params.push({
+      name: key,
+      value: typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null ? value : "unknown"
+    });
+  }
+  return params;
+}
+
 function maybeEventSymbol(source: string, filePath: string, node: PhpNode, context: ParserContext): SymbolRecord | undefined {
   const name = callName(node)?.toLowerCase();
   const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
@@ -498,9 +520,12 @@ function componentSymbol(source: string, filePath: string, module: string | unde
   const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
   const componentName = literalString(args[0], context);
   if (!componentName) return undefined;
+  const params = componentParams(args[2], context);
   return {
     type: "component",
     name: componentName,
+    template: normalizeComponentTemplate(literalString(args[1], context)),
+    params,
     module,
     file: filePath,
     line: nodeLine(node),

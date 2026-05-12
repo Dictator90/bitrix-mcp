@@ -13,6 +13,11 @@ export interface IndexFile {
   ormUsages?: OrmUsageRecord[];
 }
 
+export interface ComponentParamRecord {
+  name: string;
+  value: string | number | boolean | null | "unknown";
+}
+
 export interface SymbolRecord {
   type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event";
   kind?: IndexKind;
@@ -35,6 +40,8 @@ export interface SymbolRecord {
   line: number;
   signature?: string;
   description?: string;
+  template?: string;
+  params?: ComponentParamRecord[];
 }
 
 export interface OrmFieldRecord {

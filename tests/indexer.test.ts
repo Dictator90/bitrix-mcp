@@ -9,10 +9,11 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
+import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
@@ -960,4 +961,71 @@ Section::compileEntityByIblock(7);
   assert.ok(referenceRelations?.some((relation) => relation.targetName === "Vendor\\Module\\UserTable"));
   const usageRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "orm_entity", targetName: "Vendor\\Module\\ProductTable", relationType: "uses_orm_entity", limit: 10 });
   assert.ok((usageRelations?.length ?? 0) >= 6);
+});
+
+test("component template path resolution covers site and source templates", () => {
+  assert.deepEqual(possibleComponentTemplateRelativePaths("bitrix:catalog.section", ".default"), [
+    "local/templates/<site>/components/bitrix/catalog.section/.default",
+    "bitrix/templates/<site>/components/bitrix/catalog.section/.default",
+    "local/components/bitrix/catalog.section/templates/.default",
+    "bitrix/components/bitrix/catalog.section/templates/.default"
+  ]);
+  assert.deepEqual(possibleComponentTemplateRelativePaths("vendor:demo", ".default"), [
+    "local/templates/<site>/components/vendor/demo/.default",
+    "bitrix/templates/<site>/components/vendor/demo/.default",
+    "local/components/vendor/demo/templates/.default",
+    "bitrix/components/vendor/demo/templates/.default"
+  ]);
+});
+
+test("buildIndex indexes component calls, files, params, relations, and context", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-components-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-components-data-"));
+  const callFile = path.join(root, "index.php");
+  const templateDir = path.join(root, "local", "templates", "site", "components", "bitrix", "catalog.section", ".default");
+  const sourceTemplateDir = path.join(root, "local", "components", "bitrix", "catalog.section", "templates", ".default");
+  await fs.mkdir(templateDir, { recursive: true });
+  await fs.mkdir(sourceTemplateDir, { recursive: true });
+  await fs.writeFile(callFile, String.raw`<?php
+$APPLICATION->IncludeComponent(
+  "bitrix:catalog.section",
+  "",
+  ["IBLOCK_ID" => 42, "CACHE_TYPE" => "A", "CACHE_TIME" => 3600]
+);
+$APPLICATION->IncludeComponent('vendor:demo', '.default', ['AJAX_MODE' => 'Y']);
+`, "utf8");
+  await fs.writeFile(path.join(templateDir, "template.php"), "<?php echo 'template';\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "result_modifier.php"), "<?php $arResult['X'] = 1;\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "script.js"), "console.log('asset');\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "style.css"), ".catalog{}\n", "utf8");
+  await fs.writeFile(path.join(sourceTemplateDir, ".parameters.php"), "<?php $arComponentParameters = [];\n", "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  await buildIndex({ root, kind: "template", outFile: path.join(dataDir, "template-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const components = await searchComponents(dbFile, { component: "bitrix:catalog.section", limit: 10 });
+  assert.equal(components?.length, 1);
+  assert.equal(components?.[0]?.template, ".default");
+  assert.deepEqual(components?.[0]?.params, [
+    { name: "IBLOCK_ID", value: 42 },
+    { name: "CACHE_TYPE", value: "A" },
+    { name: "CACHE_TIME", value: 3600 }
+  ]);
+
+  const relations = await searchBitrixRelations(dbFile, { sourceType: "component", sourceName: "bitrix:catalog.section", limit: 20 });
+  assert.ok(relations?.some((relation) => relation.relationType === "uses_template"));
+  assert.ok(relations?.some((relation) => relation.relationType === "uses_iblock" && relation.targetName === "42"));
+  assert.ok(relations?.some((relation) => relation.relationType === "component_template_file" && relation.targetName.endsWith("template.php")));
+  assert.ok(relations?.some((relation) => relation.relationType === "component_asset" && relation.targetName.endsWith("script.js")));
+
+  const context = await getComponentContext(dbFile, { component: "bitrix:catalog.section", template: ".default" });
+  assert.equal(context?.component, "bitrix:catalog.section");
+  assert.equal(context?.template, ".default");
+  assert.equal(context?.calls.length, 1);
+  assert.ok(context?.templateFiles.some((file) => file.relativePath.endsWith("template.php")));
+  assert.ok(context?.templateFiles.some((file) => file.relativePath.endsWith(".parameters.php")));
+  assert.ok(context?.assets.some((file) => file.relativePath.endsWith("script.js")));
+  assert.ok(context?.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 42));
+  assert.ok(context?.relations.some((relation) => relation.relationType === "uses_template"));
 });

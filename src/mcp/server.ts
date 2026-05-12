@@ -266,6 +266,41 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
+
+  server.tool(
+    "bitrix_component_search",
+    "Search indexed Bitrix IncludeComponent calls by component name, template, kind, file, params, or free text.",
+    {
+      query: z.string().optional(),
+      component: z.string().optional(),
+      template: z.string().optional(),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ query, component, template, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_component_search", { name: "searchComponents", paths, query: { query, component, template, kind, file, limit, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_component_context",
+    "Return calls, resolved template files/assets, extracted params, and stored relations for a Bitrix component usage.",
+    {
+      component: z.string().min(1),
+      template: z.string().optional(),
+      callFile: z.string().optional(),
+      includeFiles: z.boolean().optional(),
+      includeAssets: z.boolean().optional(),
+      includeParams: z.boolean().optional(),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ component, template, callFile, includeFiles, includeAssets, includeParams, format }) => {
+      return runWorkerTask("bitrix_component_context", { name: "getComponentContext", paths, query: { component, template, callFile, includeFiles, includeAssets, includeParams, format } });
+    }
+  );
+
   server.tool(
     "bitrix_module_usage_search",
     "Search indexed Bitrix module include/check API usages by module, call, kind, or file.",

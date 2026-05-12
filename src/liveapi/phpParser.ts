@@ -1,4 +1,4 @@
-import type { IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
 
@@ -159,6 +159,35 @@ function siteIdFromArg(arg: string | undefined): string | undefined {
   return trimmed && /^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(trimmed) ? trimmed.replace(/^\\/u, "") : undefined;
 }
 
+
+const COMPONENT_PARAM_KEYS = ["IBLOCK_ID", "CACHE_TYPE", "CACHE_TIME", "SEF_MODE", "AJAX_MODE"] as const;
+
+function normalizeComponentTemplate(value: string | undefined): string {
+  return value && value.trim() ? value : ".default";
+}
+
+function parsePhpLiteralScalar(value: string | undefined): ComponentParamRecord["value"] {
+  if (value === undefined) return "unknown";
+  const trimmed = value.trim();
+  const stringValue = unquotePhpString(trimmed);
+  if (stringValue !== undefined) return stringValue;
+  if (/^-?\d+(?:\.\d+)?$/u.test(trimmed)) return Number(trimmed);
+  if (/^(true|false)$/iu.test(trimmed)) return trimmed.toLowerCase() === "true";
+  if (/^null$/iu.test(trimmed)) return null;
+  return "unknown";
+}
+
+function parseComponentParams(argsSource: string | undefined): ComponentParamRecord[] {
+  if (!argsSource) return [];
+  const params: ComponentParamRecord[] = [];
+  for (const key of COMPONENT_PARAM_KEYS) {
+    const pattern = new RegExp(String.raw`["']${key}["']\s*=>\s*(["'][\s\S]*?["']|-?\d+(?:\.\d+)?|true|false|null|[^,\]\)]+)`, "i");
+    const match = argsSource.match(pattern);
+    if (match) params.push({ name: key, value: parsePhpLiteralScalar(match[1]) });
+  }
+  return params;
+}
+
 function parsePhpMailEventsWithRegex(source: string, filePath: string): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
   const ceventRegex = /(?<![A-Za-z0-9_\\])\\?CEvent::(Send|SendImmediate)\s*\(/g;
@@ -281,15 +310,25 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
     });
   }
 
-  const componentRegex = /(?:IncludeComponent|includeComponent)\s*\(\s*["']([^"']+)["']/g;
+  const componentRegex = /(?<![A-Za-z0-9_])(?:\$APPLICATION\s*->\s*)?IncludeComponent\s*\(/gi;
   for (const match of source.matchAll(componentRegex)) {
+    const start = match.index ?? 0;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const args = splitTopLevelArgs(source.slice(openParenIndex + 1, end - 1));
+    const componentName = unquotePhpString(args[0]);
+    if (!componentName) continue;
+    const params = parseComponentParams(args[2]);
     symbols.push({
       type: "component",
-      name: match[1],
+      name: componentName,
+      template: normalizeComponentTemplate(unquotePhpString(args[1])),
+      params,
       module,
       file: filePath,
-      line: lineOf(source, match.index ?? 0),
-      signature: match[0]
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
     });
   }
 

@@ -360,3 +360,34 @@ class LegacyTable extends \Bitrix\Main\Entity\DataManager { public static functi
   assert.equal(fq.ormEntities[0].className, "Vendor\\Module\\LegacyTable");
   assert.equal(fq.ormEntities[0].tableName, "legacy");
 });
+
+test("parsePhpSymbols extracts IncludeComponent templates and literal params", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+$APPLICATION->IncludeComponent(
+    "bitrix:catalog.section",
+    ".default",
+    [
+      "IBLOCK_ID" => 17,
+      "CACHE_TYPE" => "A",
+      "CACHE_TIME" => '3600',
+      "SEF_MODE" => $sefMode,
+      "AJAX_MODE" => "N",
+    ]
+);
+$APPLICATION->IncludeComponent('vendor:demo', '', ['IBLOCK_ID' => $dynamicIblock]);
+`, "/srv/site/index.php").filter((symbol) => symbol.type === "component");
+
+  const catalog = symbols.find((symbol) => symbol.name === "bitrix:catalog.section");
+  assert.equal(catalog?.template, ".default");
+  assert.deepEqual(catalog?.params, [
+    { name: "IBLOCK_ID", value: 17 },
+    { name: "CACHE_TYPE", value: "A" },
+    { name: "CACHE_TIME", value: "3600" },
+    { name: "SEF_MODE", value: "unknown" },
+    { name: "AJAX_MODE", value: "N" }
+  ]);
+
+  const demo = symbols.find((symbol) => symbol.name === "vendor:demo");
+  assert.equal(demo?.template, ".default");
+  assert.deepEqual(demo?.params, [{ name: "IBLOCK_ID", value: "unknown" }]);
+});
