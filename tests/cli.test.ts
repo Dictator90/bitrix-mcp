@@ -11,6 +11,7 @@ import type { IndexManifest } from "../src/types.js";
 
 const execFileAsync = promisify(execFile);
 const cliPath = path.resolve("src/cli.ts");
+const tsxLoaderPath = path.resolve("node_modules/tsx/dist/loader.mjs");
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
 async function runCliIndexTemplate(args: string[] = []): Promise<IndexManifest> {
@@ -98,4 +99,27 @@ test("cli doctor --json includes checks and config diagnostics", async () => {
   assert.ok(Array.isArray(parsed.checks));
   assert.ok(parsed.checks.some((check: { name: string }) => check.name === "workspace"));
   assert.ok(Array.isArray(parsed.mcpConfigFiles));
+});
+
+test("cli detect-changes --json emits compact change analysis", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-cli-detect-workspace-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-cli-detect-data-"));
+  await fs.cp(fixtureRoot, workspaceRoot, { recursive: true });
+  await execFileAsync("git", ["init"], { cwd: workspaceRoot });
+  await execFileAsync("git", ["config", "user.email", "tests@example.com"], { cwd: workspaceRoot });
+  await execFileAsync("git", ["config", "user.name", "Bitrix MCP Tests"], { cwd: workspaceRoot });
+  await execFileAsync("git", ["add", "."], { cwd: workspaceRoot });
+  await execFileAsync("git", ["commit", "-m", "initial"], { cwd: workspaceRoot });
+  await execFileAsync("git", ["commit", "--allow-empty", "-m", "baseline"], { cwd: workspaceRoot });
+  await fs.appendFile(path.join(workspaceRoot, "docs/framework/search.md"), "\nCLI update.\n", "utf8");
+
+  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderPath, cliPath, "detect-changes", "--json"], {
+    cwd: workspaceRoot,
+    env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
+  });
+
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.base, "HEAD~1");
+  assert.deepEqual(parsed.changedFiles, [{ file: "docs/framework/search.md", kind: "docs" }]);
+  assert.equal(parsed.summary.files, 1);
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
+import { detectChanges, formatDetectChangesText, type DetectChangesOptions } from "./indexer/detectChanges.js";
 import { buildIndex } from "./indexer/indexer.js";
 import { searchModuleUsages } from "./indexer/sqliteStore.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
@@ -32,6 +33,7 @@ Commands:
   search-modules <module>       Search indexed Bitrix module include/check API usages
   status                        Show SQLite DB path and index counters
   doctor [--json] [--verbose]   Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
+  detect-changes [--base <ref>] [--json] Analyze Git-changed Bitrix files and indexed relations
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
@@ -93,6 +95,49 @@ function parseInitOptions(argv: string[]): InitOptions {
     options.agents = agents;
   }
 
+  return options;
+}
+
+function parseDetectChangesOptions(argv: string[]): DetectChangesOptions {
+  const options: DetectChangesOptions = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--base") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--base requires a git ref.");
+      options.base = next;
+      index += 1;
+    } else if (value.startsWith("--base=")) {
+      options.base = value.slice("--base=".length);
+    } else if (value === "--kind") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--kind requires a file kind.");
+      options.kind = next.split(",").map((item) => item.trim()).filter(Boolean);
+      index += 1;
+    } else if (value.startsWith("--kind=")) {
+      options.kind = value.slice("--kind=".length).split(",").map((item) => item.trim()).filter(Boolean);
+    } else if (value === "--include-source") {
+      options.includeSource = true;
+    } else if (value === "--no-relations") {
+      options.includeRelations = false;
+    } else if (value === "--max-files") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--max-files requires a number.");
+      options.maxFiles = Number(next);
+      index += 1;
+    } else if (value.startsWith("--max-files=")) {
+      options.maxFiles = Number(value.slice("--max-files=".length));
+    } else if (value === "--max-items") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--max-items requires a number.");
+      options.maxItems = Number(next);
+      index += 1;
+    } else if (value.startsWith("--max-items=")) {
+      options.maxItems = Number(value.slice("--max-items=".length));
+    } else if (value === "--full") {
+      options.format = "full";
+    }
+  }
   return options;
 }
 
@@ -232,6 +277,12 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "status") {
     console.log(formatIndexStatus(await readIndexStatus(paths)));
+    return;
+  }
+
+  if (command === "detect-changes") {
+    const result = await detectChanges(paths, parseDetectChangesOptions(argv.slice(1)));
+    console.log(argv.includes("--json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
     return;
   }
 

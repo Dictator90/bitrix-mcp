@@ -1,5 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
+import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery } from "../indexer/sqliteStore.js";
@@ -19,7 +20,8 @@ type WorkerTask =
   | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions }
   | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
   | { name: "searchMailEvents"; paths: RuntimePaths; query: MailEventSearchQuery & MailEventSearchFormatOptions }
-  | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions };
+  | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions }
+  | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
@@ -67,6 +69,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchModuleUsages": {
       const results = await searchModuleUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatModuleUsageSearchResults(results, task.query), null, 2) }] };
+    }
+    case "detectChanges": {
+      const result = await detectChanges(task.paths, task.query);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }
 }
