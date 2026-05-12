@@ -230,3 +230,36 @@ Loader::includeModule($dynamicModule);
     ["iblock", "ModuleManager::isModuleInstalled", 7, "\\Bitrix\\Main\\ModuleManager::isModuleInstalled('iblock')"]
   ]);
 });
+
+test("parsePhpSymbols extracts Bitrix CAgent registrations", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+CAgent::AddAgent(
+    "\\Vendor\\Module\\Agent::run();",
+    "vendor.module",
+    "N",
+    86400
+);
+CAgent::AddAgent("vendor_agent_run();", "vendor.module", "Y", 60);
+CAgent::RemoveAgent("vendor_agent_run();", "vendor.module");
+CAgent::GetList([], []);
+CAgent::AddAgent($dynamicName, $dynamicModule, $periodic, $interval);
+`, "/srv/site/local/modules/vendor.module/install/index.php");
+
+  const agents = symbols.filter((symbol) => symbol.type === "agent");
+  assert.equal(agents.length, 5);
+
+  const staticAgent = agents.find((agent) => agent.name === "\\Vendor\\Module\\Agent::run");
+  assert.equal(staticAgent?.module, "vendor.module");
+  assert.equal(staticAgent?.periodic, "N");
+  assert.equal(staticAgent?.interval, 86400);
+  assert.equal(staticAgent?.agentAction, "AddAgent");
+
+  const functionAgent = agents.find((agent) => agent.name === "vendor_agent_run");
+  assert.equal(functionAgent?.module, "vendor.module");
+  assert.equal(functionAgent?.periodic, "Y");
+  assert.equal(functionAgent?.interval, 60);
+
+  assert.ok(agents.some((agent) => agent.agentAction === "RemoveAgent" && agent.name === "vendor_agent_run"));
+  assert.ok(agents.some((agent) => agent.agentAction === "GetList"));
+  assert.ok(agents.some((agent) => agent.agentAction === "AddAgent" && agent.name === "CAgent::AddAgent"));
+});

@@ -232,6 +232,22 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
 
   server.tool(
+    "bitrix_agent_search",
+    "Search indexed Bitrix CAgent registrations by callable name, module, kind, or file. Compact output is returned by default.",
+    {
+      query: z.string().optional(),
+      module: z.string().optional(),
+      kind: searchKindSchema.optional().describe("Restrict results to one kind or an array of kinds: project, bitrix, template, or install."),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns agent name/module/schedule/location; full returns raw agent symbol records.")
+    },
+    async ({ query, module, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_agent_search", { name: "searchAgents", paths, query: { query, module, kind, file, limit, format } });
+    }
+  );
+
+  server.tool(
     "bitrix_module_usage_search",
     "Search indexed Bitrix module include/check API usages by module, call, kind, or file.",
     {

@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchBitrixRelations, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchAgents, searchBitrixRelations, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -145,6 +145,36 @@ async function createGitDocsRepository(): Promise<string> {
   return repo;
 }
 
+
+
+
+test("buildIndex indexes Bitrix agents and writes relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-agents-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-agents-data-"));
+  const installFile = path.join(root, "local", "modules", "vendor.module", "install", "index.php");
+  await fs.mkdir(path.dirname(installFile), { recursive: true });
+  await fs.writeFile(installFile, String.raw`<?php
+CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400);
+CAgent::AddAgent("vendor_agent_run();", "vendor.module", "Y", 60);
+`, "utf8");
+
+  await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+  const agents = await searchAgents(dbFile, { module: "vendor.module", kind: "install", limit: 10 });
+
+  const staticAgent = agents?.find((agent) => agent.name === "\\Vendor\\Module\\Agent::run");
+  assert.equal(staticAgent?.periodic, "N");
+  assert.equal(staticAgent?.interval, 86400);
+  assert.equal(staticAgent?.relativeFile, path.join("local", "modules", "vendor.module", "install", "index.php"));
+
+  const relations = await searchBitrixRelations(dbFile, { targetType: "agent", targetName: "\\Vendor\\Module\\Agent::run", limit: 10 });
+  assert.ok(relations?.some((relation) => relation.sourceType === "module" && relation.sourceName === "vendor.module" && relation.relationType === "registers_agent"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "file" && relation.relationType === "registers_agent"));
+
+  const methodRelations = await searchBitrixRelations(dbFile, { sourceType: "agent", sourceName: "\\Vendor\\Module\\Agent::run", targetType: "method", limit: 10 });
+  assert.equal(methodRelations?.[0]?.relationType, "calls_method");
+  assert.equal(methodRelations?.[0]?.targetName, "\\Vendor\\Module\\Agent::run");
+});
 
 test("buildIndex records PHP parse fallback diagnostics", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-broken-php-"));
