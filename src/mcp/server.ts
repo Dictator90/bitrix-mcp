@@ -302,6 +302,24 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
+
+  server.tool(
+    "bitrix_detect_changes",
+    "Analyze Git-changed Bitrix files against the SQLite index, returning changed symbols, events, module usages, agents, mail events, relations, risk, and recommendations.",
+    {
+      base: z.string().optional().describe("Git base ref for git diff --name-only <base> --; defaults to HEAD~1."),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional().describe("Restrict changed files by detected kind: project, template, component, bitrix, install, docs, asset, or unknown."),
+      includeSource: z.boolean().optional().describe("Include compact source signatures when available."),
+      includeRelations: z.boolean().optional().describe("Include related relation rows; enabled by default."),
+      maxFiles: z.number().int().min(1).max(1000).optional(),
+      maxItems: z.number().int().min(1).max(1000).optional(),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ base, kind, includeSource, includeRelations, maxFiles, maxItems, format }) => {
+      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, maxFiles, maxItems, format } });
+    }
+  );
+
   server.tool(
     "bitrix_index_project",
     "Index the current project for Bitrix-aware navigation.",

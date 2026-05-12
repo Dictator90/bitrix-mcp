@@ -1462,3 +1462,60 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
 }
 
 export { searchSqliteLiveApi, searchSqliteDocs } from "../liveapi/search.js";
+
+export interface IndexedRecordsForFiles {
+  symbols: SymbolRecord[];
+  moduleUsages: ModuleUsageRecord[];
+  relations: BitrixRelationRecord[];
+}
+
+export async function readIndexedRecordsForFiles(dbFile: string, files: string[], options: { includeRelations?: boolean } = {}): Promise<IndexedRecordsForFiles> {
+  if (files.length === 0) {
+    return { symbols: [], moduleUsages: [], relations: [] };
+  }
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return { symbols: [], moduleUsages: [], relations: [] };
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const normalized = files.map((file) => file.replace(/\\/g, "/"));
+    const placeholders = normalized.map(() => "?").join(", ");
+    const symbolRows = db.prepare(`
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+      FROM symbols s
+      JOIN files f ON f.id = s.file_id
+      WHERE f.relative_path IN (${placeholders}) OR s.file IN (${placeholders})
+      ORDER BY f.relative_path, s.line, s.id
+    `).all(...normalized, ...normalized) as unknown as SymbolRow[];
+
+    const moduleUsageRows = db.prepare(`
+      SELECT m.id, m.file_id, m.kind, m.root, m.module, m.call, m.file, m.relative_file, m.line, m.signature
+      FROM module_usages m
+      JOIN files f ON f.id = m.file_id
+      WHERE f.relative_path IN (${placeholders}) OR m.relative_file IN (${placeholders}) OR m.file IN (${placeholders})
+      ORDER BY coalesce(m.relative_file, m.file), m.line, m.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as ModuleUsageRow[];
+
+    let relationRows: BitrixRelationRow[] = [];
+    if (options.includeRelations !== false) {
+      relationRows = db.prepare(`
+        SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
+        FROM bitrix_relations
+        WHERE file IN (${placeholders})
+        ORDER BY file, line, id
+      `).all(...normalized) as unknown as BitrixRelationRow[];
+    }
+
+    return {
+      symbols: symbolRows.map(rowToSymbol),
+      moduleUsages: moduleUsageRows.map(rowToModuleUsage),
+      relations: relationRows.map(rowToBitrixRelation)
+    };
+  } finally {
+    db.close();
+  }
+}
