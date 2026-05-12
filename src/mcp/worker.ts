@@ -2,10 +2,11 @@ import { parentPort, workerData } from "node:worker_threads";
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
+import { searchBitrixRelations, type BitrixRelationSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, type SearchFormatOptions } from "./format.js";
+import { formatBitrixRelationSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -14,7 +15,8 @@ type WorkerTask =
   | { name: "indexDocs"; paths: RuntimePaths }
   | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
   | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
-  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions };
+  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions }
+  | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
@@ -46,6 +48,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchDocs": {
       const results = await searchSqliteDocs(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatDocSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchBitrixRelations": {
+      const results = await searchBitrixRelations(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatBitrixRelationSearchResults(results, task.query), null, 2) }] };
     }
   }
 }

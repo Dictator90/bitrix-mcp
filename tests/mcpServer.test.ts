@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createMcpServer } from "../src/mcp/server.js";
 import { sqlitePath, type RuntimePaths } from "../src/config/paths.js";
-import { readIndexFromSqlite } from "../src/indexer/sqliteStore.js";
+import { readIndexFromSqlite, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource } from "../src/resources/docs.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
@@ -173,6 +173,43 @@ test("MCP bitrix_index_template allows absolute or parent paths when explicitly 
 
   assert.equal(manifest?.root, path.resolve(outsideRoot));
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "outside_template_helper")));
+});
+
+
+test("MCP bitrix_relation_search is registered and searches relation storage", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-relations-"));
+  const paths = runtimePaths(dataDir);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+  const relationFile = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "relation.php");
+
+  assert.ok(tools.bitrix_relation_search);
+  await writeBitrixRelations(sqlitePath(dataDir), [
+    {
+      sourceType: "event",
+      sourceName: "main:OnBeforeProlog",
+      targetType: "method",
+      targetName: "Vendor\\Module\\Handler::run",
+      relationType: "handles",
+      file: relationFile,
+      line: 17,
+      module: "main",
+      kind: "event",
+      metadata: { sort: 100 }
+    }
+  ]);
+
+  const compactResult = await tools.bitrix_relation_search.handler({ sourceType: "event" });
+  const compact = JSON.parse(compactResult.content[0].text) as Array<{ source: string; target: string; relationType: string; file: string; line: number; item?: unknown }>;
+  assert.equal(compact[0]?.source, "event:main:OnBeforeProlog");
+  assert.equal(compact[0]?.target, "method:Vendor\\Module\\Handler::run");
+  assert.equal(compact[0]?.relationType, "handles");
+  assert.equal(compact[0]?.item, undefined);
+
+  const fullResult = await tools.bitrix_relation_search.handler({ targetType: "method", format: "full" });
+  const full = JSON.parse(fullResult.content[0].text) as Array<{ sourceType: string; metadata: { sort: number } }>;
+  assert.equal(full[0]?.sourceType, "event");
+  assert.deepEqual(full[0]?.metadata, { sort: 100 });
 });
 
 test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
