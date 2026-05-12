@@ -450,3 +450,24 @@ $APPLICATION->IncludeComponent("bitrix:catalog.section", "", ["IBLOCK_ID" => 7, 
   assert.ok(contextPayload.assets.some((file) => file.file.endsWith("style.css")));
   assert.ok(contextPayload.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 7));
 });
+
+test("MCP bitrix_iblock_usage_search is registered and searches indexed IBlock usages", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-root-"));
+  await fs.writeFile(path.join(root, "index.php"), "<?php\nCIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);\n", "utf8");
+  const paths = runtimePaths(dataDir, root);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_iblock_usage_search);
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_iblock_usage_search.handler({ iblockId: "CATALOG_IBLOCK_ID", limit: 5 });
+  const compact = JSON.parse(result.content[0].text) as Array<{ iblockId: string; api: string; file: string; line: number }>;
+  assert.equal(compact[0]?.iblockId, "CATALOG_IBLOCK_ID");
+  assert.equal(compact[0]?.api, "CIBlockElement::GetList");
+  assert.equal(compact[0]?.file, "index.php");
+
+  const fullResult = await tools.bitrix_iblock_usage_search.handler({ api: "CIBlockElement::GetList", format: "full" });
+  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; iblockId: string }>;
+  assert.equal(full[0]?.type, "iblock_usage");
+});

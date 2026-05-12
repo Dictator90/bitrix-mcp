@@ -1,4 +1,4 @@
-import type { BitrixRelationRecord, EventRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, EventRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -219,6 +219,28 @@ export function formatMailEventSearchResults(results: SymbolRecord[] | undefined
 export interface ModuleUsageSearchFormatOptions {
   format?: "compact" | "full";
 }
+
+export interface IblockUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatIblockUsageSearchResults(results: IblockUsageRecord[] | undefined, options: IblockUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    iblockId: usage.iblockId,
+    api: usage.api,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    contextType: usage.contextType,
+    contextName: usage.contextName,
+    signature: usage.signature
+  }));
+}
+
 
 export function formatModuleUsageSearchResults(results: ModuleUsageRecord[] | undefined, options: ModuleUsageSearchFormatOptions = {}): unknown[] | undefined {
   if (options.format === "full") {
