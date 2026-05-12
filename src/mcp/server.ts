@@ -283,6 +283,54 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
   );
 
   server.tool(
+    "bitrix_orm_search",
+    "Search indexed Bitrix D7 ORM DataManager entities by class, table, module, kind, or free text.",
+    {
+      query: z.string().optional(),
+      tableName: z.string().optional(),
+      className: z.string().optional(),
+      module: z.string().optional(),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ query, tableName, className, module, kind, limit, format }) => {
+      return runWorkerTask("bitrix_orm_search", { name: "searchOrmEntities", paths, query: { query, tableName, className, module, kind, limit, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_orm_entity_map",
+    "Return indexed Bitrix D7 ORM getMap fields and references for an entity selected by class, table, or file.",
+    {
+      className: z.string().optional(),
+      tableName: z.string().optional(),
+      file: z.string().optional(),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ className, tableName, file, format }) => {
+      return runWorkerTask("bitrix_orm_entity_map", { name: "getOrmEntityMap", paths, query: { className, tableName, file, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_orm_usage_search",
+    "Search indexed Bitrix D7 ORM usage calls such as ProductTable::getList(), query(), add(), update(), delete(), and compileEntity helpers.",
+    {
+      query: z.string().optional(),
+      entity: z.string().optional(),
+      method: z.string().optional(),
+      file: z.string().optional(),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ query, entity, method, file, kind, limit, format }) => {
+      return runWorkerTask("bitrix_orm_usage_search", { name: "searchOrmUsages", paths, query: { query, entity, method, file, kind, limit, format } });
+    }
+  );
+
+  server.tool(
     "bitrix_relation_search",
     "Search stored generic Bitrix relations by source, target, relation type, module, kind, or file. Compact output is returned by default.",
     {

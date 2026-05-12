@@ -1,5 +1,5 @@
 import phpParser from "php-parser";
-import type { EventRecord, SymbolRecord } from "../types.js";
+import type { EventRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 type PhpNode = {
   kind: string;
@@ -136,6 +136,152 @@ function literalString(node: unknown, context: ParserContext): string | undefine
   return undefined;
 }
 
+
+
+function literalValue(node: unknown, context: ParserContext): unknown {
+  if (!isNode(node)) return undefined;
+  if (node.kind === "string") return typeof node.value === "string" ? node.value : undefined;
+  if (node.kind === "number") return numericLiteral(node);
+  if (node.kind === "boolean") return typeof node.value === "boolean" ? node.value : undefined;
+  if (node.kind === "nullkeyword") return null;
+  if (node.kind === "name" || node.kind === "staticlookup") return literalString(node, context);
+  if (node.kind === "array" && Array.isArray(node.items)) {
+    const values: unknown[] = [];
+    const object: Record<string, unknown> = {};
+    let hasKeys = false;
+    for (const item of node.items.filter(isNode)) {
+      const key = literalString(item.key, context);
+      const value = literalValue(item.value, context);
+      if (key !== undefined) {
+        hasKeys = true;
+        object[key] = value;
+      } else {
+        values.push(value);
+      }
+    }
+    return hasKeys ? object : values;
+  }
+  return undefined;
+}
+
+function literalOptions(node: unknown, context: ParserContext): Record<string, unknown> | undefined {
+  const value = literalValue(node, context);
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const wanted = ["primary", "autocomplete", "required", "default_value", "values", "title"];
+    const picked: Record<string, unknown> = {};
+    for (const key of wanted) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) picked[key] = (value as Record<string, unknown>)[key];
+    }
+    return Object.keys(picked).length ? picked : undefined;
+  }
+  return undefined;
+}
+
+function methodReturnExpression(method: PhpNode | undefined): PhpNode | undefined {
+  if (!method) return undefined;
+  const body = isNode(method.body) ? method.body : undefined;
+  const children = Array.isArray(body?.children) ? body.children.filter(isNode) : [];
+  const returnNode = children.find((child) => child.kind === "return");
+  return isNode(returnNode?.expr) ? returnNode.expr : undefined;
+}
+
+function isDataManagerParent(parentClass: string | undefined): boolean {
+  const normalized = parentClass?.replace(/^\\/u, "").toLowerCase();
+  return normalized === "bitrix\\main\\entity\\datamanager" || normalized === "bitrix\\main\\orm\\data\\datamanager";
+}
+
+function findClassMethod(node: PhpNode, name: string): PhpNode | undefined {
+  const methods = Array.isArray(node.body) ? node.body.filter(isNode) : [];
+  return methods.find((child) => child.kind === "method" && nodeName(child.name)?.toLowerCase() === name.toLowerCase());
+}
+
+const ORM_FIELD_CLASSES = new Set(["integerfield", "stringfield", "textfield", "booleanfield", "datetimefield", "datefield", "enumfield", "expressionfield", "referencefield", "onetomany", "manytomany"]);
+const ORM_REFERENCE_CLASSES = new Set(["referencefield", "onetomany", "manytomany"]);
+
+function parseOrmField(source: string, node: PhpNode, context: ParserContext): OrmFieldRecord | undefined {
+  if (node.kind !== "new") return undefined;
+  const className = nodeName(node.what);
+  if (!className) return undefined;
+  const shortName = basename(className).toLowerCase();
+  if (!ORM_FIELD_CLASSES.has(shortName)) return undefined;
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+  const fieldName = literalString(args[0], context) ?? basename(className);
+  const type = basename(className);
+  const field: OrmFieldRecord = {
+    name: fieldName,
+    type,
+    className: qualifyName(className, context, false),
+    line: nodeLine(node),
+    signature: sourceSlice(source, node)
+  };
+  const options = literalOptions(args[1], context) ?? literalOptions(args[2], context);
+  if (options) field.options = options;
+  if (ORM_REFERENCE_CLASSES.has(shortName)) {
+    const referenceClass = literalString(args[1], context);
+    if (referenceClass) field.referenceClass = referenceClass;
+  }
+  return field;
+}
+
+function collectOrmFields(source: string, mapExpr: PhpNode | undefined, context: ParserContext): OrmFieldRecord[] {
+  if (!mapExpr || mapExpr.kind !== "array" || !Array.isArray(mapExpr.items)) return [];
+  const fields: OrmFieldRecord[] = [];
+  for (const item of mapExpr.items.filter(isNode)) {
+    const value = isNode(item.value) ? item.value : item;
+    const field = parseOrmField(source, value, context);
+    if (field) fields.push(field);
+  }
+  return fields;
+}
+
+function maybeOrmEntity(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext): OrmEntityRecord | undefined {
+  const simpleName = nodeName(node.name);
+  const parentName = nodeName(node.extends);
+  if (!simpleName || !parentName) return undefined;
+  const parentClass = qualifyName(parentName, context, false);
+  if (!isDataManagerParent(parentClass)) return undefined;
+  const className = fullyQualifiedDeclarationName(simpleName, context);
+  const tableMethod = findClassMethod(node, "getTableName");
+  const mapMethod = findClassMethod(node, "getMap");
+  const fields = collectOrmFields(source, methodReturnExpression(mapMethod), context);
+  const references = fields.filter((field) => ORM_REFERENCE_CLASSES.has(field.type.toLowerCase()) || field.referenceClass);
+  return {
+    type: "orm_entity",
+    className,
+    fullyQualifiedName: className,
+    namespace: context.namespace,
+    parentClass,
+    module,
+    tableName: literalString(methodReturnExpression(tableMethod), context),
+    file: filePath,
+    line: nodeLine(node),
+    fields,
+    references,
+    signature: declarationSignature(source, node)
+  };
+}
+
+const ORM_USAGE_METHODS = new Set(["query", "getlist", "getbyid", "add", "update", "delete"]);
+
+function maybeOrmUsage(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext): OrmUsageRecord | undefined {
+  const what = isNode(node.what) ? node.what : undefined;
+  if (!what || what.kind !== "staticlookup") return undefined;
+  const methodName = nodeName(what.offset);
+  const target = callTargetName(node, context);
+  if (!methodName || !target) return undefined;
+  const normalizedMethod = methodName.toLowerCase();
+  const normalizedTarget = target.replace(/^\\/u, "").toLowerCase();
+  if (ORM_USAGE_METHODS.has(normalizedMethod)) {
+    return { type: "orm_usage", entity: target, method: methodName, usageKind: "datamanager", module, file: filePath, line: nodeLine(node), signature: sourceSlice(source, node) };
+  }
+  if (normalizedTarget === "bitrix\\main\\entity" && normalizedMethod === "compileentity") {
+    return { type: "orm_usage", entity: target, method: methodName, usageKind: "compile_entity", module, file: filePath, line: nodeLine(node), signature: sourceSlice(source, node) };
+  }
+  if (normalizedTarget.endsWith("section") && normalizedMethod === "compileentitybyiblock") {
+    return { type: "orm_usage", entity: target, method: methodName, usageKind: "compile_entity_by_iblock", module, file: filePath, line: nodeLine(node), signature: sourceSlice(source, node) };
+  }
+  return undefined;
+}
 
 function numericLiteral(node: unknown): number | undefined {
   if (!isNode(node)) return undefined;
@@ -441,16 +587,16 @@ function childrenOf(node: PhpNode): PhpNode[] {
   return children;
 }
 
-function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[]): void {
+function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[], ormEntities: OrmEntityRecord[], ormUsages: OrmUsageRecord[]): void {
   switch (node.kind) {
     case "program":
     case "block":
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages);
       return;
 
     case "namespace": {
       const namespaceContext = cloneContext(context, { namespace: typeof node.name === "string" ? node.name : undefined, uses: new Map() });
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols, ormEntities, ormUsages);
       return;
     }
 
@@ -472,8 +618,10 @@ function visit(source: string, filePath: string, module: string | undefined, nod
         line: nodeLine(node),
         signature: declarationSignature(source, node)
       });
+      const entity = maybeOrmEntity(source, filePath, module, node, context);
+      if (entity) ormEntities.push(entity);
       const classContext = cloneContext(context, { className });
-      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols);
+      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols, ormEntities, ormUsages);
       return;
     }
 
@@ -489,7 +637,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages);
       return;
     }
 
@@ -506,7 +654,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages);
       return;
     }
 
@@ -534,23 +682,38 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const genericCall = callSymbol(source, filePath, module, node, context);
       if (genericCall) symbols.push(genericCall);
 
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols);
+      const ormUsage = maybeOrmUsage(source, filePath, module, node, context);
+      if (ormUsage) ormUsages.push(ormUsage);
+
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages);
       const what = isNode(node.what) ? node.what : undefined;
-      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols);
+      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols, ormEntities, ormUsages);
       const lookupTarget = what && (what.kind === "propertylookup" || what.kind === "staticlookup") && isNode(what.what) ? what.what : undefined;
-      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols);
-      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols);
+      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols, ormEntities, ormUsages);
+      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols, ormEntities, ormUsages);
       return;
     }
 
     default:
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages);
   }
 }
 
-export function parsePhpSymbolsWithAst(source: string, filePath: string): SymbolRecord[] {
+export interface PhpAstParseResult {
+  symbols: SymbolRecord[];
+  ormEntities: OrmEntityRecord[];
+  ormUsages: OrmUsageRecord[];
+}
+
+export function parsePhpWithAst(source: string, filePath: string): PhpAstParseResult {
   const ast = parser.parseCode(source, filePath) as unknown as PhpNode;
   const symbols: SymbolRecord[] = [];
-  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols);
-  return symbols;
+  const ormEntities: OrmEntityRecord[] = [];
+  const ormUsages: OrmUsageRecord[] = [];
+  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols, ormEntities, ormUsages);
+  return { symbols, ormEntities, ormUsages };
+}
+
+export function parsePhpSymbolsWithAst(source: string, filePath: string): SymbolRecord[] {
+  return parsePhpWithAst(source, filePath).symbols;
 }

@@ -1,4 +1,4 @@
-import type { BitrixRelationRecord, EventRecord, ModuleUsageRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, EventRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -253,5 +253,37 @@ export function formatBitrixRelationSearchResults(results: BitrixRelationRecord[
     file: relation.file,
     line: relation.line,
     signature: relation.signature
+  }));
+}
+
+export interface OrmSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatOrmEntityResults(results: OrmEntityRecord[] | undefined, options: OrmSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((entity) => compactObject({
+    className: entity.className,
+    tableName: entity.tableName,
+    module: entity.module,
+    kind: entity.kind,
+    file: entity.relativeFile ?? entity.file,
+    line: entity.line,
+    fields: entity.fields.map((field) => compactObject({ name: field.name, type: field.type, referenceClass: field.referenceClass, options: field.options })),
+    references: entity.references.map((field) => compactObject({ name: field.name, type: field.type, referenceClass: field.referenceClass }))
+  }));
+}
+
+export function formatOrmUsageResults(results: OrmUsageRecord[] | undefined, options: OrmSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((usage) => compactObject({
+    entity: usage.entity,
+    method: usage.method,
+    usageKind: usage.usageKind,
+    module: usage.module,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    signature: usage.signature
   }));
 }

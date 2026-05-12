@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -892,4 +892,72 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
   });
   assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventSend")));
   assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventAdd")));
+});
+
+test("buildIndex stores D7 ORM entities, usages, and relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-orm-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-orm-data-"));
+  const productFile = path.join(root, "local", "modules", "vendor.module", "lib", "product.php");
+  const usageFile = path.join(root, "local", "modules", "vendor.module", "lib", "usage.php");
+  await fs.mkdir(path.dirname(productFile), { recursive: true });
+  await fs.writeFile(productFile, String.raw`<?php
+namespace Vendor\Module;
+use Bitrix\Main\ORM\Data\DataManager;
+class ProductTable extends DataManager
+{
+    public static function getTableName() { return 'vendor_product'; }
+    public static function getMap() {
+        return [
+            new IntegerField('ID', ['primary' => true, 'autocomplete' => true]),
+            new StringField('NAME', ['required' => true, 'default_value' => '']),
+            new TextField('DESCRIPTION'),
+            new BooleanField('ACTIVE'),
+            new DatetimeField('CREATED_AT'),
+            new DateField('DATE'),
+            new EnumField('TYPE', ['values' => ['simple', 'sku']]),
+            new ExpressionField('FULL_NAME', 'concat(%s, %s)', ['NAME', 'TYPE']),
+            new ReferenceField('USER', UserTable::class, ['=this.USER_ID' => 'ref.ID']),
+            new OneToMany('ITEMS', ItemTable::class, 'PRODUCT'),
+            new ManyToMany('SECTIONS', SectionTable::class),
+        ];
+    }
+}
+`, "utf8");
+  await fs.writeFile(usageFile, String.raw`<?php
+namespace Vendor\Module;
+ProductTable::query();
+ProductTable::getList([]);
+ProductTable::getById(1);
+ProductTable::add([]);
+ProductTable::update(1, []);
+ProductTable::delete(1);
+Section::compileEntityByIblock(7);
+`, "utf8");
+
+  await buildIndex({ root, kind: "bitrix", outFile: path.join(dataDir, "bitrix-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const entities = await searchOrmEntities(dbFile, { tableName: "vendor_product", limit: 5 });
+  assert.equal(entities?.length, 1);
+  assert.equal(entities?.[0]?.className, "Vendor\\Module\\ProductTable");
+  assert.equal(entities?.[0]?.fields.length, 11);
+  assert.equal(entities?.[0]?.fields.find((field) => field.name === "ID")?.options?.primary, true);
+  assert.equal(entities?.[0]?.fields.find((field) => field.name === "TYPE")?.options?.values instanceof Array, true);
+  assert.equal(entities?.[0]?.references.find((field) => field.name === "USER")?.referenceClass, "Vendor\\Module\\UserTable");
+
+  const maps = await getOrmEntityMap(dbFile, { className: "Vendor\\Module\\ProductTable" });
+  assert.equal(maps?.[0]?.tableName, "vendor_product");
+
+  const usages = await searchOrmUsages(dbFile, { entity: "Vendor\\Module\\ProductTable", limit: 10 });
+  assert.equal(usages?.filter((usage) => usage.usageKind === "datamanager").length, 6);
+  assert.ok(usages?.some((usage) => usage.method === "getList"));
+  const compileUsages = await searchOrmUsages(dbFile, { method: "compileEntityByIblock", limit: 10 });
+  assert.equal(compileUsages?.[0]?.usageKind, "compile_entity_by_iblock");
+
+  const tableRelations = await searchBitrixRelations(dbFile, { sourceType: "orm_entity", sourceName: "Vendor\\Module\\ProductTable", targetType: "table", targetName: "vendor_product", limit: 10 });
+  assert.equal(tableRelations?.[0]?.relationType, "maps_table");
+  const referenceRelations = await searchBitrixRelations(dbFile, { sourceType: "orm_entity", sourceName: "Vendor\\Module\\ProductTable", relationType: "references_orm_entity", limit: 10 });
+  assert.ok(referenceRelations?.some((relation) => relation.targetName === "Vendor\\Module\\UserTable"));
+  const usageRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "orm_entity", targetName: "Vendor\\Module\\ProductTable", relationType: "uses_orm_entity", limit: 10 });
+  assert.ok((usageRelations?.length ?? 0) >= 6);
 });

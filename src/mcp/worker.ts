@@ -3,11 +3,11 @@ import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getOrmEntityMap, searchAgents, searchBitrixRelations, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOrmEntityResults, formatOrmUsageResults, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -21,6 +21,9 @@ type WorkerTask =
   | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
   | { name: "searchMailEvents"; paths: RuntimePaths; query: MailEventSearchQuery & MailEventSearchFormatOptions }
   | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions }
+  | { name: "searchOrmEntities"; paths: RuntimePaths; query: OrmSearchQuery & OrmSearchFormatOptions }
+  | { name: "getOrmEntityMap"; paths: RuntimePaths; query: OrmEntityMapQuery & OrmSearchFormatOptions }
+  | { name: "searchOrmUsages"; paths: RuntimePaths; query: OrmUsageSearchQuery & OrmSearchFormatOptions }
   | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
@@ -69,6 +72,18 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchModuleUsages": {
       const results = await searchModuleUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatModuleUsageSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchOrmEntities": {
+      const results = await searchOrmEntities(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatOrmEntityResults(results, task.query), null, 2) }] };
+    }
+    case "getOrmEntityMap": {
+      const results = await getOrmEntityMap(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatOrmEntityResults(results, task.query), null, 2) }] };
+    }
+    case "searchOrmUsages": {
+      const results = await searchOrmUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatOrmUsageResults(results, task.query), null, 2) }] };
     }
     case "detectChanges": {
       const result = await detectChanges(task.paths, task.query);
