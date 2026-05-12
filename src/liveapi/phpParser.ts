@@ -145,6 +145,66 @@ function findCallEnd(source: string, openParenIndex: number): number {
   return -1;
 }
 
+
+function parseArrayLiteralValue(argsSource: string, key: string): string | undefined {
+  const pattern = new RegExp(`["']${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']\\s*=>\\s*(["'])([\\s\\S]*?)\\1`, "i");
+  const match = argsSource.match(pattern);
+  return match?.[2].replace(/\\([\\"'])/g, "$1");
+}
+
+function siteIdFromArg(arg: string | undefined): string | undefined {
+  const literal = unquotePhpString(arg);
+  if (literal !== undefined) return literal;
+  const trimmed = arg?.trim();
+  return trimmed && /^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(trimmed) ? trimmed.replace(/^\\/u, "") : undefined;
+}
+
+function parsePhpMailEventsWithRegex(source: string, filePath: string): SymbolRecord[] {
+  const symbols: SymbolRecord[] = [];
+  const ceventRegex = /(?<![A-Za-z0-9_\\])\\?CEvent::(Send|SendImmediate)\s*\(/g;
+  for (const match of source.matchAll(ceventRegex)) {
+    const start = match.index ?? 0;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const args = splitTopLevelArgs(source.slice(openParenIndex + 1, end - 1));
+    const api = `CEvent::${match[1]}`;
+    const eventName = unquotePhpString(args[0]);
+    symbols.push({
+      type: "mail_event",
+      name: eventName ?? api,
+      eventName,
+      siteId: siteIdFromArg(args[1]),
+      api,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+
+  const eventSendRegex = /(?<![A-Za-z0-9_\\])\\?Bitrix\\Main\\Mail\\Event::send\s*\(/gi;
+  for (const match of source.matchAll(eventSendRegex)) {
+    const start = match.index ?? 0;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const argsSource = source.slice(openParenIndex + 1, end - 1);
+    const eventName = parseArrayLiteralValue(argsSource, "EVENT_NAME");
+    const api = "Bitrix\\Main\\Mail\\Event::send";
+    symbols.push({
+      type: "mail_event",
+      name: eventName ?? api,
+      eventName,
+      siteId: parseArrayLiteralValue(argsSource, "LID"),
+      api,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+  return symbols;
+}
+
 function parsePhpAgentsWithRegex(source: string, filePath: string): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
   const callRegex = /(?<![A-Za-z0-9_\\])\\?CAgent::(AddAgent|RemoveAgent|GetList)\s*\(/g;
@@ -246,6 +306,7 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
   }
 
   symbols.push(...parsePhpAgentsWithRegex(source, filePath));
+  symbols.push(...parsePhpMailEventsWithRegex(source, filePath));
 
   return symbols;
 }

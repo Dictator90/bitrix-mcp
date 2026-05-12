@@ -22,6 +22,19 @@ export interface AgentSearchQuery {
   limit?: number;
 }
 
+export interface MailEventSearchQuery {
+  query?: string;
+  eventName?: string;
+  api?: string;
+  kind?: IndexKind | IndexKind[];
+  file?: string;
+  includeHandlers?: boolean;
+  limit?: number;
+}
+
+export interface MailEventSearchResult extends SymbolRecord {
+  handlers?: SymbolRecord[];
+}
 export interface ModuleUsageSearchQuery {
   module?: string;
   call?: string;
@@ -82,6 +95,8 @@ interface SymbolRow {
   signature: string | null;
   description: string | null;
   agent_action?: SymbolRecord["agentAction"] | null;
+  api?: string | null;
+  site_id?: string | null;
   periodic?: string | null;
   interval?: number | null;
   relative_file?: string | null;
@@ -140,6 +155,8 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     signature: row.signature ?? undefined,
     description: row.description ?? undefined,
     agentAction: row.agent_action ?? undefined,
+    api: row.api ?? undefined,
+    siteId: row.site_id ?? undefined,
     periodic: row.periodic ?? undefined,
     interval: row.interval ?? undefined,
     relativeFile: row.relative_file ?? undefined
@@ -244,6 +261,23 @@ function agentRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixR
   return relations;
 }
 
+function mailEventRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "mail_event") return [];
+  return [{
+    sourceType: "file",
+    sourceName: file.relativePath,
+    targetType: "mail_event",
+    targetName: symbol.eventName ?? symbol.name,
+    relationType: "sends_mail_event",
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature,
+    metadata: { api: symbol.api, siteId: symbol.siteId }
+  }];
+}
+
 function moduleUsageRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
   return (file.moduleUsages ?? []).map((usage) => ({
     sourceType: "file",
@@ -346,6 +380,8 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         handler_function TEXT,
         event_name TEXT,
         agent_action TEXT,
+        api TEXT,
+        site_id TEXT,
         periodic TEXT,
         interval INTEGER,
         file TEXT NOT NULL,
@@ -533,6 +569,8 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       ["handler_function", "TEXT"],
       ["event_name", "TEXT"],
       ["agent_action", "TEXT"],
+      ["api", "TEXT"],
+      ["site_id", "TEXT"],
       ["periodic", "TEXT"],
       ["interval", "INTEGER"],
       ["language", "TEXT"]
@@ -630,8 +668,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       RETURNING id
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, periodic, interval, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, signature, description)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -724,6 +762,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(symbol.handlerFunction),
             nullable(symbol.eventName),
             nullable(symbol.agentAction),
+            nullable(symbol.api),
+            nullable(symbol.siteId),
             nullable(symbol.periodic),
             symbol.interval ?? null,
             symbol.file,
@@ -767,6 +807,23 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               nullable(symbol.description)
             );
             for (const relation of eventRelationsForSymbol(symbol, file)) {
+              insertRelation.run(
+                relation.sourceType,
+                relation.sourceName,
+                relation.targetType,
+                relation.targetName,
+                relation.relationType,
+                relation.file,
+                relation.line,
+                nullable(relation.module),
+                nullable(relation.kind),
+                nullable(relation.signature),
+                relationMetadataJson(relation)
+              );
+            }
+          }
+          if (symbol.type === "mail_event") {
+            for (const relation of mailEventRelationsForSymbol(symbol, file)) {
               insertRelation.run(
                 relation.sourceType,
                 relation.sourceName,
@@ -826,6 +883,43 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(relation.kind),
             nullable(relation.signature),
             relationMetadataJson(relation)
+          );
+        }
+      }
+
+      db.prepare("DELETE FROM bitrix_relations WHERE kind = ? AND relation_type = 'handled_by_event_handler'").run(manifest.kind);
+      const mailEventRows = db.prepare(`
+          SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+          FROM symbols s
+          JOIN files f ON f.id = s.file_id
+          WHERE s.kind = ? AND s.type = 'mail_event'
+        `).all(manifest.kind) as unknown as SymbolRow[];
+      const mailHandlerRows = db.prepare(`
+          SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+          FROM symbols s
+          JOIN files f ON f.id = s.file_id
+          WHERE s.kind = ? AND s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
+        `).all(manifest.kind) as unknown as SymbolRow[];
+      for (const mailEvent of mailEventRows.map(rowToSymbol)) {
+        for (const handler of mailHandlerRows.map(rowToSymbol)) {
+          const eventName = handler.eventName ?? handler.name;
+          const targetName = handler.handlerClass && handler.handlerMethod
+            ? `${eventName}:${handler.handlerClass}::${handler.handlerMethod}`
+            : handler.handlerFunction ? `${eventName}:${handler.handlerFunction}` : `${handler.module ?? "main"}:${eventName}`;
+          insertRelation.run(
+            "mail_event",
+            mailEvent.eventName ?? mailEvent.name,
+            "event_handler",
+            targetName,
+            "handled_by_event_handler",
+            mailEvent.file,
+            mailEvent.line,
+            nullable(handler.module),
+            nullable(mailEvent.kind),
+            nullable(mailEvent.signature),
+            JSON.stringify({ handlerEvent: `${handler.module ?? "main"}:${eventName}`, handlerFile: handler.file, handlerLine: handler.line })
           );
         }
       }
@@ -890,6 +984,74 @@ export async function writeBitrixRelations(dbFile: string, relations: BitrixRela
 }
 
 
+export async function searchMailEvents(dbFile: string, query: MailEventSearchQuery): Promise<MailEventSearchResult[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = ["s.type = 'mail_event'"];
+    const params: Array<string | number> = [];
+
+    if (query.query !== undefined && query.query.trim()) {
+      const like = `%${query.query.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      filters.push("(s.name LIKE ? ESCAPE '\\' OR coalesce(s.event_name, '') LIKE ? ESCAPE '\\' OR coalesce(s.api, '') LIKE ? ESCAPE '\\' OR coalesce(s.site_id, '') LIKE ? ESCAPE '\\' OR coalesce(s.signature, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like, like);
+    }
+    if (query.eventName !== undefined) {
+      filters.push("s.event_name = ?");
+      params.push(query.eventName);
+    }
+    if (query.api !== undefined) {
+      filters.push("s.api = ?");
+      params.push(query.api);
+    }
+    if (query.file !== undefined) {
+      filters.push("(s.file = ? OR f.relative_path = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const rows = db.prepare(`
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+      FROM symbols s
+      JOIN files f ON f.id = s.file_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY s.id DESC
+      LIMIT ?
+    `).all(...params) as unknown as SymbolRow[];
+    const mailEvents = rows.map(rowToSymbol) as MailEventSearchResult[];
+
+    if (query.includeHandlers) {
+      const handlers = db.prepare(`
+        SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+               s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+        FROM symbols s
+        JOIN files f ON f.id = s.file_id
+        WHERE s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
+        ORDER BY s.id DESC
+      `).all() as unknown as SymbolRow[];
+      const handlerSymbols = handlers.map(rowToSymbol);
+      for (const mailEvent of mailEvents) {
+        mailEvent.handlers = handlerSymbols.filter((handler) => !mailEvent.kind || handler.kind === mailEvent.kind);
+      }
+    }
+
+    return mailEvents;
+  } finally {
+    db.close();
+  }
+}
 
 export async function searchAgents(dbFile: string, query: AgentSearchQuery): Promise<SymbolRecord[] | undefined> {
   try {
@@ -926,7 +1088,7 @@ export async function searchAgents(dbFile: string, query: AgentSearchQuery): Pro
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}

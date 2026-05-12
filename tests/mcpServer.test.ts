@@ -343,3 +343,32 @@ CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400)
     signature: 'CAgent::AddAgent("\\\\Vendor\\\\Module\\\\Agent::run();", "vendor.module", "N", 86400);'
   });
 });
+
+test("MCP bitrix_mail_event_search is registered and returns compact mail events", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-mail-events-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-mail-root-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/mail.php"), String.raw`<?php
+CEvent::Send('SALE_NEW_ORDER', SITE_ID, $fields);
+AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
+`, "utf8");
+
+  const server = createMcpServer(runtimePaths(dataDir, root));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_mail_event_search);
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_mail_event_search.handler({ eventName: "SALE_NEW_ORDER", includeHandlers: true, limit: 5 });
+  const compact = JSON.parse(result.content[0].text) as Array<{ eventName: string; api: string; siteId: string; kind: string; file: string; line: number; signature: string; handlers: Array<{ eventName: string; handlerClass: string; handlerMethod: string }> }>;
+
+  assert.equal(compact[0]?.eventName, "SALE_NEW_ORDER");
+  assert.equal(compact[0]?.api, "CEvent::Send");
+  assert.equal(compact[0]?.siteId, "SITE_ID");
+  assert.equal(compact[0]?.kind, "project");
+  assert.equal(compact[0]?.file, path.join("local", "php_interface", "mail.php"));
+  assert.equal(compact[0]?.line, 2);
+  assert.match(compact[0]?.signature, /CEvent::Send/);
+  assert.equal(compact[0]?.handlers?.[0]?.eventName, "OnBeforeEventSend");
+  assert.equal(compact[0]?.handlers?.[0]?.handlerClass, "MailHandlers");
+  assert.equal(compact[0]?.handlers?.[0]?.handlerMethod, "beforeSend");
+});
