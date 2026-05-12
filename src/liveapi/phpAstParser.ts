@@ -143,7 +143,11 @@ function arrayValues(node: unknown): PhpNode[] {
     .filter(isNode);
 }
 
-function callbackHandler(node: unknown, context: ParserContext): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction"> {
+function callbackHandler(node: unknown, context: ParserContext): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous"> {
+  if (isNode(node) && node.kind === "closure") {
+    return { handlerFunction: "closure", anonymous: true };
+  }
+
   const values = arrayValues(node);
   if (values.length >= 2) {
     const handlerClass = literalString(values[0], context);
@@ -156,7 +160,7 @@ function callbackHandler(node: unknown, context: ParserContext): Pick<EventRecor
 
   const staticMatch = value.match(/^(.+)::([A-Za-z_][A-Za-z0-9_]*)$/u);
   if (staticMatch) {
-    return { handlerClass: qualifyName(staticMatch[1], context), handlerMethod: staticMatch[2] };
+    return { handlerClass: staticMatch[1], handlerMethod: staticMatch[2] };
   }
 
   return { handlerFunction: value };
@@ -197,7 +201,7 @@ function callTargetName(node: PhpNode, context: ParserContext): string | undefin
   return undefined;
 }
 
-function buildEvent(source: string, filePath: string, module: string | undefined, eventName: string | undefined, handler: Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction">, node: PhpNode): SymbolRecord | undefined {
+function buildEvent(source: string, filePath: string, module: string | undefined, eventName: string | undefined, handler: Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous">, node: PhpNode): SymbolRecord | undefined {
   if (!module || !eventName) return undefined;
   return {
     type: "event",
@@ -207,6 +211,7 @@ function buildEvent(source: string, filePath: string, module: string | undefined
     handlerClass: handler.handlerClass,
     handlerMethod: handler.handlerMethod,
     handlerFunction: handler.handlerFunction,
+    anonymous: handler.anonymous,
     file: filePath,
     line: nodeLine(node),
     signature: sourceSlice(source, node)

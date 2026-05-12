@@ -53,6 +53,7 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
       handlerClass: event.handlerClass,
       handlerMethod: event.handlerMethod,
       handlerFunction: event.handlerFunction,
+      anonymous: event.anonymous,
       file: event.file,
       line: event.line,
       signature: event.signature,

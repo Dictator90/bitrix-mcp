@@ -20,6 +20,7 @@ export interface SymbolRecord {
   handlerClass?: string;
   handlerMethod?: string;
   handlerFunction?: string;
+  anonymous?: boolean;
   eventName?: string;
   file: string;
   line: number;
@@ -34,6 +35,7 @@ export interface EventRecord {
   handlerClass?: string;
   handlerMethod?: string;
   handlerFunction?: string;
+  anonymous?: boolean;
   file: string;
   line: number;
   signature?: string;
