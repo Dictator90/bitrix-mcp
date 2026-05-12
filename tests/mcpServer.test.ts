@@ -289,3 +289,28 @@ test("MCP semantic docs search tool is optional", async () => {
   const enabledTools = (enabledServer as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
   assert.ok(enabledTools.bitrix_semantic_docs_search);
 });
+
+
+test("MCP bitrix_module_usage_search is registered and returns compact module usages", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-module-usages-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-module-root-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), "<?php\n\\Bitrix\\Main\\Loader::includeModule('iblock');\n", "utf8");
+
+  const server = createMcpServer(runtimePaths(dataDir, root));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_module_usage_search);
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_module_usage_search.handler({ module: "iblock", limit: 5 });
+  const compact = JSON.parse(result.content[0].text) as Array<{ module: string; call: string; kind: string; file: string; line: number; signature: string }>;
+
+  assert.deepEqual(compact[0], {
+    module: "iblock",
+    call: "Loader::includeModule",
+    kind: "project",
+    file: path.join("local", "php_interface", "init.php"),
+    line: 2,
+    signature: "\\Bitrix\\Main\\Loader::includeModule('iblock')"
+  });
+});

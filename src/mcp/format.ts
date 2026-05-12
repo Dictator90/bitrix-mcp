@@ -1,4 +1,4 @@
-import type { BitrixRelationRecord, EventRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, EventRecord, ModuleUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -160,6 +160,26 @@ export function formatSemanticDocSearchResults(results: SemanticSearchHit[], opt
     title: typeof result.metadata.title === "string" ? result.metadata.title : undefined,
     path: typeof result.metadata.path === "string" ? result.metadata.path : undefined,
     excerpt: excerptText(result.text, normalized.query, normalized.maxTextChars)
+  }));
+}
+
+
+export interface ModuleUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatModuleUsageSearchResults(results: ModuleUsageRecord[] | undefined, options: ModuleUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    module: usage.module,
+    call: usage.call,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    signature: usage.signature
   }));
 }
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parsePhpSymbols } from "../src/liveapi/phpParser.js";
+import { parsePhpModuleUsages, parsePhpSymbols } from "../src/liveapi/phpParser.js";
 
 const php = `<?php
 class Example { public function run(): void {} }
@@ -208,4 +208,25 @@ RegisterModuleDependences('catalog', 'OnProductUpdate', 'vendor.module', 'Vendor
 
   const classSymbol = symbols.find((symbol) => symbol.type === "class");
   assert.equal(classSymbol?.module, "vendor.module");
+});
+
+test("parsePhpModuleUsages extracts Bitrix module include and check APIs", () => {
+  const usages = parsePhpModuleUsages(String.raw`<?php
+Loader::includeModule('iblock');
+\Bitrix\Main\Loader::includeModule('sale');
+CModule::IncludeModule('catalog');
+IsModuleInstalled('sale');
+ModuleManager::isModuleInstalled('iblock');
+\Bitrix\Main\ModuleManager::isModuleInstalled('iblock');
+Loader::includeModule($dynamicModule);
+`, "/srv/site/local/php_interface/init.php");
+
+  assert.deepEqual(usages.map((usage) => [usage.module, usage.call, usage.line, usage.signature]), [
+    ["iblock", "Loader::includeModule", 2, "Loader::includeModule('iblock')"],
+    ["sale", "Loader::includeModule", 3, "\\Bitrix\\Main\\Loader::includeModule('sale')"],
+    ["catalog", "CModule::IncludeModule", 4, "CModule::IncludeModule('catalog')"],
+    ["sale", "IsModuleInstalled", 5, "IsModuleInstalled('sale')"],
+    ["iblock", "ModuleManager::isModuleInstalled", 6, "ModuleManager::isModuleInstalled('iblock')"],
+    ["iblock", "ModuleManager::isModuleInstalled", 7, "\\Bitrix\\Main\\ModuleManager::isModuleInstalled('iblock')"]
+  ]);
 });

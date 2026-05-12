@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -11,6 +11,14 @@ export interface SqliteSearchQuery {
   query: string;
   type?: SymbolRecord["type"];
   module?: string;
+  limit?: number;
+}
+
+export interface ModuleUsageSearchQuery {
+  module?: string;
+  call?: string;
+  kind?: IndexKind | IndexKind[];
+  file?: string;
   limit?: number;
 }
 
@@ -67,6 +75,19 @@ interface SymbolRow {
   description: string | null;
 }
 
+interface ModuleUsageRow {
+  id: number;
+  file_id: number;
+  kind: IndexKind;
+  root: string;
+  module: string;
+  call: ModuleUsageRecord["call"];
+  file: string;
+  relative_file: string | null;
+  line: number;
+  signature: string;
+}
+
 interface BitrixRelationRow {
   id: number;
   source_type: string;
@@ -109,6 +130,19 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
   };
 }
 
+function rowToModuleUsage(row: ModuleUsageRow): ModuleUsageRecord {
+  return {
+    type: "module_usage",
+    kind: row.kind,
+    module: row.module,
+    call: row.call,
+    file: row.file,
+    relativeFile: row.relative_file ?? undefined,
+    line: row.line,
+    signature: row.signature
+  };
+}
+
 function parseRelationMetadata(value: string | null): Record<string, unknown> | undefined {
   if (!value) return undefined;
   try {
@@ -137,6 +171,22 @@ function rowToBitrixRelation(row: BitrixRelationRow): BitrixRelationRecord {
     signature: row.signature ?? undefined,
     metadata: parseRelationMetadata(row.metadata_json)
   };
+}
+
+function moduleUsageRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
+  return (file.moduleUsages ?? []).map((usage) => ({
+    sourceType: "file",
+    sourceName: file.relativePath,
+    targetType: "module",
+    targetName: usage.module,
+    relationType: "includes_module",
+    file: usage.file,
+    line: usage.line,
+    module: usage.module,
+    kind: file.kind,
+    signature: usage.signature,
+    metadata: { call: usage.call }
+  }));
 }
 
 function eventHandlerTarget(symbol: SymbolRecord): { targetType: string; targetName: string; metadata?: Record<string, unknown> } | undefined {
@@ -247,6 +297,19 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         description TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS module_usages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        root TEXT NOT NULL,
+        module TEXT NOT NULL,
+        call TEXT NOT NULL,
+        file TEXT NOT NULL,
+        relative_file TEXT,
+        line INTEGER NOT NULL,
+        signature TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL,
@@ -322,6 +385,11 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(type, module, name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
       CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_module ON module_usages(module);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_call ON module_usages(call);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_kind ON module_usages(kind);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_file ON module_usages(file);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_relative_file ON module_usages(relative_file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
@@ -493,6 +561,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO events (symbol_id, file_id, kind, root, module, name, handler_class, handler_method, handler_function, file, line, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertModuleUsage = db.prepare(`
+      INSERT INTO module_usages (file_id, kind, root, module, call, file, relative_file, line, signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     const insertSymbolFts = db.prepare(`
       INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -516,6 +588,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteSymbolsFtsForFile = db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE file_id = ?)");
     const deleteEventsFtsForFile = db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE file_id = ?)");
     const deleteEventsForFile = db.prepare("DELETE FROM events WHERE file_id = ?");
+    const deleteModuleUsagesForFile = db.prepare("DELETE FROM module_usages WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
@@ -526,6 +599,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         db.prepare("DELETE FROM symbols_fts WHERE rowid IN (SELECT id FROM symbols WHERE kind = ?)").run(manifest.kind);
         db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
         db.prepare("DELETE FROM bitrix_relations WHERE kind = ?").run(manifest.kind);
+        db.prepare("DELETE FROM module_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
         existingByPath.clear();
       } else {
@@ -533,6 +607,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           if (!currentPaths.has(file.path)) {
             deleteSymbolsFtsForFile.run(file.id);
             deleteEventsFtsForFile.run(file.id);
+            deleteModuleUsagesForFile.run(file.id);
             deleteRelationsForFile.run(file.path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
@@ -550,6 +625,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteSymbolsFtsForFile.run(existing.id);
           deleteEventsFtsForFile.run(existing.id);
           deleteEventsForFile.run(existing.id);
+          deleteModuleUsagesForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
           deleteRelationsForFile.run(file.path);
         }
@@ -627,6 +703,34 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             }
           }
         }
+        for (const usage of file.moduleUsages ?? []) {
+          insertModuleUsage.run(
+            fileId,
+            file.kind,
+            manifest.root,
+            usage.module,
+            usage.call,
+            usage.file,
+            nullable(usage.relativeFile ?? file.relativePath),
+            usage.line,
+            usage.signature
+          );
+        }
+        for (const relation of moduleUsageRelationsForFile(file)) {
+          insertRelation.run(
+            relation.sourceType,
+            relation.sourceName,
+            relation.targetType,
+            relation.targetName,
+            relation.relationType,
+            relation.file,
+            relation.line,
+            nullable(relation.module),
+            nullable(relation.kind),
+            nullable(relation.signature),
+            relationMetadataJson(relation)
+          );
+        }
       }
       setMeta.run(`index:${manifest.kind}`, JSON.stringify({ version: manifest.version, generatedAt: manifest.generatedAt, root: manifest.root, kind: manifest.kind, files: manifest.files.length }), manifest.generatedAt);
       setMeta.run(`index:${manifest.kind}:warnings`, warningMetaValue(manifest.warnings), manifest.generatedAt);
@@ -683,6 +787,53 @@ export async function writeBitrixRelations(dbFile: string, relations: BitrixRela
       db.exec("ROLLBACK;");
       throw error;
     }
+  } finally {
+    db.close();
+  }
+}
+
+
+export async function searchModuleUsages(dbFile: string, query: ModuleUsageSearchQuery): Promise<ModuleUsageRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (query.module !== undefined) {
+      filters.push("module = ?");
+      params.push(query.module);
+    }
+    if (query.call !== undefined) {
+      filters.push("call = ?");
+      params.push(query.call);
+    }
+    if (query.file !== undefined) {
+      filters.push("(file = ? OR relative_file = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature
+      FROM module_usages
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as ModuleUsageRow[];
+    return rows.map(rowToModuleUsage);
   } finally {
     db.close();
   }
@@ -787,6 +938,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       return undefined;
     }
     const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,
@@ -794,7 +946,8 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       size: file.size,
       mtimeMs: file.mtime_ms,
       language: file.language,
-      symbols: (symbolSelect.all(file.id) as unknown as SymbolRow[]).map(rowToSymbol)
+      symbols: (symbolSelect.all(file.id) as unknown as SymbolRow[]).map(rowToSymbol),
+      moduleUsages: (moduleUsageSelect.all(file.id) as unknown as ModuleUsageRow[]).map(rowToModuleUsage)
     }));
     const warningRow = db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
     return {
@@ -816,6 +969,7 @@ export interface IndexStatus {
   files: number;
   symbols: number;
   events: number;
+  moduleUsages: number;
   documents: number;
   docChunks: number;
   phpParseFallbackFiles: number;
@@ -855,6 +1009,7 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
       files: countRows(db, "files"),
       symbols: countRows(db, "symbols"),
       events: countRows(db, "events"),
+      moduleUsages: countRows(db, "module_usages"),
       documents: countRows(db, "docs"),
       docChunks: countRows(db, "doc_chunks"),
       phpParseFallbackFiles: countPhpParseFallbackFiles(db),

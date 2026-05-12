@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchBitrixRelations, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchBitrixRelations, searchModuleUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -763,4 +763,40 @@ AddEventHandler('sale', 'OnSaleOrderSaved', function () {});
   assert.equal(closureRelation?.[0]?.targetType, "function");
   assert.equal(closureRelation?.[0]?.targetName, "closure");
   assert.deepEqual(closureRelation?.[0]?.metadata, { anonymous: true });
+});
+
+
+test("buildIndex writes module usage records and file-to-module relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-module-usage-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-module-usage-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+Loader::includeModule('iblock');
+Loader::includeModule($dynamicModule);
+ModuleManager::isModuleInstalled('sale');
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+
+  const usages = await searchModuleUsages(sqlitePath(dataDir), { module: "iblock", limit: 5 });
+  assert.equal(usages?.length, 1);
+  assert.equal(usages?.[0]?.call, "Loader::includeModule");
+  assert.equal(usages?.[0]?.kind, "project");
+  assert.equal(usages?.[0]?.relativeFile, path.join("local", "php_interface", "init.php"));
+  assert.match(usages?.[0]?.signature ?? "", /Loader::includeModule\('iblock'\)/);
+
+  const allUsages = await searchModuleUsages(sqlitePath(dataDir), { limit: 10 });
+  assert.deepEqual(allUsages?.map((usage) => usage.module).sort(), ["iblock", "sale"]);
+
+  const relations = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "file",
+    sourceName: path.join("local", "php_interface", "init.php"),
+    targetType: "module",
+    targetName: "iblock",
+    relationType: "includes_module",
+    limit: 5
+  });
+  assert.equal(relations?.[0]?.module, "iblock");
+  assert.equal(relations?.[0]?.kind, "project");
+  assert.deepEqual(relations?.[0]?.metadata, { call: "Loader::includeModule" });
 });

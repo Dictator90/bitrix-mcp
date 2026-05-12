@@ -2,11 +2,13 @@
 import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { buildIndex } from "./indexer/indexer.js";
+import { searchModuleUsages } from "./indexer/sqliteStore.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { configureAgents, initAndServe, parseAgentIds, type InitOptions } from "./init/init.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
 import { serveStdio } from "./mcp/server.js";
+import { formatModuleUsageSearchResults } from "./mcp/format.js";
 
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
@@ -27,6 +29,7 @@ Commands:
   docs-update                   Clone or pull registered Git documentation sources
   index-docs [--force] [--embeddings] Index registered documentation sources into SQLite, optionally then into embeddings
   index-embeddings              Send SQLite documentation chunks to the embeddings service
+  search-modules <module>       Search indexed Bitrix module include/check API usages
   status                        Show SQLite DB path and index counters
   doctor [--json] [--verbose]   Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
 
@@ -215,6 +218,15 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "index-embeddings") {
     console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));
+    return;
+  }
+
+  if (command === "search-modules") {
+    if (!arg) {
+      throw new Error("search-modules requires a module name.");
+    }
+    const results = await searchModuleUsages(sqlitePath(paths.dataDir), { module: arg, limit: 50 }) ?? [];
+    console.log(JSON.stringify(formatModuleUsageSearchResults(results), null, 2));
     return;
   }
 
