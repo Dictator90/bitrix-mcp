@@ -372,3 +372,49 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
   assert.equal(compact[0]?.handlers?.[0]?.handlerClass, "MailHandlers");
   assert.equal(compact[0]?.handlers?.[0]?.handlerMethod, "beforeSend");
 });
+
+test("MCP ORM tools are registered and return compact ORM records", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-orm-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-orm-root-"));
+  const entityFile = path.join(root, "local", "modules", "vendor.module", "lib", "product.php");
+  const usageFile = path.join(root, "local", "modules", "vendor.module", "lib", "usage.php");
+  await fs.mkdir(path.dirname(entityFile), { recursive: true });
+  await fs.writeFile(entityFile, String.raw`<?php
+namespace Vendor\Module;
+use Bitrix\Main\ORM\Data\DataManager;
+class ProductTable extends DataManager
+{
+    public static function getTableName() { return 'vendor_product'; }
+    public static function getMap() { return [new IntegerField('ID', ['primary' => true]), new ReferenceField('USER', UserTable::class)]; }
+}
+`, "utf8");
+  await fs.writeFile(usageFile, String.raw`<?php
+namespace Vendor\Module;
+ProductTable::getList([]);
+`, "utf8");
+
+  const server = createMcpServer({ ...runtimePaths(dataDir, root), bitrixRoot: root });
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_orm_search);
+  assert.ok(tools.bitrix_orm_entity_map);
+  assert.ok(tools.bitrix_orm_usage_search);
+  await tools.bitrix_index_all.handler({});
+
+  const searchResult = await tools.bitrix_orm_search.handler({ tableName: "vendor_product", kind: "bitrix", limit: 5 });
+  const entities = JSON.parse(searchResult.content[0].text) as Array<{ className: string; tableName: string; fields: Array<{ name: string; type: string }>; references: Array<{ name: string; referenceClass: string }> }>;
+  assert.equal(entities[0]?.className, "Vendor\\Module\\ProductTable");
+  assert.equal(entities[0]?.tableName, "vendor_product");
+  assert.equal(entities[0]?.fields[0]?.name, "ID");
+  assert.equal(entities[0]?.references[0]?.referenceClass, "Vendor\\Module\\UserTable");
+
+  const mapResult = await tools.bitrix_orm_entity_map.handler({ className: "Vendor\\Module\\ProductTable" });
+  const maps = JSON.parse(mapResult.content[0].text) as Array<{ tableName: string }>;
+  assert.equal(maps[0]?.tableName, "vendor_product");
+
+  const usageResult = await tools.bitrix_orm_usage_search.handler({ entity: "Vendor\\Module\\ProductTable", method: "getList" });
+  const usages = JSON.parse(usageResult.content[0].text) as Array<{ entity: string; method: string; usageKind: string }>;
+  assert.equal(usages[0]?.entity, "Vendor\\Module\\ProductTable");
+  assert.equal(usages[0]?.method, "getList");
+  assert.equal(usages[0]?.usageKind, "datamanager");
+});

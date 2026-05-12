@@ -7,7 +7,7 @@ import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
-import type { IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, SymbolRecord } from "../types.js";
+import type { IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
@@ -110,10 +110,14 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     const source = shouldParseSymbols && (language === "php" || language === "javascript" || language === "typescript") ? await fs.readFile(absolutePath, "utf8") : "";
     let symbols: SymbolRecord[] = [];
     let moduleUsages: ModuleUsageRecord[] = [];
+    let ormEntities: OrmEntityRecord[] = [];
+    let ormUsages: OrmUsageRecord[] = [];
     if (shouldParseSymbols && language === "php") {
       const result = parsePhpSymbolsWithDiagnostics(source, absolutePath);
       symbols = result.symbols;
       moduleUsages = result.moduleUsages;
+      ormEntities = result.ormEntities;
+      ormUsages = result.ormUsages;
       warnings.push(...result.warnings);
       if (debugParse) {
         for (const warning of result.warnings) {
@@ -131,7 +135,9 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
       mtimeMs: stat.mtimeMs,
       language,
       symbols: symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? language })),
-      moduleUsages: moduleUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
+      moduleUsages: moduleUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
+      ormEntities: ormEntities.map((entity) => ({ ...entity, kind: options.kind, relativeFile: relativePath })),
+      ormUsages: ormUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
     });
   }
 

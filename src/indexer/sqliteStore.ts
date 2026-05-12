@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -40,6 +40,30 @@ export interface ModuleUsageSearchQuery {
   call?: string;
   kind?: IndexKind | IndexKind[];
   file?: string;
+  limit?: number;
+}
+
+export interface OrmSearchQuery {
+  query?: string;
+  tableName?: string;
+  className?: string;
+  module?: string;
+  kind?: IndexKind | IndexKind[] | string | string[];
+  limit?: number;
+}
+
+export interface OrmEntityMapQuery {
+  className?: string;
+  tableName?: string;
+  file?: string;
+}
+
+export interface OrmUsageSearchQuery {
+  query?: string;
+  entity?: string;
+  method?: string;
+  file?: string;
+  kind?: IndexKind | IndexKind[] | string | string[];
   limit?: number;
 }
 
@@ -115,6 +139,38 @@ interface ModuleUsageRow {
   signature: string;
 }
 
+interface OrmEntityRow {
+  id: number;
+  kind: IndexKind;
+  root: string;
+  class_name: string;
+  fully_qualified_name: string;
+  namespace: string | null;
+  parent_class: string | null;
+  module: string | null;
+  table_name: string | null;
+  file: string;
+  relative_file: string | null;
+  line: number;
+  fields_json: string;
+  references_json: string;
+  signature: string | null;
+}
+
+interface OrmUsageRow {
+  id: number;
+  kind: IndexKind;
+  root: string;
+  entity: string;
+  method: string;
+  usage_kind: OrmUsageRecord["usageKind"];
+  module: string | null;
+  file: string;
+  relative_file: string | null;
+  line: number;
+  signature: string | null;
+}
+
 interface BitrixRelationRow {
   id: number;
   source_type: string;
@@ -187,6 +243,51 @@ function parseRelationMetadata(value: string | null): Record<string, unknown> | 
     return undefined;
   }
   return undefined;
+}
+
+
+function parseJsonArray<T>(value: string | null): T[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToOrmEntity(row: OrmEntityRow): OrmEntityRecord {
+  return {
+    type: "orm_entity",
+    kind: row.kind,
+    className: row.class_name,
+    fullyQualifiedName: row.fully_qualified_name,
+    namespace: row.namespace ?? undefined,
+    parentClass: row.parent_class ?? undefined,
+    module: row.module ?? undefined,
+    tableName: row.table_name ?? undefined,
+    file: row.file,
+    relativeFile: row.relative_file ?? undefined,
+    line: row.line,
+    fields: parseJsonArray<OrmFieldRecord>(row.fields_json),
+    references: parseJsonArray<OrmFieldRecord>(row.references_json),
+    signature: row.signature ?? undefined
+  };
+}
+
+function rowToOrmUsage(row: OrmUsageRow): OrmUsageRecord {
+  return {
+    type: "orm_usage",
+    kind: row.kind,
+    entity: row.entity,
+    method: row.method,
+    usageKind: row.usage_kind,
+    module: row.module ?? undefined,
+    file: row.file,
+    relativeFile: row.relative_file ?? undefined,
+    line: row.line,
+    signature: row.signature ?? undefined
+  };
 }
 
 function rowToBitrixRelation(row: BitrixRelationRow): BitrixRelationRecord {
@@ -420,6 +521,40 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         signature TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS orm_entities (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        root TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        fully_qualified_name TEXT NOT NULL,
+        namespace TEXT,
+        parent_class TEXT,
+        module TEXT,
+        table_name TEXT,
+        file TEXT NOT NULL,
+        relative_file TEXT,
+        line INTEGER NOT NULL,
+        fields_json TEXT NOT NULL,
+        references_json TEXT NOT NULL,
+        signature TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS orm_usages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        root TEXT NOT NULL,
+        entity TEXT NOT NULL,
+        method TEXT NOT NULL,
+        usage_kind TEXT NOT NULL,
+        module TEXT,
+        file TEXT NOT NULL,
+        relative_file TEXT,
+        line INTEGER NOT NULL,
+        signature TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS docs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_id INTEGER REFERENCES doc_sources(id) ON DELETE SET NULL,
@@ -500,6 +635,14 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_module_usages_kind ON module_usages(kind);
       CREATE INDEX IF NOT EXISTS idx_module_usages_file ON module_usages(file);
       CREATE INDEX IF NOT EXISTS idx_module_usages_relative_file ON module_usages(relative_file);
+      CREATE INDEX IF NOT EXISTS idx_orm_entities_class ON orm_entities(class_name);
+      CREATE INDEX IF NOT EXISTS idx_orm_entities_table ON orm_entities(table_name);
+      CREATE INDEX IF NOT EXISTS idx_orm_entities_kind ON orm_entities(kind);
+      CREATE INDEX IF NOT EXISTS idx_orm_entities_file ON orm_entities(file);
+      CREATE INDEX IF NOT EXISTS idx_orm_usages_entity ON orm_usages(entity);
+      CREATE INDEX IF NOT EXISTS idx_orm_usages_method ON orm_usages(method);
+      CREATE INDEX IF NOT EXISTS idx_orm_usages_kind ON orm_usages(kind);
+      CREATE INDEX IF NOT EXISTS idx_orm_usages_file ON orm_usages(file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
@@ -680,6 +823,14 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO module_usages (file_id, kind, root, module, call, file, relative_file, line, signature)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertOrmEntity = db.prepare(`
+      INSERT INTO orm_entities (file_id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertOrmUsage = db.prepare(`
+      INSERT INTO orm_usages (file_id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     const insertSymbolFts = db.prepare(`
       INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -704,6 +855,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteEventsFtsForFile = db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE file_id = ?)");
     const deleteEventsForFile = db.prepare("DELETE FROM events WHERE file_id = ?");
     const deleteModuleUsagesForFile = db.prepare("DELETE FROM module_usages WHERE file_id = ?");
+    const deleteOrmEntitiesForFile = db.prepare("DELETE FROM orm_entities WHERE file_id = ?");
+    const deleteOrmUsagesForFile = db.prepare("DELETE FROM orm_usages WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
@@ -715,6 +868,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         db.prepare("DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE kind = ?)").run(manifest.kind);
         db.prepare("DELETE FROM bitrix_relations WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM module_usages WHERE kind = ?").run(manifest.kind);
+        db.prepare("DELETE FROM orm_entities WHERE kind = ?").run(manifest.kind);
+        db.prepare("DELETE FROM orm_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
         existingByPath.clear();
       } else {
@@ -723,6 +878,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             deleteSymbolsFtsForFile.run(file.id);
             deleteEventsFtsForFile.run(file.id);
             deleteModuleUsagesForFile.run(file.id);
+            deleteOrmEntitiesForFile.run(file.id);
+            deleteOrmUsagesForFile.run(file.id);
             deleteRelationsForFile.run(file.path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
@@ -741,6 +898,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteEventsFtsForFile.run(existing.id);
           deleteEventsForFile.run(existing.id);
           deleteModuleUsagesForFile.run(existing.id);
+          deleteOrmEntitiesForFile.run(existing.id);
+          deleteOrmUsagesForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
           deleteRelationsForFile.run(file.path);
         }
@@ -869,6 +1028,41 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             usage.line,
             usage.signature
           );
+        }
+        for (const entity of file.ormEntities ?? []) {
+          insertOrmEntity.run(
+            fileId,
+            file.kind,
+            manifest.root,
+            entity.className,
+            entity.fullyQualifiedName,
+            nullable(entity.namespace),
+            nullable(entity.parentClass),
+            nullable(entity.module),
+            nullable(entity.tableName),
+            entity.file,
+            nullable(entity.relativeFile ?? file.relativePath),
+            entity.line,
+            JSON.stringify(entity.fields),
+            JSON.stringify(entity.references),
+            nullable(entity.signature)
+          );
+          const entityName = entity.fullyQualifiedName || entity.className;
+          insertRelation.run("file", file.relativePath, "orm_entity", entityName, "defines_orm_entity", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), JSON.stringify({ tableName: entity.tableName }));
+          if (entity.parentClass) {
+            insertRelation.run("class", entityName, "parent_class", entity.parentClass, "extends", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
+          }
+          if (entity.tableName) {
+            insertRelation.run("orm_entity", entityName, "table", entity.tableName, "maps_table", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
+          }
+          for (const reference of entity.references) {
+            if (!reference.referenceClass) continue;
+            insertRelation.run("orm_entity", entityName, "orm_entity", reference.referenceClass, "references_orm_entity", entity.file, reference.line, nullable(entity.module), nullable(file.kind), nullable(reference.signature), JSON.stringify({ field: reference.name, type: reference.type }));
+          }
+        }
+        for (const usage of file.ormUsages ?? []) {
+          insertOrmUsage.run(fileId, file.kind, manifest.root, usage.entity, usage.method, usage.usageKind, nullable(usage.module), usage.file, nullable(usage.relativeFile ?? file.relativePath), usage.line, nullable(usage.signature));
+          insertRelation.run("file", file.relativePath, "orm_entity", usage.entity, "uses_orm_entity", usage.file, usage.line, nullable(usage.module), nullable(file.kind), nullable(usage.signature), JSON.stringify({ method: usage.method, usageKind: usage.usageKind }));
         }
         for (const relation of moduleUsageRelationsForFile(file)) {
           insertRelation.run(
@@ -1190,6 +1384,116 @@ export async function searchBitrixRelations(dbFile: string, query: BitrixRelatio
   }
 }
 
+function queryKinds(kind: OrmSearchQuery["kind"] | OrmUsageSearchQuery["kind"] | undefined): string[] {
+  return kind === undefined ? [] : Array.isArray(kind) ? kind : [kind];
+}
+
+function likeValue(value: string): string {
+  return `%${value.trim().replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+export async function searchOrmEntities(dbFile: string, query: OrmSearchQuery): Promise<OrmEntityRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.query !== undefined && query.query.trim()) {
+      const like = likeValue(query.query);
+      filters.push("(class_name LIKE ? ESCAPE '\\' OR fully_qualified_name LIKE ? ESCAPE '\\' OR coalesce(table_name, '') LIKE ? ESCAPE '\\' OR coalesce(module, '') LIKE ? ESCAPE '\\' OR fields_json LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like, like);
+    }
+    if (query.tableName !== undefined) { filters.push("table_name = ?"); params.push(query.tableName); }
+    if (query.className !== undefined) { filters.push("(class_name = ? OR fully_qualified_name = ?)"); params.push(query.className, query.className); }
+    if (query.module !== undefined) { filters.push("module = ?"); params.push(query.module); }
+    const kinds = queryKinds(query.kind);
+    if (kinds.length) { filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`); params.push(...kinds); }
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature
+      FROM orm_entities
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as OrmEntityRow[];
+    return rows.map(rowToOrmEntity);
+  } finally {
+    db.close();
+  }
+}
+
+export async function getOrmEntityMap(dbFile: string, query: OrmEntityMapQuery): Promise<OrmEntityRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.className !== undefined) { filters.push("(class_name = ? OR fully_qualified_name = ?)"); params.push(query.className, query.className); }
+    if (query.tableName !== undefined) { filters.push("table_name = ?"); params.push(query.tableName); }
+    if (query.file !== undefined) { filters.push("(file = ? OR relative_file = ?)"); params.push(query.file, query.file); }
+    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature
+      FROM orm_entities
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT 50
+    `).all(...params) as unknown as OrmEntityRow[];
+    return rows.map(rowToOrmEntity);
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchOrmUsages(dbFile: string, query: OrmUsageSearchQuery): Promise<OrmUsageRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.query !== undefined && query.query.trim()) {
+      const like = likeValue(query.query);
+      filters.push("(entity LIKE ? ESCAPE '\\' OR method LIKE ? ESCAPE '\\' OR usage_kind LIKE ? ESCAPE '\\' OR coalesce(signature, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like);
+    }
+    if (query.entity !== undefined) { filters.push("entity = ?"); params.push(query.entity); }
+    if (query.method !== undefined) { filters.push("method = ?"); params.push(query.method); }
+    if (query.file !== undefined) { filters.push("(file = ? OR relative_file = ?)"); params.push(query.file, query.file); }
+    const kinds = queryKinds(query.kind);
+    if (kinds.length) { filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`); params.push(...kinds); }
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature
+      FROM orm_usages
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as OrmUsageRow[];
+    return rows.map(rowToOrmUsage);
+  } finally {
+    db.close();
+  }
+}
+
 export async function clearBitrixRelationsByKind(dbFile: string, kind: string): Promise<number> {
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
@@ -1247,6 +1551,8 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     }
     const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, periodic, interval, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
     const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
+    const ormEntitySelect = db.prepare("SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature FROM orm_entities WHERE file_id = ? ORDER BY id");
+    const ormUsageSelect = db.prepare("SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature FROM orm_usages WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,
@@ -1255,7 +1561,9 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       mtimeMs: file.mtime_ms,
       language: file.language,
       symbols: (symbolSelect.all(file.id) as unknown as SymbolRow[]).map(rowToSymbol),
-      moduleUsages: (moduleUsageSelect.all(file.id) as unknown as ModuleUsageRow[]).map(rowToModuleUsage)
+      moduleUsages: (moduleUsageSelect.all(file.id) as unknown as ModuleUsageRow[]).map(rowToModuleUsage),
+      ormEntities: (ormEntitySelect.all(file.id) as unknown as OrmEntityRow[]).map(rowToOrmEntity),
+      ormUsages: (ormUsageSelect.all(file.id) as unknown as OrmUsageRow[]).map(rowToOrmUsage)
     }));
     const warningRow = db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
     return {

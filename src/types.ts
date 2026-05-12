@@ -9,6 +9,8 @@ export interface IndexFile {
   language: string;
   symbols: SymbolRecord[];
   moduleUsages?: ModuleUsageRecord[];
+  ormEntities?: OrmEntityRecord[];
+  ormUsages?: OrmUsageRecord[];
 }
 
 export interface SymbolRecord {
@@ -33,6 +35,46 @@ export interface SymbolRecord {
   line: number;
   signature?: string;
   description?: string;
+}
+
+export interface OrmFieldRecord {
+  name: string;
+  type: string;
+  className?: string;
+  line: number;
+  options?: Record<string, unknown>;
+  referenceClass?: string;
+  signature?: string;
+}
+
+export interface OrmEntityRecord {
+  type: "orm_entity";
+  className: string;
+  fullyQualifiedName: string;
+  namespace?: string;
+  parentClass?: string;
+  module?: string;
+  tableName?: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  fields: OrmFieldRecord[];
+  references: OrmFieldRecord[];
+  kind?: IndexKind;
+  signature?: string;
+}
+
+export interface OrmUsageRecord {
+  type: "orm_usage";
+  entity: string;
+  method: string;
+  usageKind: "datamanager" | "compile_entity" | "compile_entity_by_iblock";
+  module?: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature?: string;
 }
 
 export interface ModuleUsageRecord {

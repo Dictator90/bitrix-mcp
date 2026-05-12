@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parsePhpModuleUsages, parsePhpSymbols } from "../src/liveapi/phpParser.js";
+import { parsePhpModuleUsages, parsePhpSymbols, parsePhpSymbolsWithDiagnostics } from "../src/liveapi/phpParser.js";
 
 const php = `<?php
 class Example { public function run(): void {} }
@@ -302,4 +302,61 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
 
   const beforeAdd = symbols.find((symbol) => symbol.type === "event" && symbol.eventName === "OnBeforeEventAdd");
   assert.equal(beforeAdd?.handlerFunction, "beforeEventAdd");
+});
+
+test("parsePhpSymbolsWithDiagnostics extracts D7 ORM entities and usages", () => {
+  const { ormEntities, ormUsages } = parsePhpSymbolsWithDiagnostics(String.raw`<?php
+namespace Vendor\Module;
+use Bitrix\Main\ORM\Data\DataManager;
+use Bitrix\Main\ORM\Fields\IntegerField;
+use Bitrix\Main\ORM\Fields\StringField;
+use Bitrix\Main\ORM\Fields\Relations\Reference;
+class ProductTable extends DataManager
+{
+    public static function getTableName()
+    {
+        return 'vendor_product';
+    }
+    public static function getMap()
+    {
+        return [
+            new IntegerField('ID', ['primary' => true, 'autocomplete' => true, 'title' => 'ID']),
+            new StringField('NAME', ['required' => true, 'default_value' => 'New']),
+            new ReferenceField('USER', UserTable::class, ['=this.USER_ID' => 'ref.ID']),
+        ];
+    }
+}
+ProductTable::getList([]);
+\Bitrix\Main\Entity::compileEntity('Tmp', []);
+`, "/srv/site/local/modules/vendor.module/lib/product.php");
+
+  assert.equal(ormEntities.length, 1);
+  assert.equal(ormEntities[0].className, "Vendor\\Module\\ProductTable");
+  assert.equal(ormEntities[0].parentClass, "Bitrix\\Main\\ORM\\Data\\DataManager");
+  assert.equal(ormEntities[0].tableName, "vendor_product");
+  assert.equal(ormEntities[0].module, "vendor.module");
+  assert.equal(ormEntities[0].fields.length, 3);
+  assert.equal(ormEntities[0].fields[0].name, "ID");
+  assert.equal(ormEntities[0].fields[0].options?.primary, true);
+  assert.equal(ormEntities[0].fields[1].options?.required, true);
+  assert.equal(ormEntities[0].references[0].name, "USER");
+  assert.equal(ormEntities[0].references[0].referenceClass, "Vendor\\Module\\UserTable");
+  assert.ok(ormUsages.some((usage) => usage.entity === "Vendor\\Module\\ProductTable" && usage.method === "getList"));
+  assert.ok(ormUsages.some((usage) => usage.entity === "Bitrix\\Main\\Entity" && usage.usageKind === "compile_entity"));
+});
+
+test("parsePhpSymbolsWithDiagnostics detects legacy and imported DataManager parents", () => {
+  const imported = parsePhpSymbolsWithDiagnostics(String.raw`<?php
+use Bitrix\Main\Entity\DataManager as BaseDataManager;
+class ImportedTable extends BaseDataManager { public static function getTableName(){ return 'imported'; } }
+`, "/srv/site/local/modules/vendor.module/lib/imported.php");
+  assert.equal(imported.ormEntities[0].className, "ImportedTable");
+  assert.equal(imported.ormEntities[0].parentClass, "Bitrix\\Main\\Entity\\DataManager");
+
+  const fq = parsePhpSymbolsWithDiagnostics(String.raw`<?php
+namespace Vendor\Module;
+class LegacyTable extends \Bitrix\Main\Entity\DataManager { public static function getTableName(){ return 'legacy'; } }
+`, "/srv/site/local/modules/vendor.module/lib/legacy.php");
+  assert.equal(fq.ormEntities[0].className, "Vendor\\Module\\LegacyTable");
+  assert.equal(fq.ormEntities[0].tableName, "legacy");
 });

@@ -1,6 +1,6 @@
-import type { IndexWarning, ModuleUsageRecord, SymbolRecord } from "../types.js";
+import type { IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
-import { parsePhpSymbolsWithAst } from "./phpAstParser.js";
+import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
 
 function lineOf(source: string, index: number): number {
   return source.slice(0, index).split(/\r?\n/).length;
@@ -318,19 +318,22 @@ function errorMessage(error: unknown): string {
 export interface PhpParseResult {
   symbols: SymbolRecord[];
   moduleUsages: ModuleUsageRecord[];
+  ormEntities: OrmEntityRecord[];
+  ormUsages: OrmUsageRecord[];
   warnings: IndexWarning[];
 }
 
 export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string): PhpParseResult {
   try {
-    return { symbols: parsePhpSymbolsWithAst(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
+    const astResult = parsePhpWithAst(source, filePath);
+    return { ...astResult, moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
   } catch (error) {
     const warning: IndexWarning = {
       type: "php_parse_fallback",
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], warnings: [warning] };
   }
 }
 
