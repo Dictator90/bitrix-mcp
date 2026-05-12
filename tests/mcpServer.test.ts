@@ -418,3 +418,35 @@ ProductTable::getList([]);
   assert.equal(usages[0]?.method, "getList");
   assert.equal(usages[0]?.usageKind, "datamanager");
 });
+
+test("MCP component tools are registered and return component context", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-components-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-components-data-"));
+  const templateDir = path.join(root, "local", "templates", "site", "components", "bitrix", "catalog.section", ".default");
+  await fs.mkdir(templateDir, { recursive: true });
+  await fs.writeFile(path.join(root, "index.php"), String.raw`<?php
+$APPLICATION->IncludeComponent("bitrix:catalog.section", "", ["IBLOCK_ID" => 7, "AJAX_MODE" => "N"]);
+`, "utf8");
+  await fs.writeFile(path.join(templateDir, "template.php"), "<?php\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "style.css"), ".x{}\n", "utf8");
+
+  const paths = runtimePaths(dataDir, root);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index_template.handler({});
+
+  const searchResult = await tools.bitrix_component_search.handler({ component: "bitrix:catalog.section", limit: 5 });
+  const searchPayload = JSON.parse(searchResult.content[0].text) as Array<{ component: string; template: string }>;
+  assert.equal(searchPayload[0]?.component, "bitrix:catalog.section");
+  assert.equal(searchPayload[0]?.template, ".default");
+
+  const contextResult = await tools.bitrix_component_context.handler({ component: "bitrix:catalog.section", includeAssets: true });
+  const contextPayload = JSON.parse(contextResult.content[0].text) as { component: string; calls: unknown[]; templateFiles: Array<{ file: string }>; assets: Array<{ file: string }>; parameters: Array<{ name: string; value: unknown }> };
+  assert.equal(contextPayload.component, "bitrix:catalog.section");
+  assert.ok(contextPayload.calls.length >= 1);
+  assert.ok(contextPayload.templateFiles.some((file) => file.file.endsWith("template.php")));
+  assert.ok(contextPayload.assets.some((file) => file.file.endsWith("style.css")));
+  assert.ok(contextPayload.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 7));
+});

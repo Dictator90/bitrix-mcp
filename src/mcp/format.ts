@@ -287,3 +287,43 @@ export function formatOrmUsageResults(results: OrmUsageRecord[] | undefined, opt
     signature: usage.signature
   }));
 }
+
+
+export interface ComponentSearchFormatOptions { format?: "compact" | "full"; }
+
+export function formatComponentSearchResults(results: SymbolRecord[] | undefined, options: ComponentSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((component) => compactObject({
+    component: component.name,
+    template: component.template,
+    params: component.params,
+    kind: component.kind,
+    file: component.relativeFile ?? component.file,
+    line: component.line,
+    signature: component.signature
+  }));
+}
+
+export function formatComponentContextResult(result: unknown, options: ComponentSearchFormatOptions = {}): unknown {
+  if (options.format === "full" || typeof result !== "object" || result === null) return result;
+  const context = result as {
+    component?: string;
+    template?: string;
+    calls?: SymbolRecord[];
+    templateFiles?: Array<{ relativePath?: string; path: string; kind: string }>;
+    assets?: Array<{ relativePath?: string; path: string; kind: string }>;
+    parameters?: unknown[];
+    relations?: BitrixRelationRecord[];
+    possibleTemplatePaths?: string[];
+  };
+  return compactObject({
+    component: context.component,
+    template: context.template,
+    calls: context.calls?.map((call) => compactObject({ file: call.relativeFile ?? call.file, line: call.line, params: call.params, signature: call.signature })),
+    templateFiles: context.templateFiles?.map((file) => compactObject({ file: file.relativePath ?? file.path, kind: file.kind })),
+    assets: context.assets?.map((file) => compactObject({ file: file.relativePath ?? file.path, kind: file.kind })),
+    parameters: context.parameters,
+    relations: context.relations?.map((relation) => compactObject({ source: `${relation.sourceType}:${relation.sourceName}`, target: `${relation.targetType}:${relation.targetName}`, relationType: relation.relationType, file: relation.file, line: relation.line })),
+    possibleTemplatePaths: context.possibleTemplatePaths
+  });
+}

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "./template.js";
+import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -35,6 +36,36 @@ export interface MailEventSearchQuery {
 export interface MailEventSearchResult extends SymbolRecord {
   handlers?: SymbolRecord[];
 }
+export interface ComponentSearchQuery {
+  query?: string;
+  component?: string;
+  template?: string;
+  kind?: IndexKind | IndexKind[] | string | string[];
+  file?: string;
+  limit?: number;
+}
+
+export interface ComponentContextQuery {
+  component: string;
+  template?: string;
+  callFile?: string;
+  includeFiles?: boolean;
+  includeAssets?: boolean;
+  includeParams?: boolean;
+  format?: "compact" | "full";
+}
+
+export interface ComponentContextResult {
+  component: string;
+  template: string;
+  calls: SymbolRecord[];
+  templateFiles: IndexFile[];
+  assets: IndexFile[];
+  parameters: ComponentParamRecord[];
+  relations: BitrixRelationRecord[];
+  possibleTemplatePaths?: string[];
+}
+
 export interface ModuleUsageSearchQuery {
   module?: string;
   call?: string;
@@ -94,6 +125,7 @@ export interface ExistingIndexFile {
 
 interface FileRow {
   id: number;
+  kind: string;
   root: string;
   path: string;
   relative_path: string;
@@ -124,6 +156,8 @@ interface SymbolRow {
   periodic?: string | null;
   interval?: number | null;
   relative_file?: string | null;
+  component_template?: string | null;
+  params_json?: string | null;
 }
 
 interface ModuleUsageRow {
@@ -215,7 +249,9 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     siteId: row.site_id ?? undefined,
     periodic: row.periodic ?? undefined,
     interval: row.interval ?? undefined,
-    relativeFile: row.relative_file ?? undefined
+    relativeFile: row.relative_file ?? undefined,
+    template: row.component_template ?? undefined,
+    params: row.params_json ? parseJsonArray<ComponentParamRecord>(row.params_json) : undefined
   };
 }
 
@@ -395,6 +431,72 @@ function moduleUsageRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
   }));
 }
 
+
+function componentRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "component") return [];
+  const template = symbol.template ?? ".default";
+  const relations: BitrixRelationRecord[] = [{
+    sourceType: "file",
+    sourceName: file.relativePath,
+    targetType: "component",
+    targetName: symbol.name,
+    relationType: "includes_component",
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature,
+    metadata: { template, params: symbol.params ?? [] }
+  }, {
+    sourceType: "component",
+    sourceName: symbol.name,
+    targetType: "template",
+    targetName: `${symbol.name}:${template}`,
+    relationType: "uses_template",
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature,
+    metadata: { template, possiblePaths: possibleComponentTemplateRelativePaths(symbol.name, template) }
+  }];
+  const iblockId = symbol.params?.find((param) => param.name === "IBLOCK_ID")?.value;
+  if (iblockId !== undefined && iblockId !== "unknown") {
+    relations.push({
+      sourceType: "component",
+      sourceName: symbol.name,
+      targetType: "iblock",
+      targetName: String(iblockId),
+      relationType: "uses_iblock",
+      file: symbol.file,
+      line: symbol.line,
+      module: "iblock",
+      kind: file.kind,
+      signature: symbol.signature,
+      metadata: { param: "IBLOCK_ID", template }
+    });
+  }
+  return relations;
+}
+
+function componentRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
+  const info = componentNameFromRelativePath(file.relativePath);
+  if (!info) return [];
+  const relationType = info.role === "asset" ? "component_asset" : info.role === "template" ? "component_template_file" : "component_file";
+  const targetType = info.role === "asset" ? "asset" : "file";
+  return [{
+    sourceType: "component",
+    sourceName: info.component,
+    targetType,
+    targetName: file.relativePath,
+    relationType,
+    file: file.path,
+    line: 1,
+    kind: file.kind,
+    metadata: { template: info.template, role: info.role }
+  }];
+}
+
 function eventHandlerTarget(symbol: SymbolRecord): { targetType: string; targetName: string; metadata?: Record<string, unknown> } | undefined {
   if (symbol.handlerClass && symbol.handlerMethod) {
     return { targetType: "method", targetName: `${symbol.handlerClass}::${symbol.handlerMethod}` };
@@ -488,7 +590,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         file TEXT NOT NULL,
         line INTEGER NOT NULL,
         signature TEXT,
-        description TEXT
+        description TEXT,
+        component_template TEXT,
+        params_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS events (
@@ -716,7 +820,9 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       ["site_id", "TEXT"],
       ["periodic", "TEXT"],
       ["interval", "INTEGER"],
-      ["language", "TEXT"]
+      ["language", "TEXT"],
+      ["component_template", "TEXT"],
+      ["params_json", "TEXT"]
     ] as const) {
       if (!symbolColumns.includes(column)) {
         db.exec(`ALTER TABLE symbols ADD COLUMN ${column} ${definition};`);
@@ -811,8 +917,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       RETURNING id
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, signature, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, signature, description, component_template, params_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -928,7 +1034,9 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             symbol.file,
             symbol.line,
             nullable(symbol.signature),
-            nullable(symbol.description)
+            nullable(symbol.description),
+            nullable(symbol.template),
+            symbol.params && symbol.params.length ? JSON.stringify(symbol.params) : null
           ) as { id: number };
           insertSymbolFts.run(
             symbolIdRow.id,
@@ -998,6 +1106,11 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
               );
             }
           }
+          if (symbol.type === "component") {
+            for (const relation of componentRelationsForSymbol(symbol, file)) {
+              insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+            }
+          }
           if (symbol.type === "agent") {
             for (const relation of agentRelationsForSymbol(symbol, file)) {
               insertRelation.run(
@@ -1064,6 +1177,9 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           insertOrmUsage.run(fileId, file.kind, manifest.root, usage.entity, usage.method, usage.usageKind, nullable(usage.module), usage.file, nullable(usage.relativeFile ?? file.relativePath), usage.line, nullable(usage.signature));
           insertRelation.run("file", file.relativePath, "orm_entity", usage.entity, "uses_orm_entity", usage.file, usage.line, nullable(usage.module), nullable(file.kind), nullable(usage.signature), JSON.stringify({ method: usage.method, usageKind: usage.usageKind }));
         }
+        for (const relation of componentRelationsForFile(file)) {
+          insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+        }
         for (const relation of moduleUsageRelationsForFile(file)) {
           insertRelation.run(
             relation.sourceType,
@@ -1084,14 +1200,14 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       db.prepare("DELETE FROM bitrix_relations WHERE kind = ? AND relation_type = 'handled_by_event_handler'").run(manifest.kind);
       const mailEventRows = db.prepare(`
           SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
           FROM symbols s
           JOIN files f ON f.id = s.file_id
           WHERE s.kind = ? AND s.type = 'mail_event'
         `).all(manifest.kind) as unknown as SymbolRow[];
       const mailHandlerRows = db.prepare(`
           SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
           FROM symbols s
           JOIN files f ON f.id = s.file_id
           WHERE s.kind = ? AND s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
@@ -1217,7 +1333,7 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}
@@ -1229,7 +1345,7 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
     if (query.includeHandlers) {
       const handlers = db.prepare(`
         SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-               s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+               s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
         FROM symbols s
         JOIN files f ON f.id = s.file_id
         WHERE s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
@@ -1282,7 +1398,7 @@ export async function searchAgents(dbFile: string, query: AgentSearchQuery): Pro
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}
@@ -1382,6 +1498,82 @@ export async function searchBitrixRelations(dbFile: string, query: BitrixRelatio
   } finally {
     db.close();
   }
+}
+
+
+export async function searchComponents(dbFile: string, query: ComponentSearchQuery): Promise<SymbolRecord[] | undefined> {
+  try { await fs.access(dbFile); } catch { return undefined; }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = ["s.type = 'component'"];
+    const params: Array<string | number> = [];
+    if (query.query !== undefined && query.query.trim()) {
+      const like = likeValue(query.query);
+      filters.push("(s.name LIKE ? ESCAPE '\\' OR coalesce(s.component_template, '') LIKE ? ESCAPE '\\' OR coalesce(s.params_json, '') LIKE ? ESCAPE '\\' OR coalesce(s.signature, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like);
+    }
+    if (query.component !== undefined) { filters.push("s.name = ?"); params.push(query.component); }
+    if (query.template !== undefined) { filters.push("s.component_template = ?"); params.push(query.template.trim() ? query.template : ".default"); }
+    if (query.file !== undefined) { filters.push("(s.file = ? OR f.relative_path = ?)"); params.push(query.file, query.file); }
+    const kinds = queryKinds(query.kind);
+    if (kinds.length) { filters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`); params.push(...kinds); }
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const rows = db.prepare(`
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+      FROM symbols s JOIN files f ON f.id = s.file_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY s.id DESC
+      LIMIT ?
+    `).all(...params) as unknown as SymbolRow[];
+    return rows.map(rowToSymbol);
+  } finally { db.close(); }
+}
+
+function rowToIndexFile(row: FileRow): IndexFile {
+  return { path: row.path, relativePath: row.relative_path, kind: row.kind as IndexKind, size: row.size, mtimeMs: row.mtime_ms, language: row.language, symbols: [] };
+}
+
+export async function getComponentContext(dbFile: string, query: ComponentContextQuery): Promise<ComponentContextResult | undefined> {
+  try { await fs.access(dbFile); } catch { return undefined; }
+  await ensureSqliteStore(dbFile);
+  const template = query.template && query.template.trim() ? query.template : ".default";
+  const calls = await searchComponents(dbFile, { component: query.component, template, file: query.callFile, limit: 500 }) ?? [];
+  const db = openDatabase(dbFile);
+  try {
+    const possiblePaths = possibleComponentTemplateRelativePaths(query.component, template);
+    const fileFilters: string[] = [];
+    const fileParams: string[] = [];
+    for (const candidate of possiblePaths) {
+      if (candidate.includes("<site>")) {
+        fileFilters.push("relative_path LIKE ? ESCAPE '\\'");
+        fileParams.push(`${candidate.replace("<site>", "%")}/%`);
+      } else {
+        fileFilters.push("relative_path LIKE ? ESCAPE '\\'");
+        fileParams.push(`${candidate}/%`);
+      }
+    }
+    const files = fileFilters.length ? (db.prepare(`
+      SELECT id, kind, root, path, relative_path, size, mtime_ms, language, indexed_at
+      FROM files
+      WHERE ${fileFilters.map((filter) => `(${filter})`).join(" OR ")}
+      ORDER BY relative_path
+      LIMIT 500
+    `).all(...fileParams) as unknown as FileRow[]).map(rowToIndexFile) : [];
+    const assets = query.includeAssets === false ? [] : files.filter((file) => /(?:^|\/)(?:script\.js|style\.css)$/u.test(file.relativePath));
+    const templateFiles = query.includeFiles === false ? [] : files.filter((file) => !/(?:^|\/)(?:script\.js|style\.css)$/u.test(file.relativePath));
+    const relationRows = db.prepare(`
+      SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
+      FROM bitrix_relations
+      WHERE (source_type = 'component' AND source_name = ?) OR (target_type = 'component' AND target_name = ?) OR (source_type = 'file' AND target_type = 'component' AND target_name = ?)
+      ORDER BY id DESC
+      LIMIT 500
+    `).all(query.component, query.component, query.component) as unknown as BitrixRelationRow[];
+    const parameters = query.includeParams === false ? [] : calls.flatMap((call) => call.params ?? []);
+    return { component: query.component, template, calls, templateFiles, assets, parameters, relations: relationRows.map(rowToBitrixRelation), possibleTemplatePaths: possiblePaths };
+  } finally { db.close(); }
 }
 
 function queryKinds(kind: OrmSearchQuery["kind"] | OrmUsageSearchQuery["kind"] | undefined): string[] {
@@ -1793,7 +1985,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
     const placeholders = normalized.map(() => "?").join(", ");
     const symbolRows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE f.relative_path IN (${placeholders}) OR s.file IN (${placeholders})
