@@ -45,6 +45,21 @@ export interface SearchResult<T = unknown> {
   item: T;
 }
 
+export interface BitrixRelationRecord {
+  id?: number;
+  sourceType: string;
+  sourceName: string;
+  targetType: string;
+  targetName: string;
+  relationType: string;
+  file: string;
+  line: number;
+  module?: string;
+  kind?: string;
+  signature?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface IndexWarning {
   type: "php_parse_fallback";
   file: string;

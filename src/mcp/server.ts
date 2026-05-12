@@ -229,6 +229,27 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
+
+  server.tool(
+    "bitrix_relation_search",
+    "Search stored generic Bitrix relations by source, target, relation type, module, kind, or file. Compact output is returned by default.",
+    {
+      sourceType: z.string().optional(),
+      sourceName: z.string().optional(),
+      targetType: z.string().optional(),
+      targetName: z.string().optional(),
+      relationType: z.string().optional(),
+      module: z.string().optional(),
+      kind: z.string().optional(),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns short source/target fields by default; full returns raw relation records.")
+    },
+    async ({ sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_relation_search", { name: "searchBitrixRelations", paths, query: { sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format } });
+    }
+  );
+
   server.tool(
     "bitrix_index_project",
     "Index the current project for Bitrix-aware navigation.",

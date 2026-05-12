@@ -9,13 +9,125 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { getIndexStatus, readIndexWarnings } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, searchBitrixRelations, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
+
+
+test("Bitrix relations SQLite storage creates table and indexes", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-schema-"));
+  const dbFile = sqlitePath(dataDir);
+
+  await ensureSqliteStore(dbFile);
+
+  const db = new DatabaseSync(dbFile);
+  try {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'bitrix_relations'").get();
+    assert.ok(table);
+    const indexes = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'bitrix_relations'").all() as Array<{ name: string }>).map((row) => row.name));
+    assert.ok(indexes.has("idx_bitrix_relations_relation_type"));
+    assert.ok(indexes.has("idx_bitrix_relations_source"));
+    assert.ok(indexes.has("idx_bitrix_relations_target"));
+    assert.ok(indexes.has("idx_bitrix_relations_file"));
+    assert.ok(indexes.has("idx_bitrix_relations_kind"));
+    assert.ok(indexes.has("idx_bitrix_relations_module"));
+  } finally {
+    db.close();
+  }
+});
+
+test("Bitrix relations SQLite storage inserts and searches relations", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-search-"));
+  const dbFile = sqlitePath(dataDir);
+  const fileA = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "agent.php");
+  const fileB = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "event.php");
+
+  await writeBitrixRelations(dbFile, [
+    {
+      sourceType: "agent",
+      sourceName: "Vendor\\Module\\Agent::run",
+      targetType: "class",
+      targetName: "Vendor\\Module\\Service",
+      relationType: "calls",
+      file: fileA,
+      line: 12,
+      module: "vendor.module",
+      kind: "agent",
+      signature: "Agent::run();",
+      metadata: { interval: 60 }
+    },
+    {
+      sourceType: "event",
+      sourceName: "main:OnBeforeProlog",
+      targetType: "method",
+      targetName: "Vendor\\Module\\Handler::onBeforeProlog",
+      relationType: "handles",
+      file: fileB,
+      line: 24,
+      module: "main",
+      kind: "event"
+    },
+    {
+      sourceType: "component",
+      sourceName: "bitrix:news.list",
+      targetType: "module",
+      targetName: "iblock",
+      relationType: "requires",
+      file: fileB,
+      line: 42,
+      module: "iblock",
+      kind: "component"
+    }
+  ]);
+
+  const allRelations = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(allRelations?.length, 3);
+
+  const sourceResults = await searchBitrixRelations(dbFile, { sourceType: "agent", sourceName: "Vendor\\Module\\Agent::run" });
+  assert.equal(sourceResults?.length, 1);
+  assert.equal(sourceResults?.[0]?.targetName, "Vendor\\Module\\Service");
+  assert.deepEqual(sourceResults?.[0]?.metadata, { interval: 60 });
+
+  const targetResults = await searchBitrixRelations(dbFile, { targetType: "method", targetName: "Vendor\\Module\\Handler::onBeforeProlog" });
+  assert.equal(targetResults?.length, 1);
+  assert.equal(targetResults?.[0]?.sourceName, "main:OnBeforeProlog");
+
+  const relationTypeResults = await searchBitrixRelations(dbFile, { relationType: "requires" });
+  assert.equal(relationTypeResults?.length, 1);
+  assert.equal(relationTypeResults?.[0]?.sourceName, "bitrix:news.list");
+});
+
+test("Bitrix relations SQLite storage clears by kind and file", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-clear-"));
+  const dbFile = sqlitePath(dataDir);
+  const fileA = path.join(fixtureRoot, "a.php");
+  const fileB = path.join(fixtureRoot, "b.php");
+
+  await writeBitrixRelations(dbFile, [
+    { sourceType: "event", sourceName: "main:OnPageStart", targetType: "function", targetName: "pageStart", relationType: "handles", file: fileA, line: 10, module: "main", kind: "event" },
+    { sourceType: "event", sourceName: "main:OnBeforeProlog", targetType: "method", targetName: "Handler::run", relationType: "handles", file: fileB, line: 20, module: "main", kind: "event" },
+    { sourceType: "agent", sourceName: "Agent::run", targetType: "class", targetName: "Service", relationType: "calls", file: fileB, line: 30, module: "vendor.module", kind: "agent" }
+  ]);
+
+  assert.equal(await clearBitrixRelationsByKind(dbFile, "event"), 2);
+  let remaining = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(remaining?.length, 1);
+  assert.equal(remaining?.[0]?.kind, "agent");
+
+  await writeBitrixRelations(dbFile, [
+    { sourceType: "component", sourceName: "bitrix:news", targetType: "module", targetName: "iblock", relationType: "requires", file: fileA, line: 40, module: "iblock", kind: "component" },
+    { sourceType: "orm", sourceName: "Vendor\\Table", targetType: "table", targetName: "b_vendor", relationType: "maps", file: fileB, line: 50, module: "vendor.module", kind: "orm" }
+  ]);
+
+  assert.equal(await clearBitrixRelationsByFile(dbFile, fileB), 2);
+  remaining = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(remaining?.length, 1);
+  assert.equal(remaining?.[0]?.file, fileA);
+});
 
 async function createGitDocsRepository(): Promise<string> {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-git-"));

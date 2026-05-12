@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -12,6 +12,23 @@ export interface SqliteSearchQuery {
   type?: SymbolRecord["type"];
   module?: string;
   limit?: number;
+}
+
+export interface BitrixRelationSearchQuery {
+  sourceType?: string;
+  sourceName?: string;
+  targetType?: string;
+  targetName?: string;
+  relationType?: string;
+  module?: string;
+  kind?: string;
+  file?: string;
+  limit?: number;
+}
+
+export interface WriteBitrixRelationsOptions {
+  clearKind?: string;
+  clearFile?: string;
 }
 
 export interface ExistingIndexFile {
@@ -50,6 +67,21 @@ interface SymbolRow {
   description: string | null;
 }
 
+interface BitrixRelationRow {
+  id: number;
+  source_type: string;
+  source_name: string;
+  target_type: string;
+  target_name: string;
+  relation_type: string;
+  file: string;
+  line: number;
+  module: string | null;
+  kind: string | null;
+  signature: string | null;
+  metadata_json: string | null;
+}
+
 function nullable(value: string | undefined): string | null {
   return value ?? null;
 }
@@ -74,6 +106,36 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     line: row.line,
     signature: row.signature ?? undefined,
     description: row.description ?? undefined
+  };
+}
+
+function parseRelationMetadata(value: string | null): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function rowToBitrixRelation(row: BitrixRelationRow): BitrixRelationRecord {
+  return {
+    id: row.id,
+    sourceType: row.source_type,
+    sourceName: row.source_name,
+    targetType: row.target_type,
+    targetName: row.target_name,
+    relationType: row.relation_type,
+    file: row.file,
+    line: row.line,
+    module: row.module ?? undefined,
+    kind: row.kind ?? undefined,
+    signature: row.signature ?? undefined,
+    metadata: parseRelationMetadata(row.metadata_json)
   };
 }
 
@@ -179,6 +241,21 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS bitrix_relations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_type TEXT NOT NULL,
+        source_name TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_name TEXT NOT NULL,
+        relation_type TEXT NOT NULL,
+        file TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        module TEXT,
+        kind TEXT,
+        signature TEXT,
+        metadata_json TEXT
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
         name, type, module, class_name, signature, description
       );
@@ -195,6 +272,12 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(type, module, name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
       CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_file ON bitrix_relations(file);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_kind ON bitrix_relations(kind);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_module ON bitrix_relations(module);
 
       INSERT OR IGNORE INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       SELECT id, name, type, module, class_name, signature, description FROM symbols;
@@ -480,6 +563,118 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       db.exec("ROLLBACK;");
       throw error;
     }
+  } finally {
+    db.close();
+  }
+}
+
+
+function relationMetadataJson(relation: BitrixRelationRecord): string | null {
+  return relation.metadata === undefined ? null : JSON.stringify(relation.metadata);
+}
+
+export async function writeBitrixRelations(dbFile: string, relations: BitrixRelationRecord[], options: WriteBitrixRelationsOptions = {}): Promise<void> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const insertRelation = db.prepare(`
+      INSERT INTO bitrix_relations (source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    db.exec("BEGIN IMMEDIATE;");
+    try {
+      if (options.clearKind !== undefined) {
+        db.prepare("DELETE FROM bitrix_relations WHERE kind = ?").run(options.clearKind);
+      }
+      if (options.clearFile !== undefined) {
+        db.prepare("DELETE FROM bitrix_relations WHERE file = ?").run(options.clearFile);
+      }
+      for (const relation of relations) {
+        insertRelation.run(
+          relation.sourceType,
+          relation.sourceName,
+          relation.targetType,
+          relation.targetName,
+          relation.relationType,
+          relation.file,
+          relation.line,
+          nullable(relation.module),
+          nullable(relation.kind),
+          nullable(relation.signature),
+          relationMetadataJson(relation)
+        );
+      }
+      db.exec("COMMIT;");
+    } catch (error) {
+      db.exec("ROLLBACK;");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchBitrixRelations(dbFile: string, query: BitrixRelationSearchQuery): Promise<BitrixRelationRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+    for (const [column, value] of [
+      ["source_type", query.sourceType],
+      ["source_name", query.sourceName],
+      ["target_type", query.targetType],
+      ["target_name", query.targetName],
+      ["relation_type", query.relationType],
+      ["module", query.module],
+      ["kind", query.kind],
+      ["file", query.file]
+    ] as const) {
+      if (value !== undefined) {
+        filters.push(`${column} = ?`);
+        params.push(value);
+      }
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
+      FROM bitrix_relations
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as BitrixRelationRow[];
+    return rows.map(rowToBitrixRelation);
+  } finally {
+    db.close();
+  }
+}
+
+export async function clearBitrixRelationsByKind(dbFile: string, kind: string): Promise<number> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const result = db.prepare("DELETE FROM bitrix_relations WHERE kind = ?").run(kind);
+    return Number(result.changes);
+  } finally {
+    db.close();
+  }
+}
+
+export async function clearBitrixRelationsByFile(dbFile: string, file: string): Promise<number> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const result = db.prepare("DELETE FROM bitrix_relations WHERE file = ?").run(file);
+    return Number(result.changes);
   } finally {
     db.close();
   }
