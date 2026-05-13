@@ -1,4 +1,4 @@
-import type { ComponentParamRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, HlblockUsageRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
 
@@ -398,6 +398,56 @@ function parsePhpIblockUsagesWithRegex(source: string, filePath: string): Iblock
   return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
 }
 
+const HLBLOCK_API_REGEX_MAP = new Map<string, string>([
+  ["highloadblocktable::getlist", "HighloadBlockTable::getList"],
+  ["highloadblocktable::getbyid", "HighloadBlockTable::getById"],
+  ["highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"],
+  ["bitrix\\highloadblock\\highloadblocktable::getlist", "HighloadBlockTable::getList"],
+  ["bitrix\\highloadblock\\highloadblocktable::getbyid", "HighloadBlockTable::getById"],
+  ["bitrix\\highloadblock\\highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"]
+]);
+
+function parseHlblockIdFromArgs(api: string, argsSource: string): string {
+  if (api === "HighloadBlockTable::getById") {
+    const first = splitTopLevelArgs(argsSource)[0]?.trim();
+    if (!first) return "unknown";
+    if (/^-?\d+$/u.test(first)) return first;
+    const literal = unquotePhpString(first);
+    if (literal !== undefined) return literal;
+    if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(first)) return first.replace(/^\\/u, "");
+    return "unknown";
+  }
+  const pattern = /["'](?:HLBLOCK_ID|ID|HLBLOCK_CODE|CODE|NAME)["']\s*=>\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\\?[A-Za-z_][A-Za-z0-9_\\]*|-?\d+)/i;
+  const match = argsSource.match(pattern);
+  if (!match) return "unknown";
+  const raw = match[1].trim();
+  return unquotePhpString(raw) ?? raw.replace(/^\\/u, "");
+}
+
+function parsePhpHlblockUsagesWithRegex(source: string, filePath: string): HlblockUsageRecord[] {
+  const usages: HlblockUsageRecord[] = [];
+  const callRegex = /(?<![A-Za-z0-9_\\])((?:\\?Bitrix\\Highloadblock\\)?HighloadBlockTable)::([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  for (const match of source.matchAll(callRegex)) {
+    const start = match.index ?? 0;
+    const className = match[1].replace(/^\\/u, "");
+    const api = HLBLOCK_API_REGEX_MAP.get(`${className.toLowerCase()}::${match[2].toLowerCase()}`);
+    if (!api) continue;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const argsSource = source.slice(openParenIndex + 1, end - 1);
+    usages.push({
+      type: "hlblock_usage",
+      hlblockId: parseHlblockIdFromArgs(api, argsSource),
+      api,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+  return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -408,6 +458,7 @@ export interface PhpParseResult {
   ormEntities: OrmEntityRecord[];
   ormUsages: OrmUsageRecord[];
   iblockUsages: IblockUsageRecord[];
+  hlblockUsages: HlblockUsageRecord[];
   warnings: IndexWarning[];
 }
 
@@ -421,7 +472,7 @@ export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string)
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), hlblockUsages: parsePhpHlblockUsagesWithRegex(source, filePath), warnings: [warning] };
   }
 }
 

@@ -451,6 +451,27 @@ $APPLICATION->IncludeComponent("bitrix:catalog.section", "", ["IBLOCK_ID" => 7, 
   assert.ok(contextPayload.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 7));
 });
 
+test("MCP bitrix_hlblock_usage_search is registered and searches indexed Highloadblock usages", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-hlblock-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-hlblock-root-"));
+  await fs.writeFile(path.join(root, "index.php"), "<?php\nHighloadBlockTable::getById(3);\n", "utf8");
+  const paths = runtimePaths(dataDir, root);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_hlblock_usage_search);
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_hlblock_usage_search.handler({ hlblockId: "3", limit: 5 });
+  const compact = JSON.parse(result.content[0].text) as Array<{ hlblockId: string; api: string; file: string; line: number }>;
+  assert.equal(compact[0]?.hlblockId, "3");
+  assert.equal(compact[0]?.api, "HighloadBlockTable::getById");
+  assert.equal(compact[0]?.file, "index.php");
+
+  const fullResult = await tools.bitrix_hlblock_usage_search.handler({ api: "HighloadBlockTable::getById", format: "full" });
+  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; hlblockId: string }>;
+  assert.equal(full[0]?.type, "hlblock_usage");
+});
+
 test("MCP bitrix_iblock_usage_search is registered and searches indexed IBlock usages", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-root-"));
