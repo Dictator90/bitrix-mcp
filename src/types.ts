@@ -12,6 +12,7 @@ export interface IndexFile {
   ormEntities?: OrmEntityRecord[];
   ormUsages?: OrmUsageRecord[];
   iblockUsages?: IblockUsageRecord[];
+  hlblockUsages?: HlblockUsageRecord[];
 }
 
 export interface ComponentParamRecord {
@@ -84,6 +85,19 @@ export interface IblockUsageRecord {
   contextType?: "method" | "function";
   contextName?: string;
   component?: string;
+}
+
+export interface HlblockUsageRecord {
+  type: "hlblock_usage";
+  hlblockId: string;
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
 }
 
 export interface OrmUsageRecord {

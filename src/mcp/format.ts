@@ -1,4 +1,4 @@
-import type { BitrixRelationRecord, EventRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -224,6 +224,10 @@ export interface IblockUsageSearchFormatOptions {
   format?: "compact" | "full";
 }
 
+export interface HlblockUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
 export function formatIblockUsageSearchResults(results: IblockUsageRecord[] | undefined, options: IblockUsageSearchFormatOptions = {}): unknown[] | undefined {
   if (options.format === "full") {
     return results;
@@ -231,6 +235,24 @@ export function formatIblockUsageSearchResults(results: IblockUsageRecord[] | un
 
   return results?.map((usage) => compactObject({
     iblockId: usage.iblockId,
+    api: usage.api,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    contextType: usage.contextType,
+    contextName: usage.contextName,
+    signature: usage.signature
+  }));
+}
+
+
+export function formatHlblockUsageSearchResults(results: HlblockUsageRecord[] | undefined, options: HlblockUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    hlblockId: usage.hlblockId,
     api: usage.api,
     kind: usage.kind,
     file: usage.relativeFile ?? usage.file,

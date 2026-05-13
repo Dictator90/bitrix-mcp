@@ -1,5 +1,5 @@
 import phpParser from "php-parser";
-import type { ComponentParamRecord, EventRecord, IblockUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 type PhpNode = {
   kind: string;
@@ -318,6 +318,75 @@ function findIblockIdInArgs(args: PhpNode[], context: ParserContext): string {
     if (value !== undefined) return value;
   }
   return "unknown";
+}
+
+const HLBLOCK_APIS = new Map<string, string>([
+  ["highloadblocktable::getlist", "HighloadBlockTable::getList"],
+  ["highloadblocktable::getbyid", "HighloadBlockTable::getById"],
+  ["highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"],
+  ["bitrix\\highloadblock\\highloadblocktable::getlist", "HighloadBlockTable::getList"],
+  ["bitrix\\highloadblock\\highloadblocktable::getbyid", "HighloadBlockTable::getById"],
+  ["bitrix\\highloadblock\\highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"]
+]);
+
+function normalizeHlblockApi(className: string, methodName: string): string | undefined {
+  return HLBLOCK_APIS.get(`${className.replace(/^\\/u, "").toLowerCase()}::${methodName.toLowerCase()}`);
+}
+
+function hlblockScalarValue(node: unknown, context: ParserContext): string | undefined {
+  if (!isNode(node)) return undefined;
+  if (node.kind === "number") {
+    const value = numericLiteral(node);
+    return value === undefined ? undefined : String(value);
+  }
+  if (node.kind === "string") return typeof node.value === "string" ? node.value : undefined;
+  if (node.kind === "name" || node.kind === "staticlookup") return literalString(node, context);
+  return undefined;
+}
+
+function hlblockIdFromArray(node: unknown, context: ParserContext): string | undefined {
+  if (!isNode(node) || node.kind !== "array" || !Array.isArray(node.items)) return undefined;
+  for (const item of node.items.filter(isNode)) {
+    const key = literalString(item.key, context)?.replace(/^=/u, "").toUpperCase();
+    if (key === "HLBLOCK_ID" || key === "ID" || key === "HLBLOCK_CODE" || key === "CODE" || key === "NAME") {
+      return hlblockScalarValue(item.value, context) ?? "unknown";
+    }
+    const nested = hlblockIdFromArray(item.value, context);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function findHlblockIdInArgs(api: string, args: PhpNode[], context: ParserContext): string {
+  if (api === "HighloadBlockTable::getById") {
+    return hlblockScalarValue(args[0], context) ?? "unknown";
+  }
+  for (const arg of args) {
+    const value = hlblockIdFromArray(arg, context);
+    if (value !== undefined) return value;
+  }
+  return "unknown";
+}
+
+function maybeHlblockUsage(source: string, filePath: string, node: PhpNode, context: ParserContext): HlblockUsageRecord | undefined {
+  const what = isNode(node.what) ? node.what : undefined;
+  if (!what || what.kind !== "staticlookup") return undefined;
+  const methodName = nodeName(what.offset);
+  const targetName = callTargetName(node, context);
+  if (!methodName || !targetName) return undefined;
+  const api = normalizeHlblockApi(targetName, methodName);
+  if (!api) return undefined;
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+  return {
+    type: "hlblock_usage",
+    hlblockId: findHlblockIdInArgs(api, args, context),
+    api,
+    file: filePath,
+    line: nodeLine(node),
+    signature: sourceSlice(source, node) ?? `${api}(...)`,
+    contextType: context.currentSymbolType,
+    contextName: context.currentSymbolName
+  };
 }
 
 function maybeIblockUsage(source: string, filePath: string, node: PhpNode, context: ParserContext): IblockUsageRecord | undefined {
@@ -692,16 +761,16 @@ function childrenOf(node: PhpNode): PhpNode[] {
   return children;
 }
 
-function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[], ormEntities: OrmEntityRecord[], ormUsages: OrmUsageRecord[], iblockUsages: IblockUsageRecord[]): void {
+function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[], ormEntities: OrmEntityRecord[], ormUsages: OrmUsageRecord[], iblockUsages: IblockUsageRecord[], hlblockUsages: HlblockUsageRecord[]): void {
   switch (node.kind) {
     case "program":
     case "block":
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
 
     case "namespace": {
       const namespaceContext = cloneContext(context, { namespace: typeof node.name === "string" ? node.name : undefined, uses: new Map() });
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
     }
 
@@ -726,7 +795,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const entity = maybeOrmEntity(source, filePath, module, node, context);
       if (entity) ormEntities.push(entity);
       const classContext = cloneContext(context, { className });
-      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
     }
 
@@ -742,7 +811,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "function", currentSymbolName: simpleName ? fullyQualifiedDeclarationName(simpleName, context) : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "function", currentSymbolName: simpleName ? fullyQualifiedDeclarationName(simpleName, context) : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
     }
 
@@ -759,7 +828,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "method", currentSymbolName: simpleName ? `${context.className ? `${context.className}::` : ""}${simpleName}` : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "method", currentSymbolName: simpleName ? `${context.className ? `${context.className}::` : ""}${simpleName}` : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
     }
 
@@ -793,17 +862,20 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const iblockUsage = maybeIblockUsage(source, filePath, node, context);
       if (iblockUsage) iblockUsages.push(iblockUsage);
 
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages);
+      const hlblockUsage = maybeHlblockUsage(source, filePath, node, context);
+      if (hlblockUsage) hlblockUsages.push(hlblockUsage);
+
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       const what = isNode(node.what) ? node.what : undefined;
-      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols, ormEntities, ormUsages, iblockUsages);
+      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       const lookupTarget = what && (what.kind === "propertylookup" || what.kind === "staticlookup") && isNode(what.what) ? what.what : undefined;
-      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols, ormEntities, ormUsages, iblockUsages);
-      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols, ormEntities, ormUsages, iblockUsages);
+      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
       return;
     }
 
     default:
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
   }
 }
 
@@ -812,6 +884,7 @@ export interface PhpAstParseResult {
   ormEntities: OrmEntityRecord[];
   ormUsages: OrmUsageRecord[];
   iblockUsages: IblockUsageRecord[];
+  hlblockUsages: HlblockUsageRecord[];
 }
 
 export function parsePhpWithAst(source: string, filePath: string): PhpAstParseResult {
@@ -820,8 +893,9 @@ export function parsePhpWithAst(source: string, filePath: string): PhpAstParseRe
   const ormEntities: OrmEntityRecord[] = [];
   const ormUsages: OrmUsageRecord[] = [];
   const iblockUsages: IblockUsageRecord[] = [];
-  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols, ormEntities, ormUsages, iblockUsages);
-  return { symbols, ormEntities, ormUsages, iblockUsages };
+  const hlblockUsages: HlblockUsageRecord[] = [];
+  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+  return { symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages };
 }
 
 export function parsePhpSymbolsWithAst(source: string, filePath: string): SymbolRecord[] {

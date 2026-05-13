@@ -414,3 +414,28 @@ class CatalogReader {
   ]);
   assert.ok(result.iblockUsages.every((usage) => usage.contextName === "CatalogReader::load"));
 });
+
+
+test("parsePhpSymbolsWithDiagnostics extracts common Highloadblock usages", () => {
+  const result = parsePhpSymbolsWithDiagnostics(String.raw`<?php
+use Bitrix\Highloadblock\HighloadBlockTable;
+class HlReader {
+    public function load($id) {
+        HighloadBlockTable::getById(3);
+        HighloadBlockTable::getList(["filter" => ["HLBLOCK_ID" => 3]]);
+        HighloadBlockTable::compileEntity($hlblock);
+        \Bitrix\Highloadblock\HighloadBlockTable::compileEntity(['ID' => HLBLOCK_CODE]);
+        \Bitrix\Highloadblock\HighloadBlockTable::getList(['filter' => ['HLBLOCK_ID' => $id]]);
+    }
+}
+`, "/srv/site/local/php_interface/hlblock.php");
+
+  assert.deepEqual(result.hlblockUsages.map((usage) => [usage.api, usage.hlblockId]), [
+    ["HighloadBlockTable::getById", "3"],
+    ["HighloadBlockTable::getList", "3"],
+    ["HighloadBlockTable::compileEntity", "unknown"],
+    ["HighloadBlockTable::compileEntity", "HLBLOCK_CODE"],
+    ["HighloadBlockTable::getList", "unknown"]
+  ]);
+  assert.ok(result.hlblockUsages.every((usage) => usage.contextName === "HlReader::load"));
+});

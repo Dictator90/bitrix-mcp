@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -1012,6 +1012,47 @@ class CatalogUsage
 
   const methodRelations = await searchBitrixRelations(dbFile, { sourceType: "method", sourceName: "CatalogUsage::load", targetType: "iblock", targetName: "$iblockId", relationType: "uses_iblock", limit: 10 });
   assert.ok((methodRelations?.length ?? 0) >= 1);
+});
+
+test("buildIndex indexes Highloadblock API usages and writes Highloadblock relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-hlblock-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-hlblock-data-"));
+  const usageFile = path.join(root, "local", "php_interface", "hlblock.php");
+  await fs.mkdir(path.dirname(usageFile), { recursive: true });
+  await fs.writeFile(usageFile, String.raw`<?php
+use Bitrix\Highloadblock\HighloadBlockTable;
+function loadHl($dynamicId) {
+    HighloadBlockTable::getById(3);
+    HighloadBlockTable::getList(["filter" => ["HLBLOCK_ID" => 3]]);
+    HighloadBlockTable::compileEntity($hlblock);
+    \Bitrix\Highloadblock\HighloadBlockTable::compileEntity(['ID' => HLBLOCK_CODE]);
+    \Bitrix\Highloadblock\HighloadBlockTable::getList(['filter' => ['HLBLOCK_ID' => $dynamicId]]);
+}
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const byIdUsages = await searchHlblockUsages(dbFile, { hlblockId: "3", api: "HighloadBlockTable::getById", limit: 10 });
+  assert.equal(byIdUsages?.length, 1);
+  assert.equal(byIdUsages?.[0]?.kind, "project");
+  assert.equal(byIdUsages?.[0]?.relativeFile, path.join("local", "php_interface", "hlblock.php"));
+
+  const listUsages = await searchHlblockUsages(dbFile, { api: "HighloadBlockTable::getList", limit: 10 });
+  assert.ok(listUsages?.some((usage) => usage.hlblockId === "3"));
+  assert.ok(listUsages?.some((usage) => usage.hlblockId === "unknown"));
+
+  const compileUsages = await searchHlblockUsages(dbFile, { api: "HighloadBlockTable::compileEntity", limit: 10 });
+  assert.ok(compileUsages?.some((usage) => usage.hlblockId === "HLBLOCK_CODE"));
+  assert.ok(compileUsages?.some((usage) => usage.hlblockId === "unknown"));
+
+  const fileRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "hlblock", targetName: "3", relationType: "uses_hlblock", limit: 10 });
+  assert.equal(fileRelations?.[0]?.module, "highloadblock");
+  assert.equal(fileRelations?.[0]?.kind, "project");
+  assert.ok(fileRelations?.some((relation) => relation.metadata?.api === "HighloadBlockTable::getById"));
+
+  const functionRelations = await searchBitrixRelations(dbFile, { sourceType: "function", sourceName: "loadHl", targetType: "hlblock", targetName: "HLBLOCK_CODE", relationType: "uses_hlblock", limit: 10 });
+  assert.ok((functionRelations?.length ?? 0) >= 1);
 });
 
 test("component template path resolution covers site and source templates", () => {
