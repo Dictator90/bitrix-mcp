@@ -13,6 +13,7 @@ export interface IndexFile {
   ormUsages?: OrmUsageRecord[];
   iblockUsages?: IblockUsageRecord[];
   hlblockUsages?: HlblockUsageRecord[];
+  optionUsages?: OptionUsageRecord[];
 }
 
 export interface ComponentParamRecord {
@@ -90,6 +91,21 @@ export interface IblockUsageRecord {
 export interface HlblockUsageRecord {
   type: "hlblock_usage";
   hlblockId: string;
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
+}
+
+export interface OptionUsageRecord {
+  type: "option";
+  module: string;
+  name: string;
+  operation: "get" | "set";
   api: string;
   file: string;
   relativeFile?: string;

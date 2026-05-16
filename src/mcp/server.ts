@@ -351,6 +351,26 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
+
+  server.tool(
+    "bitrix_option_search",
+    "Search indexed Bitrix module option reads/writes by module, option name, operation, API call, kind, file, or free text.",
+    {
+      query: z.string().optional(),
+      module: z.string().optional(),
+      name: z.string().optional(),
+      operation: z.enum(["get", "set"]).optional(),
+      api: z.string().optional(),
+      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      file: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional().describe("compact returns option module/name/operation/api/kind/file/line/context/signature; full returns raw option records.")
+    },
+    async ({ query, module, name, operation, api, kind, file, limit, format }) => {
+      return runWorkerTask("bitrix_option_search", { name: "searchOptionUsages", paths, query: { query, module, name, operation, api, kind, file, limit, format } });
+    }
+  );
+
   server.tool(
     "bitrix_orm_search",
     "Search indexed Bitrix D7 ORM DataManager entities by class, table, module, kind, or free text.",

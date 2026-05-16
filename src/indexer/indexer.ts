@@ -7,7 +7,7 @@ import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
-import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
@@ -114,6 +114,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     let ormUsages: OrmUsageRecord[] = [];
     let iblockUsages: IblockUsageRecord[] = [];
     let hlblockUsages: HlblockUsageRecord[] = [];
+    let optionUsages: OptionUsageRecord[] = [];
     if (shouldParseSymbols && language === "php") {
       const result = parsePhpSymbolsWithDiagnostics(source, absolutePath);
       symbols = result.symbols;
@@ -122,6 +123,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
       ormUsages = result.ormUsages;
       iblockUsages = result.iblockUsages;
       hlblockUsages = result.hlblockUsages;
+      optionUsages = result.optionUsages;
       warnings.push(...result.warnings);
       if (debugParse) {
         for (const warning of result.warnings) {
@@ -143,7 +145,8 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
       ormEntities: ormEntities.map((entity) => ({ ...entity, kind: options.kind, relativeFile: relativePath })),
       ormUsages: ormUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
       iblockUsages: iblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
-      hlblockUsages: hlblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
+      hlblockUsages: hlblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
+      optionUsages: optionUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
     });
   }
 

@@ -1,4 +1,4 @@
-import type { ComponentParamRecord, HlblockUsageRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, HlblockUsageRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 import { parsePhpEvents } from "./eventParser.js";
 import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
 
@@ -351,6 +351,48 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
 }
 
 
+
+const OPTION_API_REGEX_MAP = new Map<string, { api: string; operation: "get" | "set" }>([
+  ["option::get", { api: "Option::get", operation: "get" }],
+  ["option::set", { api: "Option::set", operation: "set" }],
+  ["bitrix\\main\\config\\option::get", { api: "Bitrix\\Main\\Config\\Option::get", operation: "get" }],
+  ["bitrix\\main\\config\\option::set", { api: "Bitrix\\Main\\Config\\Option::set", operation: "set" }],
+  ["coption::getoptionstring", { api: "COption::GetOptionString", operation: "get" }],
+  ["coption::setoptionstring", { api: "COption::SetOptionString", operation: "set" }],
+  ["coption::getoptionint", { api: "COption::GetOptionInt", operation: "get" }],
+  ["coption::setoptionint", { api: "COption::SetOptionInt", operation: "set" }]
+]);
+
+function parsePhpOptionUsagesWithRegex(source: string, filePath: string): OptionUsageRecord[] {
+  const usages: OptionUsageRecord[] = [];
+  const callRegex = new RegExp(String.raw`(?<![A-Za-z0-9_])((?:\\\\?Bitrix\\\\Main\\\\Config\\\\Option|Option|\\\\?COption))::([A-Za-z_][A-Za-z0-9_]*)\s*\(`, "g");
+  for (const match of source.matchAll(callRegex)) {
+    const start = match.index ?? 0;
+    if (match[1] === "Option" && source[start - 1] === "\\") continue;
+    const className = match[1].replace(/^\\/u, "");
+    const config = OPTION_API_REGEX_MAP.get(`${className.toLowerCase()}::${match[2].toLowerCase()}`);
+    if (!config) continue;
+    const openParenIndex = start + match[0].lastIndexOf("(");
+    const end = findCallEnd(source, openParenIndex);
+    if (end < 0) continue;
+    const args = splitTopLevelArgs(source.slice(openParenIndex + 1, end - 1));
+    const module = unquotePhpString(args[0]);
+    const name = unquotePhpString(args[1]);
+    if (!module || !name) continue;
+    usages.push({
+      type: "option",
+      module,
+      name,
+      operation: config.operation,
+      api: config.api,
+      file: filePath,
+      line: lineOf(source, start),
+      signature: source.slice(start, end).trim()
+    });
+  }
+  return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
+}
+
 const IBLOCK_API_REGEX_MAP = new Map<string, string>([
   ["ciblockelement::getlist", "CIBlockElement::GetList"],
   ["ciblockelement::getbyid", "CIBlockElement::GetByID"],
@@ -459,20 +501,27 @@ export interface PhpParseResult {
   ormUsages: OrmUsageRecord[];
   iblockUsages: IblockUsageRecord[];
   hlblockUsages: HlblockUsageRecord[];
+  optionUsages: OptionUsageRecord[];
   warnings: IndexWarning[];
 }
 
 export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string): PhpParseResult {
   try {
     const astResult = parsePhpWithAst(source, filePath);
-    return { ...astResult, moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
+    const regexOptionUsages = parsePhpOptionUsagesWithRegex(source, filePath);
+    const optionKeys = new Set(astResult.optionUsages.map((usage) => `${usage.file}:${usage.line}:${usage.module}:${usage.name}:${usage.api}`));
+    const optionUsages = [
+      ...astResult.optionUsages,
+      ...regexOptionUsages.filter((usage) => !optionKeys.has(`${usage.file}:${usage.line}:${usage.module}:${usage.name}:${usage.api}`))
+    ].sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
+    return { ...astResult, optionUsages, moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
   } catch (error) {
     const warning: IndexWarning = {
       type: "php_parse_fallback",
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), hlblockUsages: parsePhpHlblockUsagesWithRegex(source, filePath), warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), hlblockUsages: parsePhpHlblockUsagesWithRegex(source, filePath), optionUsages: parsePhpOptionUsagesWithRegex(source, filePath), warnings: [warning] };
   }
 }
 

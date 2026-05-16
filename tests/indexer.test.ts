@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -18,6 +18,53 @@ import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
 
+
+
+test("indexes Bitrix option reads and writes with relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-options-"));
+  const optionFile = path.join(root, "options.php");
+  await fs.mkdir(path.dirname(optionFile), { recursive: true });
+  await fs.writeFile(optionFile, String.raw`<?php
+use Bitrix\Main\Config\Option;
+
+function vendor_option_reader(): void
+{
+    Option::get('vendor.module', 'some_option');
+    Option::set('vendor.module', 'set_option', 'Y');
+    \Bitrix\Main\Config\Option::get('vendor.module', 'fq_option');
+    COption::GetOptionString('vendor.module', 'legacy_string');
+    COption::SetOptionString('vendor.module', 'legacy_set', 'N');
+    COption::GetOptionInt('vendor.module', 'legacy_int');
+    COption::SetOptionInt('vendor.module', 'legacy_set_int', 1);
+    Option::get('vendor.module', $dynamicName);
+}
+`);
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-options-db-"));
+  const dbFile = sqlitePath(dataDir);
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project.json") });
+
+  const all = await searchOptionUsages(dbFile, { module: "vendor.module", limit: 20 });
+  assert.equal(all?.length, 7);
+  assert.ok(all?.some((usage) => usage.name === "some_option" && usage.operation === "get" && usage.api === "Option::get"));
+  assert.ok(all?.some((usage) => usage.name === "set_option" && usage.operation === "set" && usage.api === "Option::set"));
+  assert.ok(all?.some((usage) => usage.name === "fq_option" && usage.api === "Bitrix\\Main\\Config\\Option::get"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_string" && usage.api === "COption::GetOptionString"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_set" && usage.api === "COption::SetOptionString"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_int" && usage.api === "COption::GetOptionInt"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_set_int" && usage.api === "COption::SetOptionInt"));
+
+  const dynamic = await searchOptionUsages(dbFile, { query: "dynamicName", limit: 20 });
+  assert.equal(dynamic?.length, 0);
+
+  const setOnly = await searchOptionUsages(dbFile, { operation: "set", limit: 20 });
+  assert.equal(setOnly?.length, 3);
+
+  const relations = await searchBitrixRelations(dbFile, { targetType: "option", targetName: "vendor.module:some_option", limit: 10 });
+  assert.ok(relations?.some((relation) => relation.sourceType === "file" && relation.relationType === "uses_option"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "module" && relation.relationType === "defines_option"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "function" && relation.sourceName.endsWith("vendor_option_reader") && relation.relationType === "uses_option"));
+});
 
 test("Bitrix relations SQLite storage creates table and indexes", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-schema-"));
