@@ -3,13 +3,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { resolveRuntimePaths, type RuntimePaths } from "../config/paths.js";
+import { resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
+import { searchSymbolsForContext } from "../indexer/sqliteStore.js";
 import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { formatSemanticDocSearchResults } from "./format.js";
+import type { SymbolRecord } from "../types.js";
 
 const ALLOW_OUTSIDE_WORKSPACE_ENV = "BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE";
 
@@ -57,6 +59,38 @@ function normalizeTemplateRoot(paths: RuntimePaths, templatePath?: string): stri
     }
   }
   return resolvedRoot;
+}
+
+type ReadSymbolContextResult = {
+  ambiguous: boolean;
+  query: {
+    name: string;
+    type?: string;
+    kind?: string | string[];
+    file?: string;
+  };
+  candidates?: Array<Record<string, unknown>>;
+  symbol?: Record<string, unknown>;
+  context?: FileContextResult;
+  message?: string;
+};
+
+function compactSymbolCandidate(symbol: SymbolRecord): Record<string, unknown> {
+  return {
+    type: symbol.type,
+    name: symbol.name,
+    className: symbol.className,
+    module: symbol.module,
+    kind: symbol.kind,
+    file: symbol.relativeFile ?? symbol.file,
+    line: symbol.line,
+    lineEnd: symbol.lineEnd,
+    signature: symbol.signature
+  };
+}
+
+function symbolForFormat(symbol: SymbolRecord, format: "compact" | "full" | undefined): Record<string, unknown> {
+  return format === "full" ? { ...symbol } : compactSymbolCandidate(symbol);
 }
 
 interface FileContextResult {
@@ -165,6 +199,7 @@ function buildFileContext(contents: string, absolutePath: string, relativePath: 
 
 const indexKindSchema = z.enum(["project", "bitrix", "template", "install"]);
 const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1)]);
+const symbolContextTypeSchema = z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]);
 
 const searchFormatSchema = {
   includeSignature: z.boolean().optional().describe("Include the compact signature field; enabled by default."),
@@ -192,6 +227,63 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         const contents = await fs.readFile(absolutePath, "utf8");
         const context = buildFileContext(contents, absolutePath, relativePath, line, before, after, maxChars);
         return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
+      });
+    }
+  );
+
+  server.tool(
+    "bitrix_read_symbol_context",
+    "Read a bounded source-code excerpt by indexed Bitrix symbol name, using the stored file and line metadata instead of requiring callers to provide file + line.",
+    {
+      name: z.string().min(1).describe("Indexed symbol name to read, for example a class, function, method, event, component, or constant name."),
+      type: symbolContextTypeSchema.optional(),
+      kind: searchKindSchema.optional().describe("Restrict symbol lookup to one kind or an array of kinds: project, template, bitrix, or install."),
+      file: z.string().optional().describe("Optional indexed file path or relative file path to disambiguate symbols."),
+      before: z.number().int().min(0).max(500).default(5),
+      after: z.number().int().min(0).max(500).default(20),
+      includeBody: z.boolean().default(false).describe("When true and the symbol has lineEnd metadata, include the full declaration body plus before/after padding."),
+      maxChars: z.number().int().min(100).max(50_000).default(12_000),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ name, type, kind, file, before, after, includeBody, maxChars, format }) => {
+      return withMcpToolGuard("bitrix_read_symbol_context", async () => {
+        const matches = await searchSymbolsForContext(sqlitePath(paths.dataDir), { name, type, kind, file, limit: 25 }) ?? [];
+        const resultBase = { query: { name, type, kind, file } };
+
+        if (matches.length === 0) {
+          const result: ReadSymbolContextResult = {
+            ...resultBase,
+            ambiguous: false,
+            candidates: [],
+            message: `No indexed symbol matched ${name}. Run bitrix_index_project or narrow the query after indexing.`
+          };
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
+        if (matches.length > 1) {
+          const result: ReadSymbolContextResult = {
+            ...resultBase,
+            ambiguous: true,
+            candidates: matches.map((symbol) => symbolForFormat(symbol, format)),
+            message: `Symbol ${name} is ambiguous; provide type, kind, or file to select one candidate.`
+          };
+          return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+        }
+
+        const symbol = matches[0];
+        const { absolutePath, relativePath } = await assertFileInsideReadAllowlist(paths, symbol.file);
+        const contents = await fs.readFile(absolutePath, "utf8");
+        const effectiveAfter = includeBody && symbol.lineEnd !== undefined && symbol.lineEnd >= symbol.line
+          ? (symbol.lineEnd - symbol.line) + after
+          : after;
+        const context = buildFileContext(contents, absolutePath, relativePath, symbol.line, before, effectiveAfter, maxChars);
+        const result: ReadSymbolContextResult = {
+          ...resultBase,
+          ambiguous: false,
+          symbol: symbolForFormat({ ...symbol, file: absolutePath, relativeFile: relativePath }, format),
+          context
+        };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       });
     }
   );

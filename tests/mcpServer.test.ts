@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createMcpServer } from "../src/mcp/server.js";
 import { sqlitePath, type RuntimePaths } from "../src/config/paths.js";
-import { readIndexFromSqlite, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { readIndexFromSqlite, writeBitrixRelations, writeIndexToSqlite } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource } from "../src/resources/docs.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
@@ -69,6 +69,129 @@ test("MCP bitrix_read_file_context rejects path traversal outside workspace and 
     tool.handler({ file: path.relative(fixtureRoot, outsideFile), line: 1 }),
     /MCP path restriction: bitrix_read_file_context parameter "file" must resolve inside one of the allowed roots/
   );
+});
+
+
+test("MCP bitrix_read_symbol_context reads method context with a file filter", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-method-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_read_symbol_context.handler({ name: "executeComponent", type: "method", file: "index.php", before: 1, after: 1, maxChars: 1000 });
+  const context = JSON.parse(result.content[0].text) as { ambiguous: boolean; symbol: { type: string; name: string; file: string; line: number; lineEnd?: number }; context: { metadata: { relativePath: string; startLine: number; endLine: number }; numberedLines: string } };
+
+  assert.equal(context.ambiguous, false);
+  assert.equal(context.symbol.type, "method");
+  assert.equal(context.symbol.name, "executeComponent");
+  assert.equal(context.symbol.file, "index.php");
+  assert.equal(context.symbol.line, 4);
+  assert.equal(context.symbol.lineEnd, 4);
+  assert.equal(context.context.metadata.relativePath, "index.php");
+  assert.match(context.context.numberedLines, /public function executeComponent\(\): void/);
+});
+
+test("MCP bitrix_read_symbol_context reads class context", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-class-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_read_symbol_context.handler({ name: "DemoComponent", type: "class", before: 0, after: 1, maxChars: 1000 });
+  const context = JSON.parse(result.content[0].text) as { ambiguous: boolean; symbol: { type: string; lineEnd?: number }; context: { metadata: { startLine: number; endLine: number }; numberedLines: string } };
+
+  assert.equal(context.ambiguous, false);
+  assert.equal(context.symbol.type, "class");
+  assert.equal(context.symbol.lineEnd, 5);
+  assert.equal(context.context.metadata.startLine, 2);
+  assert.match(context.context.numberedLines, /^2: class DemoComponent/m);
+});
+
+test("MCP bitrix_read_symbol_context returns candidates for ambiguous symbols", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-ambiguous-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+  const fixtureFile = path.join(fixtureRoot, "index.php");
+
+  await tools.bitrix_index_project.handler({});
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root: fixtureRoot,
+    kind: "template",
+    files: [{
+      path: fixtureFile,
+      relativePath: "index.php",
+      kind: "template",
+      size: 1,
+      mtimeMs: 1,
+      language: "php",
+      symbols: [{ type: "function", name: "demo_helper", file: fixtureFile, line: 7, lineEnd: 10 }]
+    }]
+  }, { force: true });
+  const result = await tools.bitrix_read_symbol_context.handler({ name: "demo_helper", type: "function", maxChars: 1000 });
+  const context = JSON.parse(result.content[0].text) as { ambiguous: boolean; candidates: Array<{ name: string; file: string; kind: string; line: number }> };
+
+  assert.equal(context.ambiguous, true);
+  assert.ok(context.candidates.length >= 2);
+  assert.ok(context.candidates.some((candidate) => candidate.kind === "project" && candidate.file === "index.php"));
+  assert.ok(context.candidates.some((candidate) => candidate.kind === "template" && candidate.file === "index.php"));
+});
+
+test("MCP bitrix_read_symbol_context includeBody uses indexed lineEnd", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-body-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_read_symbol_context.handler({ name: "DemoComponent", type: "class", includeBody: true, before: 0, after: 0, maxChars: 1000 });
+  const context = JSON.parse(result.content[0].text) as { context: { metadata: { startLine: number; endLine: number }; numberedLines: string } };
+
+  assert.equal(context.context.metadata.startLine, 2);
+  assert.equal(context.context.metadata.endLine, 5);
+  assert.match(context.context.numberedLines, /^5: }/m);
+});
+
+test("MCP bitrix_read_symbol_context enforces file read allowlist for indexed symbols", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-guard-"));
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-symbol-outside-"));
+  const outsideFile = path.join(outsideDir, "secret.php");
+  await fs.writeFile(outsideFile, "<?php\nfunction secret_symbol(): void {}\n");
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root: fixtureRoot,
+    kind: "project",
+    files: [{
+      path: outsideFile,
+      relativePath: "secret.php",
+      kind: "project",
+      size: 1,
+      mtimeMs: 1,
+      language: "php",
+      symbols: [{ type: "function", name: "secret_symbol", file: outsideFile, line: 2, lineEnd: 2 }]
+    }]
+  }, { force: true });
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_read_symbol_context;
+
+  await assert.rejects(
+    tool.handler({ name: "secret_symbol", type: "function" }),
+    /MCP path restriction: bitrix_read_file_context parameter "file" must resolve inside one of the allowed roots/
+  );
+});
+
+test("MCP bitrix_read_symbol_context maxChars truncates output", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-symbol-truncate-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_project.handler({});
+  const result = await tools.bitrix_read_symbol_context.handler({ name: "demo_helper", type: "function", includeBody: true, before: 0, after: 20, maxChars: 100 });
+  const context = JSON.parse(result.content[0].text) as { context: { metadata: { truncated: boolean }; numberedLines: string } };
+
+  assert.equal(context.context.metadata.truncated, true);
+  assert.ok(context.context.numberedLines.length <= 100);
 });
 
 test("MCP bitrix_index_template accepts templatePath", async () => {

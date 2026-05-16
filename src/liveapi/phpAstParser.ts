@@ -53,6 +53,10 @@ function nodeLine(node: PhpNode): number {
   return node.loc?.start.line ?? 1;
 }
 
+function nodeEndLine(node: PhpNode): number | undefined {
+  return node.loc?.end.line;
+}
+
 function sourceSlice(source: string, node: PhpNode): string | undefined {
   if (!node.loc) return undefined;
   return source.slice(node.loc.start.offset, node.loc.end.offset).trim();
@@ -835,6 +839,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
         module,
         file: filePath,
         line: nodeLine(node),
+        lineEnd: nodeEndLine(node),
         signature: declarationSignature(source, node)
       });
       const entity = maybeOrmEntity(source, filePath, module, node, context);
@@ -853,6 +858,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           module,
           file: filePath,
           line: nodeLine(node),
+          lineEnd: nodeEndLine(node),
           signature: declarationSignature(source, node)
         });
       }
@@ -870,6 +876,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           className: context.className,
           file: filePath,
           line: nodeLine(node),
+          lineEnd: nodeEndLine(node),
           signature: declarationSignature(source, node)
         });
       }
