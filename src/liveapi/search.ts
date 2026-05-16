@@ -40,6 +40,7 @@ interface SymbolRow {
   class_name: string | null;
   file: string;
   line: number;
+  line_end?: number | null;
   signature: string | null;
   description: string | null;
   rank: number | null;
@@ -159,6 +160,7 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     className: row.class_name ?? undefined,
     file: row.file,
     line: row.line,
+    lineEnd: row.line_end ?? undefined,
     signature: row.signature ?? undefined,
     description: row.description ?? undefined
   };
@@ -242,10 +244,10 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
           LIMIT ?
         )
       )
-      SELECT kind, type, language, name, module, class_name, file, line, signature, description,
+      SELECT kind, type, language, name, module, class_name, file, line, line_end, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
       FROM candidates
-      GROUP BY kind, type, language, name, module, class_name, file, line, signature, description
+      GROUP BY kind, type, language, name, module, class_name, file, line, line_end, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as SymbolRow[];

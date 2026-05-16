@@ -41,6 +41,7 @@ export interface SymbolRecord {
   relativeFile?: string;
   file: string;
   line: number;
+  lineEnd?: number;
   signature?: string;
   description?: string;
   template?: string;

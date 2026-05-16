@@ -23,6 +23,14 @@ export interface AgentSearchQuery {
   limit?: number;
 }
 
+export interface SymbolContextSearchQuery {
+  name: string;
+  type?: Extract<SymbolRecord["type"], "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant">;
+  kind?: IndexKind | IndexKind[];
+  file?: string;
+  limit?: number;
+}
+
 export interface MailEventSearchQuery {
   query?: string;
   eventName?: string;
@@ -177,6 +185,7 @@ interface SymbolRow {
   event_name?: string | null;
   file: string;
   line: number;
+  line_end?: number | null;
   signature: string | null;
   description: string | null;
   agent_action?: SymbolRecord["agentAction"] | null;
@@ -320,6 +329,7 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     eventName: row.event_name ?? undefined,
     file: row.file,
     line: row.line,
+    lineEnd: row.line_end ?? undefined,
     signature: row.signature ?? undefined,
     description: row.description ?? undefined,
     agentAction: row.agent_action ?? undefined,
@@ -716,6 +726,7 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         interval INTEGER,
         file TEXT NOT NULL,
         line INTEGER NOT NULL,
+        line_end INTEGER,
         signature TEXT,
         description TEXT,
         component_template TEXT,
@@ -1014,7 +1025,8 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       ["interval", "INTEGER"],
       ["language", "TEXT"],
       ["component_template", "TEXT"],
-      ["params_json", "TEXT"]
+      ["params_json", "TEXT"],
+      ["line_end", "INTEGER"]
     ] as const) {
       if (!symbolColumns.includes(column)) {
         db.exec(`ALTER TABLE symbols ADD COLUMN ${column} ${definition};`);
@@ -1109,8 +1121,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       RETURNING id
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, signature, description, component_template, params_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -1249,6 +1261,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             symbol.interval ?? null,
             symbol.file,
             symbol.line,
+            symbol.lineEnd ?? null,
             nullable(symbol.signature),
             nullable(symbol.description),
             nullable(symbol.template),
@@ -1605,6 +1618,57 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
     }
 
     return mailEvents;
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchSymbolsForContext(dbFile: string, query: SymbolContextSearchQuery): Promise<SymbolRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const normalizedName = query.name.trim().toLowerCase();
+    if (!normalizedName) return [];
+
+    const filters: string[] = [
+      "(lower(s.name) = ? OR lower(coalesce(s.class_name, '') || '::' || s.name) = ? OR lower(coalesce(s.event_name, '')) = ?)"
+    ];
+    const params: Array<string | number> = [normalizedName, normalizedName, normalizedName];
+
+    if (query.type !== undefined) {
+      filters.push("s.type = ?");
+      params.push(query.type);
+    }
+    if (query.file !== undefined) {
+      filters.push("(s.file = ? OR f.relative_path = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 20)));
+    const rows = db.prepare(`
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
+      FROM symbols s
+      JOIN files f ON f.id = s.file_id
+      WHERE ${filters.join(" AND ")}
+      ORDER BY
+        CASE WHEN s.kind IN ('project', 'template') THEN 0 ELSE 1 END,
+        CASE WHEN lower(s.name) = ? THEN 0 ELSE 1 END,
+        s.line ASC,
+        s.id ASC
+      LIMIT ?
+    `).all(...params, normalizedName, limit) as unknown as SymbolRow[];
+    return rows.map(rowToSymbol);
   } finally {
     db.close();
   }
@@ -2150,7 +2214,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, periodic, interval, file, line, signature, description FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json FROM symbols WHERE file_id = ? ORDER BY id");
     const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
     const ormEntitySelect = db.prepare("SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature FROM orm_entities WHERE file_id = ? ORDER BY id");
     const ormUsageSelect = db.prepare("SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature FROM orm_usages WHERE file_id = ? ORDER BY id");
