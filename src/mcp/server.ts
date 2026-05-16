@@ -572,6 +572,59 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
 
   server.tool(
+    "bitrix_graph_neighbors",
+    "Return Bitrix-aware graph neighbors for a node from indexed bitrix_relations. Supports in/out/both directions, relation filters, bounded depth, and compact output by default.",
+    {
+      nodeType: z.string().min(1),
+      nodeName: z.string().min(1),
+      direction: z.enum(["out", "in", "both"]).optional(),
+      relationType: z.string().optional(),
+      depth: z.number().int().min(1).max(5).optional(),
+      limit: z.number().int().min(1).max(1000).default(100),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ nodeType, nodeName, direction, relationType, depth, limit, format }) => {
+      return runWorkerTask("bitrix_graph_neighbors", { name: "graphNeighbors", paths, query: { nodeType, nodeName, direction, relationType, depth, limit, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_graph_traverse",
+    "BFS traverse the Bitrix-aware dependency graph from indexed bitrix_relations. Results are cycle-safe, bounded, and compact by default.",
+    {
+      startType: z.string().min(1),
+      startName: z.string().min(1),
+      direction: z.enum(["out", "in", "both"]).optional(),
+      maxDepth: z.number().int().min(0).max(8).optional(),
+      relationTypes: z.array(z.string()).optional(),
+      limit: z.number().int().min(1).max(1000).default(100),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ startType, startName, direction, maxDepth, relationTypes, limit, format }) => {
+      return runWorkerTask("bitrix_graph_traverse", { name: "graphTraverse", paths, query: { startType, startName, direction, maxDepth, relationTypes, limit, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_impact_radius",
+    "Find impacted Bitrix events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods for changed files.",
+    {
+      files: z.array(z.string()).optional(),
+      base: z.string().optional().describe("Git base ref used when files are not provided; defaults to HEAD~1."),
+      maxDepth: z.number().int().min(0).max(8).optional(),
+      relationTypes: z.array(z.string()).optional(),
+      includeChangedSymbols: z.boolean().optional(),
+      includeRisk: z.boolean().optional(),
+      limit: z.number().int().min(1).max(1000).default(100),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format }) => {
+      return runWorkerTask("bitrix_impact_radius", { name: "impactRadius", paths, query: { files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format } });
+    }
+  );
+
+
+  server.tool(
     "bitrix_detect_changes",
     "Analyze Git-changed Bitrix files against the SQLite index, returning changed symbols, events, module usages, agents, mail events, relations, risk, and recommendations.",
     {
