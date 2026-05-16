@@ -735,6 +735,37 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     }
   );
 
+
+  server.tool(
+    "bitrix_docs_for_symbol",
+    "Find indexed documentation chunks that mention a Bitrix API symbol such as CIBlockElement::GetList or Loader::includeModule.",
+    {
+      symbol: z.string().min(1),
+      limit: z.number().int().min(1).max(100).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ symbol, limit, format }) => {
+      return runWorkerTask("bitrix_docs_for_symbol", { name: "docsForSymbol", paths, query: { symbol, limit, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_explain_api_usage",
+    "Explain Bitrix API usage by combining documentation symbol links or docs search, local usages, Bitrix core definitions, relations, and deterministic recommendations.",
+    {
+      query: z.string().min(1),
+      kind: searchKindSchema.optional().describe("Restrict local usage lookup to one kind or an array of kinds: project, template, bitrix, or install. Defaults to project/template/install."),
+      includeDocs: z.boolean().optional().describe("Include documentation links/search results; enabled by default."),
+      includeLocalUsages: z.boolean().optional().describe("Include indexed project/template/install usages; enabled by default."),
+      includeCoreDefinition: z.boolean().optional().describe("Include indexed Bitrix core definitions; enabled by default."),
+      limit: z.number().int().min(1).max(100).default(10),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format }) => {
+      return runWorkerTask("bitrix_explain_api_usage", { name: "explainApiUsage", paths, query: { query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format } });
+    }
+  );
+
   server.tool(
     "bitrix_index_docs",
     "Clone/pull and index Bitrix documentation sources into the local SQLite documentation index, including the official Bitrix Framework docs repository when enabled.",

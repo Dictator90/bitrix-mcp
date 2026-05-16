@@ -424,6 +424,114 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
   assert.equal("item" in (results[0] ?? {}), false);
 });
 
+
+
+test("MCP bitrix_docs_for_symbol returns compact symbol documentation links", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doc-symbol-root-"));
+  const docsDir = path.join(root, "docs");
+  await fs.mkdir(docsDir, { recursive: true });
+  await fs.writeFile(path.join(docsDir, "getlist.md"), "# CIBlockElement::GetList\n\nUse CIBlockElement::GetList to fetch iblock elements with filters and selected fields.\n");
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doc-symbol-db-"));
+  const paths = runtimePaths(dataDir, root);
+  await addPathDocSource(dataDir, docsDir);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_docs.handler({});
+  const result = await tools.bitrix_docs_for_symbol.handler({ symbol: "CIBlockElement::GetList", limit: 5 });
+  const payload = JSON.parse(result.content[0].text) as { symbol: string; results: Array<{ title: string; uri: string; path: string; chunkIndex: number; excerpt: string }> };
+
+  assert.equal(payload.symbol, "CIBlockElement::GetList");
+  assert.equal(payload.results.length, 1);
+  assert.equal(payload.results[0]?.title, "CIBlockElement::GetList");
+  assert.ok(payload.results[0]?.uri.startsWith("bitrix-docs://"));
+  assert.equal(payload.results[0]?.chunkIndex, 0);
+  assert.match(payload.results[0]?.excerpt ?? "", /filters and selected fields/);
+  assert.equal("docUri" in (payload.results[0] ?? {}), false);
+});
+
+test("MCP bitrix_docs_for_symbol returns empty results when no docs match", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doc-symbol-empty-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  const result = await tools.bitrix_docs_for_symbol.handler({ symbol: "CEvent::Send", limit: 5 });
+  const payload = JSON.parse(result.content[0].text) as { symbol: string; results: unknown[] };
+
+  assert.equal(payload.symbol, "CEvent::Send");
+  assert.deepEqual(payload.results, []);
+});
+
+test("MCP bitrix_explain_api_usage combines docs, local usages, core definitions, and recommendations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-explain-root-"));
+  const docsDir = path.join(root, "docs");
+  const localFile = path.join(root, "local", "usage.php");
+  const coreFile = path.join(root, "bitrix", "modules", "iblock", "classes", "general", "iblockelement.php");
+  await fs.mkdir(docsDir, { recursive: true });
+  await fs.mkdir(path.dirname(localFile), { recursive: true });
+  await fs.mkdir(path.dirname(coreFile), { recursive: true });
+  await fs.writeFile(path.join(docsDir, "getlist.md"), "# CIBlockElement::GetList\n\nCIBlockElement::GetList accepts order, filter, group, navigation, and select parameters.\n");
+  await fs.writeFile(localFile, "<?php CIBlockElement::GetList([], ['ACTIVE' => 'Y']);\n");
+  await fs.writeFile(coreFile, "<?php class CIBlockElement { public static function GetList() {} }\n");
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-explain-db-"));
+  const paths = runtimePaths(dataDir, root);
+  await addPathDocSource(dataDir, docsDir);
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root,
+    kind: "project",
+    files: [{ path: localFile, relativePath: "local/usage.php", kind: "project", size: 1, mtimeMs: 1, language: "php", symbols: [{ type: "static_call", name: "CIBlockElement::GetList", className: "CIBlockElement", file: localFile, line: 1, signature: "CIBlockElement::GetList([], ['ACTIVE' => 'Y']);" }] }]
+  }, { force: true });
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root,
+    kind: "bitrix",
+    files: [{ path: coreFile, relativePath: "bitrix/modules/iblock/classes/general/iblockelement.php", kind: "bitrix", size: 1, mtimeMs: 1, language: "php", symbols: [{ type: "method", name: "CIBlockElement::GetList", className: "CIBlockElement", file: coreFile, line: 1, signature: "public static function GetList()" }] }]
+  }, { force: true });
+
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+  await tools.bitrix_index_docs.handler({});
+  const result = await tools.bitrix_explain_api_usage.handler({ query: "CIBlockElement::GetList", limit: 5 });
+  const payload = JSON.parse(result.content[0].text) as { query: string; docs: unknown[]; localUsages: Array<{ kind: string; name: string }>; coreDefinitions: Array<{ kind: string; name: string }>; relations: unknown[]; recommendations: string[] };
+
+  assert.equal(payload.query, "CIBlockElement::GetList");
+  assert.ok(payload.docs.length >= 1);
+  assert.ok(payload.localUsages.some((usage) => usage.kind === "project" && usage.name === "CIBlockElement::GetList"));
+  assert.ok(payload.coreDefinitions.some((definition) => definition.kind === "bitrix" && definition.name === "CIBlockElement::GetList"));
+  assert.deepEqual(payload.recommendations, ["Check filter keys, selected fields, permissions, and pagination."]);
+});
+
+test("MCP bitrix_explain_api_usage returns local usage when docs are missing", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-explain-local-root-"));
+  const localFile = path.join(root, "local", "mail.php");
+  await fs.mkdir(path.dirname(localFile), { recursive: true });
+  await fs.writeFile(localFile, "<?php CEvent::Send('DEMO', SITE_ID, []);\n");
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-explain-local-db-"));
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root,
+    kind: "project",
+    files: [{ path: localFile, relativePath: "local/mail.php", kind: "project", size: 1, mtimeMs: 1, language: "php", symbols: [{ type: "static_call", name: "CEvent::Send", className: "CEvent", file: localFile, line: 1, signature: "CEvent::Send('DEMO', SITE_ID, []);" }] }]
+  }, { force: true });
+
+  const server = createMcpServer(runtimePaths(dataDir, root));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+  const result = await tools.bitrix_explain_api_usage.handler({ query: "CEvent::Send", limit: 5 });
+  const payload = JSON.parse(result.content[0].text) as { docs: unknown[]; localUsages: Array<{ name: string }>; coreDefinitions: unknown[]; recommendations: string[] };
+
+  assert.deepEqual(payload.docs, []);
+  assert.ok(payload.localUsages.some((usage) => usage.name === "CEvent::Send"));
+  assert.deepEqual(payload.coreDefinitions, []);
+  assert.deepEqual(payload.recommendations, ["Check event name, site ID, fields, and mail templates."]);
+});
+
 test("MCP semantic docs search tool is optional", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-semantic-"));
   const basePaths: RuntimePaths = {

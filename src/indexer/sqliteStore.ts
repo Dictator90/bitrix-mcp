@@ -957,6 +957,16 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         UNIQUE(type, uri)
       );
 
+      CREATE TABLE IF NOT EXISTS doc_symbol_refs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        doc_uri TEXT NOT NULL,
+        doc_path TEXT,
+        title TEXT,
+        chunk_index INTEGER,
+        excerpt TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS index_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -1004,6 +1014,10 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         uri, title, path, text
       );
 
+      CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_symbol ON doc_symbol_refs(symbol);
+      CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_doc_uri ON doc_symbol_refs(doc_uri);
+      CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_doc_path ON doc_symbol_refs(doc_path);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_symbol_refs_unique ON doc_symbol_refs(symbol, doc_uri, chunk_index);
       CREATE INDEX IF NOT EXISTS idx_files_kind ON files(kind);
       CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(type, module, name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -2660,6 +2674,15 @@ export interface ExistingDocIndexMetadata {
   mtimeMs: number;
 }
 
+export interface DocSymbolRef {
+  symbol: string;
+  docUri: string;
+  docPath?: string;
+  title?: string;
+  chunkIndex: number;
+  excerpt?: string;
+}
+
 export interface DocIndexChunk {
   uri: string;
   sourceId?: number;
@@ -2675,6 +2698,7 @@ export interface DocIndexChunk {
   sectionAnchor?: string;
   sourceUri?: string;
   relativePath?: string;
+  symbolRefs?: string[];
 }
 
 export interface WriteDocsOptions {
@@ -2729,7 +2753,16 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
       RETURNING id
     `);
     const insertFts = db.prepare("INSERT INTO docs_fts (rowid, uri, title, path, text) VALUES (?, ?, ?, ?, ?)");
+    const insertSymbolRef = db.prepare(`
+      INSERT INTO doc_symbol_refs (symbol, doc_uri, doc_path, title, chunk_index, excerpt)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(symbol, doc_uri, chunk_index) DO UPDATE SET
+        doc_path = excluded.doc_path,
+        title = excluded.title,
+        excerpt = excluded.excerpt
+    `);
     const deleteFtsForDoc = db.prepare("DELETE FROM docs_fts WHERE rowid IN (SELECT id FROM doc_chunks WHERE doc_id = ?)");
+    const deleteSymbolRefsForDocUri = db.prepare("DELETE FROM doc_symbol_refs WHERE doc_uri = ?");
     const deleteChunksForDoc = db.prepare("DELETE FROM doc_chunks WHERE doc_id = ?");
     const deleteDocById = db.prepare("DELETE FROM docs WHERE id = ?");
     const selectChangedDoc = db.prepare("SELECT id FROM docs WHERE uri = ?");
@@ -2747,6 +2780,7 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
         for (const doc of existingDocs) {
           if (!currentUris.has(doc.uri)) {
             deleteFtsForDoc.run(doc.id);
+            deleteSymbolRefsForDocUri.run(doc.uri);
             deleteDocById.run(doc.id);
           }
         }
@@ -2757,6 +2791,7 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
         const doc = selectChangedDoc.get(uri) as { id: number } | undefined;
         if (doc) {
           deleteFtsForDoc.run(doc.id);
+          deleteSymbolRefsForDocUri.run(uri);
           deleteChunksForDoc.run(doc.id);
         }
       }
@@ -2773,6 +2808,9 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
           nullable(chunk.relativePath)
         ) as { id: number };
         insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
+        for (const symbol of chunk.symbolRefs ?? []) {
+          insertSymbolRef.run(symbol, chunk.uri, nullable(chunk.path), nullable(chunk.title), chunk.chunkIndex, excerptForSymbolRef(chunk.text, symbol));
+        }
       }
       const totalChunks = (db.prepare("SELECT COUNT(*) AS count FROM doc_chunks").get() as { count: number }).count;
       setMeta.run("index:docs", JSON.stringify({ generatedAt: indexedAt, chunks: totalChunks }), indexedAt);
@@ -2781,6 +2819,50 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
       db.exec("ROLLBACK;");
       throw error;
     }
+  } finally {
+    db.close();
+  }
+}
+
+function excerptForSymbolRef(text: string, symbol: string, maxChars = 500): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const index = normalized.toLowerCase().indexOf(symbol.toLowerCase());
+  if (index < 0 || normalized.length <= maxChars) {
+    return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1).trimEnd()}…`;
+  }
+  const half = Math.floor(maxChars / 2);
+  const start = Math.max(0, index - half);
+  const end = Math.min(normalized.length, start + maxChars);
+  return `${start > 0 ? "…" : ""}${normalized.slice(start, end).trim()}${end < normalized.length ? "…" : ""}`;
+}
+
+export async function searchDocSymbolRefs(dbFile: string, symbol: string, limit = 20): Promise<DocSymbolRef[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const normalizedSymbol = symbol.trim();
+  if (!normalizedSymbol) return [];
+  const db = openDatabase(dbFile);
+  try {
+    const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const rows = db.prepare(`
+      SELECT symbol, doc_uri, doc_path, title, chunk_index, excerpt
+      FROM doc_symbol_refs
+      WHERE lower(symbol) = lower(?)
+      ORDER BY title IS NULL, title ASC, doc_uri ASC, chunk_index ASC
+      LIMIT ?
+    `).all(normalizedSymbol, boundedLimit) as Array<{ symbol: string; doc_uri: string; doc_path: string | null; title: string | null; chunk_index: number | null; excerpt: string | null }>;
+    return rows.map((row) => ({
+      symbol: row.symbol,
+      docUri: row.doc_uri,
+      docPath: row.doc_path ?? undefined,
+      title: row.title ?? undefined,
+      chunkIndex: row.chunk_index ?? 0,
+      excerpt: row.excerpt ?? undefined
+    }));
   } finally {
     db.close();
   }

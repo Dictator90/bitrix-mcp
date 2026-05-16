@@ -9,8 +9,8 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
-import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, searchDocSymbolRefs, writeBitrixRelations, writeDocsToSqlite } from "../src/indexer/sqliteStore.js";
+import { addPathDocSource, extractDocSymbolRefs, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
 import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.js";
@@ -18,6 +18,54 @@ import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
 
+
+test("extracts Bitrix API symbols from documentation text", () => {
+  const symbols = extractDocSymbolRefs(`
+# CIBlockElement::GetList
+Use CIBlockElement::GetList with CIBlockSection::GetList.
+Call Loader::includeModule('iblock') before Option::get.
+Register AddEventHandler for OnBeforeEventSend or OnSaleOrderSaved.
+ORM examples include DataManager, ReferenceField, ExpressionField, and HighloadBlockTable.
+  `);
+
+  assert.ok(symbols.includes("CIBlockElement::GetList"));
+  assert.ok(symbols.includes("CIBlockSection::GetList"));
+  assert.ok(symbols.includes("Loader::includeModule"));
+  assert.ok(symbols.includes("Option::get"));
+  assert.ok(symbols.includes("AddEventHandler"));
+  assert.ok(symbols.includes("OnBeforeEventSend"));
+  assert.ok(symbols.includes("OnSaleOrderSaved"));
+  assert.ok(symbols.includes("DataManager"));
+  assert.ok(symbols.includes("ReferenceField"));
+  assert.ok(symbols.includes("ExpressionField"));
+  assert.ok(symbols.includes("HighloadBlockTable"));
+});
+
+test("doc_symbol_refs SQLite storage inserts and searches by symbol", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doc-symbol-refs-"));
+  const dbFile = sqlitePath(dataDir);
+
+  await writeDocsToSqlite(dbFile, [{
+    uri: "bitrix-docs://framework/iblock/getlist",
+    title: "CIBlockElement::GetList",
+    path: "/docs/iblock/getlist.md",
+    mimeType: "text/markdown",
+    size: 120,
+    mtimeMs: 1,
+    chunkIndex: 0,
+    text: "CIBlockElement::GetList returns iblock elements. Check filter and selected fields.",
+    symbolRefs: ["CIBlockElement::GetList"]
+  }]);
+
+  const results = await searchDocSymbolRefs(dbFile, "CIBlockElement::GetList", 5);
+  assert.equal(results?.length, 1);
+  assert.equal(results?.[0]?.title, "CIBlockElement::GetList");
+  assert.equal(results?.[0]?.docUri, "bitrix-docs://framework/iblock/getlist");
+  assert.match(results?.[0]?.excerpt ?? "", /filter and selected fields/);
+
+  const missing = await searchDocSymbolRefs(dbFile, "CEvent::Send", 5);
+  assert.deepEqual(missing, []);
+});
 
 
 test("indexes Bitrix option reads and writes with relations", async () => {
