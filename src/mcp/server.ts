@@ -5,7 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 import { resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
-import { searchSymbolsForContext } from "../indexer/sqliteStore.js";
+import { searchInheritanceRelations, searchSymbolsForContext } from "../indexer/sqliteStore.js";
 import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
@@ -200,6 +200,21 @@ function buildFileContext(contents: string, absolutePath: string, relativePath: 
 const indexKindSchema = z.enum(["project", "bitrix", "template", "install"]);
 const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1)]);
 const symbolContextTypeSchema = z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]);
+const inheritanceRelationSchema = z.enum(["extends", "implements", "uses_trait", "any"]);
+
+function compactInheritanceRelation(relation: { sourceName: string; targetName: string; relationType: string; targetType: string; file: string; line: number; module?: string; kind?: string; signature?: string }): Record<string, unknown> {
+  return {
+    className: relation.sourceName,
+    relation: relation.relationType,
+    targetType: relation.targetType,
+    targetName: relation.targetName,
+    module: relation.module,
+    kind: relation.kind,
+    file: relation.file,
+    line: relation.line,
+    signature: relation.signature
+  };
+}
 
 const searchFormatSchema = {
   includeSignature: z.boolean().optional().describe("Include the compact signature field; enabled by default."),
@@ -282,6 +297,30 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
           ambiguous: false,
           symbol: symbolForFormat({ ...symbol, file: absolutePath, relativeFile: relativePath }, format),
           context
+        };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      });
+    }
+  );
+
+  server.tool(
+    "bitrix_inheritance_search",
+    "Find indexed PHP classes that extend a parent class, implement an interface, or use a trait using stored Bitrix relation rows.",
+    {
+      target: z.string().min(1).describe("Parent class, interface, or trait name. Fully qualified and short names are both supported where possible."),
+      relation: inheritanceRelationSchema.default("any"),
+      kind: searchKindSchema.optional().describe("Restrict relation lookup to one kind or an array of kinds: project, template, bitrix, or install."),
+      module: z.string().optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ target, relation, kind, module, limit, format }) => {
+      return withMcpToolGuard("bitrix_inheritance_search", async () => {
+        const relations = await searchInheritanceRelations(sqlitePath(paths.dataDir), { target, relation, kind, module, limit }) ?? [];
+        const result = {
+          query: { target, relation, kind, module },
+          count: relations.length,
+          results: format === "full" ? relations : relations.map(compactInheritanceRelation)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       });

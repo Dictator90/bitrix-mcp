@@ -77,6 +77,31 @@ function basename(name: string): string {
   return name.split("\\").filter(Boolean).at(-1) ?? name;
 }
 
+const PHP_BUILTIN_TYPES = new Set([
+  "array",
+  "bool",
+  "boolean",
+  "callable",
+  "false",
+  "float",
+  "int",
+  "integer",
+  "iterable",
+  "mixed",
+  "never",
+  "null",
+  "object",
+  "self",
+  "static",
+  "string",
+  "true",
+  "void"
+]);
+
+function isBuiltinTypeName(name: string): boolean {
+  return PHP_BUILTIN_TYPES.has(name.replace(/^\\/u, "").toLowerCase());
+}
+
 function qualifyName(name: string, context: ParserContext, useNamespace = true): string {
   const normalized = name.replace(/^\\/u, "");
   if (name.startsWith("\\")) return normalized;
@@ -87,7 +112,7 @@ function qualifyName(name: string, context: ParserContext, useNamespace = true):
     return [alias, ...rest].join("\\");
   }
 
-  if (useNamespace && context.namespace && !normalized.includes("\\")) {
+  if (useNamespace && context.namespace && !isBuiltinTypeName(normalized)) {
     return `${context.namespace}\\${normalized}`;
   }
 
@@ -781,6 +806,74 @@ function callSymbol(source: string, filePath: string, module: string | undefined
   return undefined;
 }
 
+
+function typeName(source: string, value: unknown, context: ParserContext): string | undefined {
+  if (typeof value === "string") return value;
+  if (!isNode(value)) return undefined;
+  if (typeof value.raw === "string") return value.raw;
+  if (value.kind === "name" || value.kind === "typereference") {
+    const name = nodeName(value);
+    return name ? qualifyName(name, context) : undefined;
+  }
+  if ((value.kind === "uniontype" || value.kind === "intersectiontype") && Array.isArray(value.types)) {
+    const separator = value.kind === "uniontype" ? "|" : "&";
+    const types = value.types.map((item) => typeName(source, item, context)).filter((item): item is string => Boolean(item));
+    return types.length > 0 ? types.join(separator) : undefined;
+  }
+  return sourceSlice(source, value);
+}
+
+function returnTypeName(source: string, node: PhpNode, context: ParserContext): string | undefined {
+  const type = typeName(source, node.type, context);
+  if (!type) return undefined;
+  return node.nullable === true && !type.startsWith("?") ? `?${type}` : type;
+}
+
+function parameterDefault(source: string, node: PhpNode): string | undefined {
+  return isNode(node.value) ? sourceSlice(source, node.value) : undefined;
+}
+
+function parameterRecords(source: string, node: PhpNode, context: ParserContext): SymbolRecord["parameters"] {
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+  return args.map((argument) => {
+    const name = nodeName(argument.name) ?? "<anonymous>";
+    const record: NonNullable<SymbolRecord["parameters"]>[number] = {
+      name,
+      nullable: argument.nullable === true,
+      variadic: argument.variadic === true
+    };
+    const type = typeName(source, argument.type, context);
+    if (type) record.type = type;
+    const defaultValue = parameterDefault(source, argument);
+    if (defaultValue !== undefined) record.default = defaultValue;
+    return record;
+  });
+}
+
+function methodVisibility(node: PhpNode): SymbolRecord["visibility"] {
+  return node.visibility === "protected" || node.visibility === "private" ? node.visibility : "public";
+}
+
+function implementedNames(node: PhpNode, context: ParserContext): string[] {
+  return (Array.isArray(node.implements) ? node.implements.filter(isNode) : [])
+    .map((item) => nodeName(item))
+    .filter((name): name is string => Boolean(name))
+    .map((name) => qualifyName(name, context));
+}
+
+function traitNames(node: PhpNode, context: ParserContext): string[] {
+  const traits: string[] = [];
+  const body = Array.isArray(node.body) ? node.body.filter(isNode) : [];
+  for (const child of body) {
+    if (child.kind !== "traituse" || !Array.isArray(child.traits)) continue;
+    for (const trait of child.traits.filter(isNode)) {
+      const name = nodeName(trait);
+      if (name) traits.push(qualifyName(name, context));
+    }
+  }
+  return traits;
+}
+
 function constantSymbols(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext): SymbolRecord[] {
   if (!Array.isArray(node.constants)) return [];
   return node.constants.filter(isNode).map((constant) => {
@@ -833,13 +926,25 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const simpleName = nodeName(node.name);
       if (!simpleName || node.isAnonymous === true) return;
       const className = fullyQualifiedDeclarationName(simpleName, context);
+      const parentName = nodeName(node.extends);
+      const extendsName = parentName ? qualifyName(parentName, context) : undefined;
+      const implementsNames = implementedNames(node, context);
+      const usedTraits = traitNames(node, context);
       symbols.push({
         type: node.kind as "class" | "interface" | "trait",
         name: className,
+        fullyQualifiedName: className,
+        namespace: context.namespace,
+        className: simpleName,
         module,
         file: filePath,
         line: nodeLine(node),
         lineEnd: nodeEndLine(node),
+        abstract: node.isAbstract === true,
+        final: node.isFinal === true,
+        extends: extendsName,
+        implements: implementsNames.length ? implementsNames : undefined,
+        traits: usedTraits.length ? usedTraits : undefined,
         signature: declarationSignature(source, node)
       });
       const entity = maybeOrmEntity(source, filePath, module, node, context);
@@ -852,13 +957,18 @@ function visit(source: string, filePath: string, module: string | undefined, nod
     case "function": {
       const simpleName = nodeName(node.name);
       if (simpleName) {
+        const functionName = fullyQualifiedDeclarationName(simpleName, context);
         symbols.push({
           type: "function",
-          name: fullyQualifiedDeclarationName(simpleName, context),
+          name: functionName,
+          fullyQualifiedName: functionName,
+          namespace: context.namespace,
           module,
           file: filePath,
           line: nodeLine(node),
           lineEnd: nodeEndLine(node),
+          returnType: returnTypeName(source, node, context),
+          parameters: parameterRecords(source, node, context),
           signature: declarationSignature(source, node)
         });
       }
@@ -869,14 +979,23 @@ function visit(source: string, filePath: string, module: string | undefined, nod
     case "method": {
       const simpleName = nodeName(node.name);
       if (simpleName) {
+        const methodName = context.className ? `${context.className}::${simpleName}` : simpleName;
         symbols.push({
           type: "method",
           name: simpleName,
+          fullyQualifiedName: methodName,
+          namespace: context.namespace,
           module,
           className: context.className,
           file: filePath,
           line: nodeLine(node),
           lineEnd: nodeEndLine(node),
+          visibility: methodVisibility(node),
+          static: node.isStatic === true,
+          abstract: node.isAbstract === true,
+          final: node.isFinal === true,
+          returnType: returnTypeName(source, node, context),
+          parameters: parameterRecords(source, node, context),
           signature: declarationSignature(source, node)
         });
       }

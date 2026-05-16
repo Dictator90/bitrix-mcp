@@ -21,13 +21,32 @@ export interface ComponentParamRecord {
   value: string | number | boolean | null | "unknown";
 }
 
+export interface SymbolParameterRecord {
+  name: string;
+  type?: string;
+  default?: string;
+  nullable?: boolean;
+  variadic?: boolean;
+}
+
 export interface SymbolRecord {
   type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event";
   kind?: IndexKind;
   language?: string;
   name: string;
   module?: string;
+  fullyQualifiedName?: string;
+  namespace?: string;
   className?: string;
+  visibility?: "public" | "protected" | "private";
+  static?: boolean;
+  abstract?: boolean;
+  final?: boolean;
+  returnType?: string;
+  extends?: string;
+  implements?: string[];
+  traits?: string[];
+  parameters?: SymbolParameterRecord[];
   handlerClass?: string;
   handlerMethod?: string;
   handlerFunction?: string;

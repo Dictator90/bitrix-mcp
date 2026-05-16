@@ -641,3 +641,51 @@ test("MCP bitrix_option_search is registered and searches indexed options", asyn
   assert.equal(full[0]?.operation, "set");
   assert.equal(full[0]?.api, "COption::SetOptionString");
 });
+
+test("MCP bitrix_inheritance_search finds extends, implements, and trait usage relations", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-inheritance-"));
+  const file = path.join(fixtureRoot, "local/modules/vendor.module/lib/inheritance.php");
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root: fixtureRoot,
+    kind: "project",
+    files: [{
+      path: file,
+      relativePath: "local/modules/vendor.module/lib/inheritance.php",
+      kind: "project",
+      size: 1,
+      mtimeMs: 1,
+      language: "php",
+      symbols: [{
+        type: "class",
+        name: "Vendor\\Module\\Service",
+        fullyQualifiedName: "Vendor\\Module\\Service",
+        module: "vendor.module",
+        file,
+        line: 10,
+        lineEnd: 30,
+        extends: "Bitrix\\Main\\ORM\\Data\\DataManager",
+        implements: ["Vendor\\Module\\Contract\\ServiceInterface"],
+        traits: ["Vendor\\Module\\Support\\SomeTrait"],
+        signature: "class Service extends DataManager implements ServiceInterface"
+      }]
+    }]
+  }, { force: true });
+
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_inheritance_search;
+
+  const extendsResult = JSON.parse((await tool.handler({ target: "\\Bitrix\\Main\\ORM\\Data\\DataManager", relation: "extends" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  assert.equal(extendsResult.count, 1);
+  assert.equal(extendsResult.results[0]?.className, "Vendor\\Module\\Service");
+  assert.equal(extendsResult.results[0]?.relation, "extends");
+
+  const implementsResult = JSON.parse((await tool.handler({ target: "ServiceInterface", relation: "implements" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  assert.equal(implementsResult.count, 1);
+  assert.equal(implementsResult.results[0]?.targetName, "Vendor\\Module\\Contract\\ServiceInterface");
+
+  const traitResult = JSON.parse((await tool.handler({ target: "SomeTrait", relation: "uses_trait" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  assert.equal(traitResult.count, 1);
+  assert.equal(traitResult.results[0]?.targetName, "Vendor\\Module\\Support\\SomeTrait");
+});
