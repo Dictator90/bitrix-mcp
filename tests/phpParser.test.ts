@@ -439,3 +439,100 @@ class HlReader {
   ]);
   assert.ok(result.hlblockUsages.every((usage) => usage.contextName === "HlReader::load"));
 });
+
+test("parsePhpSymbols enriches namespaced PHP declarations with AST metadata", () => {
+  const symbols = parsePhpSymbols(String.raw`<?php
+namespace Vendor\Module;
+
+use Bitrix\Main\ORM\Data\DataManager;
+use Vendor\Module\Contract\ServiceInterface as Contract;
+
+final class ProductTable extends DataManager implements Contract, \JsonSerializable
+{
+    use Support\SomeTrait, \Vendor\Shared\OtherTrait;
+
+    public static function run(?int $id, string ...$names): ?array
+    {
+        return [];
+    }
+
+    protected function save(Service $service = null, array $options = ['mode' => 'x']): void
+    {
+    }
+
+    private function hidden($value = 10)
+    {
+    }
+}
+
+function helper(?string $name = 'guest'): string
+{
+    return $name;
+}
+`, "/srv/site/local/modules/vendor.module/lib/producttable.php");
+
+  const classSymbol = symbols.find((symbol) => symbol.type === "class" && symbol.name === "Vendor\\Module\\ProductTable");
+  assert.ok(classSymbol);
+  assert.equal(classSymbol.fullyQualifiedName, "Vendor\\Module\\ProductTable");
+  assert.equal(classSymbol.namespace, "Vendor\\Module");
+  assert.equal(classSymbol.className, "ProductTable");
+  assert.equal(classSymbol.final, true);
+  assert.equal(classSymbol.extends, "Bitrix\\Main\\ORM\\Data\\DataManager");
+  assert.deepEqual(classSymbol.implements, ["Vendor\\Module\\Contract\\ServiceInterface", "JsonSerializable"]);
+  assert.deepEqual(classSymbol.traits, ["Vendor\\Module\\Support\\SomeTrait", "Vendor\\Shared\\OtherTrait"]);
+  assert.equal(classSymbol.line, 7);
+  assert.equal(classSymbol.lineEnd, 23);
+
+  const run = symbols.find((symbol) => symbol.type === "method" && symbol.name === "run");
+  assert.ok(run);
+  assert.equal(run.className, "Vendor\\Module\\ProductTable");
+  assert.equal(run.fullyQualifiedName, "Vendor\\Module\\ProductTable::run");
+  assert.equal(run.visibility, "public");
+  assert.equal(run.static, true);
+  assert.equal(run.returnType, "?array");
+  assert.deepEqual(run.parameters, [
+    { name: "id", type: "int", nullable: true, variadic: false },
+    { name: "names", type: "string", nullable: false, variadic: true }
+  ]);
+  assert.equal(run.line, 11);
+  assert.equal(run.lineEnd, 14);
+
+  const save = symbols.find((symbol) => symbol.type === "method" && symbol.name === "save");
+  assert.ok(save);
+  assert.equal(save.visibility, "protected");
+  assert.equal(save.returnType, "void");
+  assert.deepEqual(save.parameters?.map((parameter) => ({ name: parameter.name, type: parameter.type, default: parameter.default })), [
+    { name: "service", type: "Vendor\\Module\\Service", default: "null" },
+    { name: "options", type: "array", default: "['mode' => 'x']" }
+  ]);
+
+  const hidden = symbols.find((symbol) => symbol.type === "method" && symbol.name === "hidden");
+  assert.ok(hidden);
+  assert.equal(hidden.visibility, "private");
+  assert.equal(hidden.parameters?.[0]?.default, "10");
+
+  const helper = symbols.find((symbol) => symbol.type === "function" && symbol.name === "Vendor\\Module\\helper");
+  assert.ok(helper);
+  assert.equal(helper.fullyQualifiedName, "Vendor\\Module\\helper");
+  assert.equal(helper.returnType, "string");
+  assert.deepEqual(helper.parameters, [{ name: "name", type: "string", default: "'guest'", nullable: true, variadic: false }]);
+  assert.equal(helper.lineEnd, 28);
+});
+
+test("parsePhpSymbols records abstract and final method modifiers", () => {
+  const symbols = parsePhpSymbols(`<?php
+abstract class Base
+{
+    abstract protected function mustRun(): void;
+    final public function done(): void {}
+}
+`, "/srv/site/local/modules/vendor.module/lib/base.php");
+
+  const base = symbols.find((symbol) => symbol.type === "class" && symbol.name === "Base");
+  assert.equal(base?.abstract, true);
+  const mustRun = symbols.find((symbol) => symbol.type === "method" && symbol.name === "mustRun");
+  assert.equal(mustRun?.abstract, true);
+  assert.equal(mustRun?.visibility, "protected");
+  const done = symbols.find((symbol) => symbol.type === "method" && symbol.name === "done");
+  assert.equal(done?.final, true);
+});

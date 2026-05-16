@@ -147,6 +147,14 @@ export interface BitrixRelationSearchQuery {
   limit?: number;
 }
 
+export interface InheritanceSearchQuery {
+  target: string;
+  relation?: "extends" | "implements" | "uses_trait" | "any";
+  kind?: IndexKind | IndexKind[];
+  module?: string;
+  limit?: number;
+}
+
 export interface WriteBitrixRelationsOptions {
   clearKind?: string;
   clearFile?: string;
@@ -178,7 +186,18 @@ interface SymbolRow {
   language: string | null;
   name: string;
   module: string | null;
+  fully_qualified_name?: string | null;
+  namespace?: string | null;
   class_name: string | null;
+  visibility?: SymbolRecord["visibility"] | null;
+  is_static?: number | null;
+  is_abstract?: number | null;
+  is_final?: number | null;
+  return_type?: string | null;
+  extends_name?: string | null;
+  implements_json?: string | null;
+  traits_json?: string | null;
+  parameters_json?: string | null;
   handler_class?: string | null;
   handler_method?: string | null;
   handler_function?: string | null;
@@ -322,7 +341,18 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     language: row.language ?? undefined,
     name: row.name,
     module: row.module ?? undefined,
+    fullyQualifiedName: row.fully_qualified_name ?? undefined,
+    namespace: row.namespace ?? undefined,
     className: row.class_name ?? undefined,
+    visibility: row.visibility ?? undefined,
+    static: row.is_static === null || row.is_static === undefined ? undefined : row.is_static === 1,
+    abstract: row.is_abstract === null || row.is_abstract === undefined ? undefined : row.is_abstract === 1,
+    final: row.is_final === null || row.is_final === undefined ? undefined : row.is_final === 1,
+    returnType: row.return_type ?? undefined,
+    extends: row.extends_name ?? undefined,
+    implements: row.implements_json ? parseJsonArray<string>(row.implements_json) : undefined,
+    traits: row.traits_json ? parseJsonArray<string>(row.traits_json) : undefined,
+    parameters: row.parameters_json ? parseJsonArray<NonNullable<SymbolRecord["parameters"]>[number]>(row.parameters_json) : undefined,
     handlerClass: row.handler_class ?? undefined,
     handlerMethod: row.handler_method ?? undefined,
     handlerFunction: row.handler_function ?? undefined,
@@ -634,6 +664,31 @@ function componentRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
   }];
 }
 
+function inheritanceRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "class") return [];
+  const sourceName = symbol.fullyQualifiedName ?? symbol.name;
+  const base = {
+    sourceType: "class",
+    sourceName,
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature
+  };
+  const relations: BitrixRelationRecord[] = [];
+  if (symbol.extends) {
+    relations.push({ ...base, targetType: "parent_class", targetName: symbol.extends, relationType: "extends" });
+  }
+  for (const interfaceName of symbol.implements ?? []) {
+    relations.push({ ...base, targetType: "interface", targetName: interfaceName, relationType: "implements" });
+  }
+  for (const traitName of symbol.traits ?? []) {
+    relations.push({ ...base, targetType: "trait", targetName: traitName, relationType: "uses_trait" });
+  }
+  return relations;
+}
+
 function eventHandlerTarget(symbol: SymbolRecord): { targetType: string; targetName: string; metadata?: Record<string, unknown> } | undefined {
   if (symbol.handlerClass && symbol.handlerMethod) {
     return { targetType: "method", targetName: `${symbol.handlerClass}::${symbol.handlerMethod}` };
@@ -714,7 +769,18 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         language TEXT,
         name TEXT NOT NULL,
         module TEXT,
+        fully_qualified_name TEXT,
+        namespace TEXT,
         class_name TEXT,
+        visibility TEXT,
+        is_static INTEGER,
+        is_abstract INTEGER,
+        is_final INTEGER,
+        return_type TEXT,
+        extends_name TEXT,
+        implements_json TEXT,
+        traits_json TEXT,
+        parameters_json TEXT,
         handler_class TEXT,
         handler_method TEXT,
         handler_function TEXT,
@@ -1014,6 +1080,17 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
 
     const symbolColumns = (db.prepare("PRAGMA table_info(symbols)").all() as Array<{ name: string }>).map((column) => column.name);
     for (const [column, definition] of [
+      ["fully_qualified_name", "TEXT"],
+      ["namespace", "TEXT"],
+      ["visibility", "TEXT"],
+      ["is_static", "INTEGER"],
+      ["is_abstract", "INTEGER"],
+      ["is_final", "INTEGER"],
+      ["return_type", "TEXT"],
+      ["extends_name", "TEXT"],
+      ["implements_json", "TEXT"],
+      ["traits_json", "TEXT"],
+      ["parameters_json", "TEXT"],
       ["handler_class", "TEXT"],
       ["handler_method", "TEXT"],
       ["handler_function", "TEXT"],
@@ -1121,8 +1198,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       RETURNING id
     `);
     const insertSymbol = db.prepare(`
-      INSERT INTO symbols (file_id, kind, root, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO symbols (file_id, kind, root, type, language, name, module, fully_qualified_name, namespace, class_name, visibility, is_static, is_abstract, is_final, return_type, extends_name, implements_json, traits_json, parameters_json, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING id
     `);
     const insertEvent = db.prepare(`
@@ -1249,7 +1326,18 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(symbol.language ?? file.language),
             symbol.name,
             nullable(symbol.module),
+            nullable(symbol.fullyQualifiedName),
+            nullable(symbol.namespace),
             nullable(symbol.className),
+            nullable(symbol.visibility),
+            symbol.static === undefined ? null : symbol.static ? 1 : 0,
+            symbol.abstract === undefined ? null : symbol.abstract ? 1 : 0,
+            symbol.final === undefined ? null : symbol.final ? 1 : 0,
+            nullable(symbol.returnType),
+            nullable(symbol.extends),
+            symbol.implements && symbol.implements.length ? JSON.stringify(symbol.implements) : null,
+            symbol.traits && symbol.traits.length ? JSON.stringify(symbol.traits) : null,
+            symbol.parameters && symbol.parameters.length ? JSON.stringify(symbol.parameters) : null,
             nullable(symbol.handlerClass),
             nullable(symbol.handlerMethod),
             nullable(symbol.handlerFunction),
@@ -1356,6 +1444,9 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
                 relationMetadataJson(relation)
               );
             }
+          }
+          for (const relation of inheritanceRelationsForSymbol(symbol, file)) {
+            insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
           }
         }
         for (const usage of file.moduleUsages ?? []) {
@@ -1656,7 +1747,7 @@ export async function searchSymbolsForContext(dbFile: string, query: SymbolConte
 
     const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 20)));
     const rows = db.prepare(`
-      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.fully_qualified_name, s.namespace, s.class_name, s.visibility, s.is_static, s.is_abstract, s.is_final, s.return_type, s.extends_name, s.implements_json, s.traits_json, s.parameters_json, s.handler_class, s.handler_method, s.handler_function,
              s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
@@ -1763,6 +1854,58 @@ export async function searchModuleUsages(dbFile: string, query: ModuleUsageSearc
       LIMIT ?
     `).all(...params) as unknown as ModuleUsageRow[];
     return rows.map(rowToModuleUsage);
+  } finally {
+    db.close();
+  }
+}
+
+
+function normalizePhpNameForLookup(name: string): string {
+  return name.trim().replace(/^\\/u, "").toLowerCase();
+}
+
+export async function searchInheritanceRelations(dbFile: string, query: InheritanceSearchQuery): Promise<BitrixRelationRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const normalizedTarget = normalizePhpNameForLookup(query.target);
+    if (!normalizedTarget) return [];
+    const shortTarget = normalizedTarget.split("\\").filter(Boolean).at(-1) ?? normalizedTarget;
+    const filters: string[] = ["source_type = 'class'", "relation_type IN ('extends', 'implements', 'uses_trait')"];
+    const params: Array<string | number> = [];
+
+    if (query.relation && query.relation !== "any") {
+      filters.push("relation_type = ?");
+      params.push(query.relation);
+    }
+    filters.push("(lower(ltrim(target_name, '\\')) = ? OR lower(ltrim(target_name, '\\')) LIKE ? OR lower(ltrim(target_name, '\\')) = ?)");
+    params.push(normalizedTarget, `%\\${shortTarget}`, shortTarget);
+
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+    if (query.module !== undefined) {
+      filters.push("module = ?");
+      params.push(query.module);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const rows = db.prepare(`
+      SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
+      FROM bitrix_relations
+      WHERE ${filters.join(" AND ")}
+      ORDER BY CASE WHEN kind IN ('project', 'template') THEN 0 ELSE 1 END, source_name ASC, id ASC
+      LIMIT ?
+    `).all(...params) as unknown as BitrixRelationRow[];
+    return rows.map(rowToBitrixRelation);
   } finally {
     db.close();
   }
@@ -2214,7 +2357,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     if (fileRows.length === 0) {
       return undefined;
     }
-    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, class_name, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json FROM symbols WHERE file_id = ? ORDER BY id");
+    const symbolSelect = db.prepare("SELECT kind, type, language, name, module, fully_qualified_name, namespace, class_name, visibility, is_static, is_abstract, is_final, return_type, extends_name, implements_json, traits_json, parameters_json, handler_class, handler_method, handler_function, event_name, agent_action, api, site_id, periodic, interval, file, line, line_end, signature, description, component_template, params_json FROM symbols WHERE file_id = ? ORDER BY id");
     const moduleUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, call, file, relative_file, line, signature FROM module_usages WHERE file_id = ? ORDER BY id");
     const ormEntitySelect = db.prepare("SELECT id, kind, root, class_name, fully_qualified_name, namespace, parent_class, module, table_name, file, relative_file, line, fields_json, references_json, signature FROM orm_entities WHERE file_id = ? ORDER BY id");
     const ormUsageSelect = db.prepare("SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature FROM orm_usages WHERE file_id = ? ORDER BY id");
