@@ -1,4 +1,4 @@
-import type { BitrixRelationRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OptionUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { AutoloadRecord, BitrixRelationRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OptionUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -395,4 +395,21 @@ export function formatComponentContextResult(result: unknown, options: Component
     relations: context.relations?.map((relation) => compactObject({ source: `${relation.sourceType}:${relation.sourceName}`, target: `${relation.targetType}:${relation.targetName}`, relationType: relation.relationType, file: relation.file, line: relation.line })),
     possibleTemplatePaths: context.possibleTemplatePaths
   });
+}
+
+
+export interface AutoloadSearchFormatOptions { format?: "compact" | "full"; }
+
+export function formatAutoloadSearchResults(results: AutoloadRecord[] | undefined, options: AutoloadSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((record) => compactObject({
+    type: record.type,
+    namespace: record.namespace,
+    paths: record.paths && record.paths.length > 0 ? record.paths : undefined,
+    file: record.file,
+    package: record.package,
+    version: record.version,
+    dev: record.dev || undefined,
+    sourceFile: record.sourceFile
+  }));
 }

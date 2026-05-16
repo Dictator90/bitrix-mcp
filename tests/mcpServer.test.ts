@@ -720,3 +720,89 @@ test("MCP bitrix_inheritance_search finds extends, implements, and trait usage r
   assert.equal(traitResult.count, 1);
   assert.equal(traitResult.results[0]?.targetName, "Vendor\\Module\\Support\\SomeTrait");
 });
+
+test("MCP bitrix_autoload_search is registered and returns compact Composer records", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-autoload-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-autoload-data-"));
+  await fs.mkdir(path.join(root, "local", "php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local", "php_interface", "init.php"), "<?php\n", "utf8");
+  await fs.writeFile(path.join(root, "composer.json"), JSON.stringify({
+    autoload: { "psr-4": { "Vendor\\Module\\": "local/modules/vendor.module/lib" }, files: ["local/php_interface/functions.php"] },
+    require: { "bitrix/framework": "^1.0" },
+    "require-dev": { "phpunit/phpunit": "^11.0" }
+  }), "utf8");
+  const server = createMcpServer(runtimePaths(dataDir, root));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_autoload_search);
+  await tools.bitrix_index_project.handler({});
+  const psr4Result = await tools.bitrix_autoload_search.handler({ namespace: "Vendor\\Module\\" });
+  const psr4 = JSON.parse(psr4Result.content[0].text) as Array<{ type: string; namespace: string; paths: string[] }>;
+  assert.deepEqual(psr4[0], { type: "psr-4", namespace: "Vendor\\Module\\", paths: ["local/modules/vendor.module/lib"], sourceFile: "composer.json" });
+
+  const bootstrapResult = await tools.bitrix_autoload_search.handler({ type: "bootstrap" });
+  const bootstraps = JSON.parse(bootstrapResult.content[0].text) as Array<{ type: string; file: string }>;
+  assert.equal(bootstraps[0]?.file, "local/php_interface/init.php");
+
+  const depResult = await tools.bitrix_autoload_search.handler({ package: "phpunit/phpunit" });
+  const deps = JSON.parse(depResult.content[0].text) as Array<{ type: string; package: string; dev: boolean }>;
+  assert.equal(deps[0]?.type, "dev_dependency");
+  assert.equal(deps[0]?.dev, true);
+});
+
+test("MCP bitrix_project_overview returns compact summary and warnings", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-overview-empty-"));
+  const server = createMcpServer(runtimePaths(dataDir));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_project_overview);
+  const emptyResult = await tools.bitrix_project_overview.handler({});
+  const empty = JSON.parse(emptyResult.content[0].text) as { summary: { files: number; relations: number }; warnings: string[]; indexes: Record<string, Record<string, unknown>> };
+  assert.equal(empty.summary.files, 0);
+  assert.equal(empty.summary.relations, 0);
+  assert.ok(empty.warnings.includes("project index missing"));
+  assert.ok(empty.warnings.includes("no relations found"));
+  assert.deepEqual(empty.indexes.project, {});
+});
+
+test("MCP bitrix_project_overview summarizes indexed Bitrix entities", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-overview-full-"));
+  const server = createMcpServer({ ...runtimePaths(dataDir), bitrixRoot: fixtureRoot });
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  await tools.bitrix_index_all.handler({});
+  const agentFile = path.join(fixtureRoot, "local", "modules", "vendor.module", "install", "agent.php");
+  await writeIndexToSqlite(sqlitePath(dataDir), {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    root: fixtureRoot,
+    kind: "install",
+    files: [{
+      path: agentFile,
+      relativePath: path.join("local", "modules", "vendor.module", "install", "agent.php"),
+      kind: "install",
+      size: 1,
+      mtimeMs: 1,
+      language: "php",
+      symbols: [
+        { type: "agent", name: "\\Vendor\\Module\\Agent::run", module: "vendor.module", file: agentFile, line: 1, periodic: "N", interval: 86400 },
+        { type: "mail_event", name: "SALE_NEW_ORDER", eventName: "SALE_NEW_ORDER", api: "Event::send", file: agentFile, line: 2 }
+      ],
+      ormEntities: [{ type: "orm_entity", className: "ProductTable", fullyQualifiedName: "Vendor\\Module\\ProductTable", namespace: "Vendor\\Module", tableName: "vendor_product", file: agentFile, line: 3, fields: [], references: [] }]
+    }]
+  });
+  const result = await tools.bitrix_project_overview.handler({ includeTopFiles: true });
+  const overview = JSON.parse(result.content[0].text) as { summary: { symbols: number; events: number; relations: number; components: number; agents: number; mailEvents: number; ormEntities: number }; components: unknown[]; agents: unknown[]; mailEvents: unknown[]; ormEntities: unknown[]; topFiles: unknown[]; warnings: string[] };
+  assert.ok(overview.summary.symbols > 0);
+  assert.ok(overview.summary.relations > 0);
+  assert.ok(overview.summary.components > 0);
+  assert.ok(overview.summary.agents > 0);
+  assert.ok(overview.summary.mailEvents > 0);
+  assert.ok(overview.summary.ormEntities > 0);
+  assert.ok(overview.components.length > 0);
+  assert.ok(overview.agents.length > 0);
+  assert.ok(overview.mailEvents.length > 0);
+  assert.ok(overview.ormEntities.length > 0);
+  assert.ok(overview.topFiles.length > 0);
+  assert.ok(!overview.warnings.includes("no relations found"));
+});

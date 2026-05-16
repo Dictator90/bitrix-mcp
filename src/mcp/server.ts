@@ -551,6 +551,22 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
   );
 
   server.tool(
+    "bitrix_autoload_search",
+    "Search indexed Composer autoload mappings, dependencies, classmaps, autoload files, and Bitrix bootstrap/config files.",
+    {
+      query: z.string().optional(),
+      namespace: z.string().optional(),
+      package: z.string().optional(),
+      type: z.enum(["psr-4", "files", "classmap", "dependency", "dev_dependency", "bootstrap"]).optional(),
+      limit: z.number().int().min(1).max(500).default(20),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ query, namespace, package: packageName, type, limit, format }) => {
+      return runWorkerTask("bitrix_autoload_search", { name: "searchAutoloadRecords", paths, query: { query, namespace, package: packageName, type, limit, format } });
+    }
+  );
+
+  server.tool(
     "bitrix_relation_search",
     "Search stored generic Bitrix relations by source, target, relation type, module, kind, or file. Compact output is returned by default.",
     {
@@ -638,6 +654,25 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     },
     async ({ base, kind, includeSource, includeRelations, maxFiles, maxItems, format }) => {
       return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, maxFiles, maxItems, format } });
+    }
+  );
+
+  server.tool(
+    "bitrix_project_overview",
+    "Return a compact Bitrix project overview: index status, counters, top Bitrix entities, autoload coverage, and warnings. Call this before large tasks after bitrix_index_status.",
+    {
+      includeTopFiles: z.boolean().optional(),
+      includeModules: z.boolean().optional(),
+      includeComponents: z.boolean().optional(),
+      includeEvents: z.boolean().optional(),
+      includeOrm: z.boolean().optional(),
+      includeAgents: z.boolean().optional(),
+      includeMailEvents: z.boolean().optional(),
+      includeWarnings: z.boolean().optional(),
+      format: z.enum(["compact", "full"]).optional()
+    },
+    async ({ includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format }) => {
+      return runWorkerTask("bitrix_project_overview", { name: "projectOverview", paths, query: { includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format } });
     }
   );
 

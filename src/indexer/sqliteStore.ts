@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "./template.js";
-import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord, AutoloadRecord, AutoloadRecordType } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -132,6 +132,14 @@ export interface OrmUsageSearchQuery {
   method?: string;
   file?: string;
   kind?: IndexKind | IndexKind[] | string | string[];
+  limit?: number;
+}
+
+export interface AutoloadSearchQuery {
+  query?: string;
+  namespace?: string;
+  package?: string;
+  type?: AutoloadRecordType;
   limit?: number;
 }
 
@@ -955,6 +963,20 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS autoload_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        namespace_prefix TEXT,
+        paths_json TEXT NOT NULL,
+        file TEXT,
+        package_name TEXT,
+        version_constraint TEXT,
+        source_file TEXT NOT NULL,
+        root TEXT NOT NULL,
+        dev INTEGER NOT NULL DEFAULT 0,
+        metadata_json TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS bitrix_relations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_type TEXT NOT NULL,
@@ -1016,6 +1038,10 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_option_usages_kind ON option_usages(kind);
       CREATE INDEX IF NOT EXISTS idx_option_usages_file ON option_usages(file);
       CREATE INDEX IF NOT EXISTS idx_option_usages_relative_file ON option_usages(relative_file);
+      CREATE INDEX IF NOT EXISTS idx_autoload_records_type ON autoload_records(type);
+      CREATE INDEX IF NOT EXISTS idx_autoload_records_namespace ON autoload_records(namespace_prefix);
+      CREATE INDEX IF NOT EXISTS idx_autoload_records_package ON autoload_records(package_name);
+      CREATE INDEX IF NOT EXISTS idx_autoload_records_file ON autoload_records(file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
@@ -1600,6 +1626,88 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
 
 function relationMetadataJson(relation: BitrixRelationRecord): string | null {
   return relation.metadata === undefined ? null : JSON.stringify(relation.metadata);
+}
+
+function rowToAutoloadRecord(row: { id: number; type: string; namespace_prefix: string | null; paths_json: string; file: string | null; package_name: string | null; version_constraint: string | null; source_file: string; root: string; dev: number; metadata_json: string | null }): AutoloadRecord {
+  return {
+    id: row.id,
+    type: row.type as AutoloadRecordType,
+    namespace: row.namespace_prefix ?? undefined,
+    paths: JSON.parse(row.paths_json) as string[],
+    file: row.file ?? undefined,
+    package: row.package_name ?? undefined,
+    version: row.version_constraint ?? undefined,
+    sourceFile: row.source_file,
+    root: row.root,
+    dev: Boolean(row.dev),
+    metadata: row.metadata_json ? JSON.parse(row.metadata_json) as Record<string, unknown> : undefined
+  };
+}
+
+export async function writeAutoloadRecords(dbFile: string, records: AutoloadRecord[], relations: BitrixRelationRecord[]): Promise<void> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const now = new Date().toISOString();
+    const insertRecord = db.prepare(`
+      INSERT INTO autoload_records (type, namespace_prefix, paths_json, file, package_name, version_constraint, source_file, root, dev, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertRelation = db.prepare(`
+      INSERT INTO bitrix_relations (source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const setMeta = db.prepare("INSERT INTO index_meta (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at");
+    db.exec("BEGIN IMMEDIATE;");
+    try {
+      db.prepare("DELETE FROM autoload_records").run();
+      db.prepare("DELETE FROM bitrix_relations WHERE kind = 'autoload'").run();
+      for (const record of records) {
+        insertRecord.run(record.type, nullable(record.namespace), JSON.stringify(record.paths ?? []), nullable(record.file), nullable(record.package), nullable(record.version), record.sourceFile, record.root, record.dev ? 1 : 0, record.metadata === undefined ? null : JSON.stringify(record.metadata));
+      }
+      for (const relation of relations) {
+        insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+      }
+      setMeta.run("index:autoload", JSON.stringify({ records: records.length }), now);
+      db.exec("COMMIT;");
+    } catch (error) {
+      db.exec("ROLLBACK;");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchAutoloadRecords(dbFile: string, query: AutoloadSearchQuery): Promise<AutoloadRecord[] | undefined> {
+  try { await fs.access(dbFile); } catch { return undefined; }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.type !== undefined) { filters.push("type = ?"); params.push(query.type); }
+    if (query.namespace !== undefined) { filters.push("namespace_prefix = ?"); params.push(query.namespace); }
+    if (query.package !== undefined) { filters.push("package_name = ?"); params.push(query.package); }
+    if (query.query !== undefined && query.query.trim()) {
+      const like = `%${query.query.trim().replace(/[\\%_]/g, "\\$&")}%`;
+      filters.push("(coalesce(namespace_prefix, '') LIKE ? ESCAPE '\\' OR paths_json LIKE ? ESCAPE '\\' OR coalesce(file, '') LIKE ? ESCAPE '\\' OR coalesce(package_name, '') LIKE ? ESCAPE '\\' OR source_file LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like, like);
+    }
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, type, namespace_prefix, paths_json, file, package_name, version_constraint, source_file, root, dev, metadata_json
+      FROM autoload_records
+      ${whereClause}
+      ORDER BY CASE type WHEN 'psr-4' THEN 0 WHEN 'files' THEN 1 WHEN 'classmap' THEN 2 WHEN 'dependency' THEN 3 WHEN 'dev_dependency' THEN 4 ELSE 5 END, id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ id: number; type: string; namespace_prefix: string | null; paths_json: string; file: string | null; package_name: string | null; version_constraint: string | null; source_file: string; root: string; dev: number; metadata_json: string | null }>;
+    return rows.map(rowToAutoloadRecord);
+  } finally {
+    db.close();
+  }
 }
 
 export async function writeBitrixRelations(dbFile: string, relations: BitrixRelationRecord[], options: WriteBitrixRelationsOptions = {}): Promise<void> {
@@ -2405,6 +2513,13 @@ export interface IndexStatus {
   documents: number;
   docChunks: number;
   phpParseFallbackFiles: number;
+  relations: number;
+  components: number;
+  agents: number;
+  mailEvents: number;
+  ormEntities: number;
+  iblockUsages: number;
+  autoloadRecords: number;
   lastIndexedAt?: string;
 }
 
@@ -2447,8 +2562,92 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
       documents: countRows(db, "docs"),
       docChunks: countRows(db, "doc_chunks"),
       phpParseFallbackFiles: countPhpParseFallbackFiles(db),
+      relations: countRows(db, "bitrix_relations"),
+      components: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'component'").get() as { count: number }).count),
+      agents: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'agent'").get() as { count: number }).count),
+      mailEvents: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'mail_event'").get() as { count: number }).count),
+      ormEntities: countRows(db, "orm_entities"),
+      iblockUsages: countRows(db, "iblock_usages"),
+      autoloadRecords: countRows(db, "autoload_records"),
       lastIndexedAt: lastIndexedRow.last_indexed_at ?? undefined
     };
+  } finally {
+    db.close();
+  }
+}
+
+export interface ProjectOverviewOptions {
+  workspaceRoot: string;
+  bitrixRoot?: string;
+  sqlitePath: string;
+  includeTopFiles?: boolean;
+  includeModules?: boolean;
+  includeComponents?: boolean;
+  includeEvents?: boolean;
+  includeOrm?: boolean;
+  includeAgents?: boolean;
+  includeMailEvents?: boolean;
+  includeWarnings?: boolean;
+  format?: "compact" | "full";
+}
+
+function topRows<T>(db: DatabaseSync, sql: string, ...params: Array<string | number>): T[] {
+  return db.prepare(sql).all(...params) as unknown as T[];
+}
+
+export async function getProjectOverview(dbFile: string, options: ProjectOverviewOptions): Promise<Record<string, unknown>> {
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const indexes = Object.fromEntries((["project", "template", "bitrix", "install", "docs"] as IndexKind[]).map((kind) => {
+      const row = db.prepare("SELECT value, updated_at FROM index_meta WHERE key = ?").get(`index:${kind}`) as { value: string; updated_at: string } | undefined;
+      return [kind, row ? { present: true, updatedAt: row.updated_at, ...(options.format === "full" ? { metadata: JSON.parse(row.value) as unknown } : {}) } : {}];
+    }));
+    const summary = {
+      files: countRows(db, "files"),
+      symbols: countRows(db, "symbols"),
+      events: countRows(db, "events"),
+      relations: countRows(db, "bitrix_relations"),
+      documents: countRows(db, "docs"),
+      components: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'component'").get() as { count: number }).count),
+      agents: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'agent'").get() as { count: number }).count),
+      mailEvents: Number((db.prepare("SELECT COUNT(*) AS count FROM symbols WHERE type = 'mail_event'").get() as { count: number }).count),
+      ormEntities: countRows(db, "orm_entities"),
+      moduleUsages: countRows(db, "module_usages"),
+      iblockUsages: countRows(db, "iblock_usages"),
+      hlblockUsages: countRows(db, "hlblock_usages"),
+      options: countRows(db, "option_usages"),
+      autoloadRecords: countRows(db, "autoload_records")
+    };
+    const hasIndex = (kind: IndexKind) => Boolean(db.prepare("SELECT 1 FROM index_meta WHERE key = ? LIMIT 1").get(`index:${kind}`));
+    const warnings: string[] = [];
+    if (!hasIndex("project")) warnings.push("project index missing");
+    if (!hasIndex("template")) warnings.push("template index missing");
+    if (!hasIndex("bitrix")) warnings.push("bitrix index missing");
+    if (!hasIndex("docs")) warnings.push("docs index missing");
+    if (summary.events === 0) warnings.push("no events found");
+    if (summary.relations === 0) warnings.push("no relations found");
+    if (!options.bitrixRoot) warnings.push("no Bitrix root found");
+
+    const overview: Record<string, unknown> = {
+      workspaceRoot: options.workspaceRoot,
+      bitrixRoot: options.bitrixRoot,
+      sqlitePath: options.sqlitePath,
+      indexes,
+      summary,
+      modules: options.includeModules === false ? [] : topRows(db, "SELECT module, COUNT(*) AS usages FROM module_usages GROUP BY module ORDER BY usages DESC, module ASC LIMIT 25"),
+      components: options.includeComponents === false ? [] : topRows(db, "SELECT name AS component, component_template AS template, COUNT(*) AS usages FROM symbols WHERE type = 'component' GROUP BY name, component_template ORDER BY usages DESC, name ASC LIMIT 25"),
+      templates: [],
+      events: options.includeEvents === false ? [] : topRows(db, "SELECT module, name AS eventName, handler_class AS handlerClass, handler_method AS handlerMethod, handler_function AS handlerFunction, file, line FROM events ORDER BY id DESC LIMIT 25"),
+      agents: options.includeAgents === false ? [] : topRows(db, "SELECT name, module, periodic, interval, file, line FROM symbols WHERE type = 'agent' ORDER BY id DESC LIMIT 25"),
+      ormEntities: options.includeOrm === false ? [] : topRows(db, "SELECT class_name AS className, table_name AS tableName, module, file, line FROM orm_entities ORDER BY id DESC LIMIT 25"),
+      mailEvents: options.includeMailEvents === false ? [] : topRows(db, "SELECT event_name AS eventName, api, site_id AS siteId, file, line FROM symbols WHERE type = 'mail_event' ORDER BY id DESC LIMIT 25"),
+      warnings: options.includeWarnings === false ? [] : warnings
+    };
+    if (options.includeTopFiles) {
+      overview.topFiles = topRows(db, "SELECT relative_path AS file, kind, language FROM files ORDER BY indexed_at DESC, id DESC LIMIT 25");
+    }
+    return overview;
   } finally {
     db.close();
   }
