@@ -492,3 +492,29 @@ test("MCP bitrix_iblock_usage_search is registered and searches indexed IBlock u
   const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; iblockId: string }>;
   assert.equal(full[0]?.type, "iblock_usage");
 });
+
+test("MCP bitrix_option_search is registered and searches indexed options", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-options-root-"));
+  await fs.writeFile(path.join(root, "options.php"), "<?php\nuse Bitrix\\Main\\Config\\Option;\nOption::get('vendor.module', 'server_option');\nCOption::SetOptionString('vendor.module', 'server_set', 'Y');\n");
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-options-"));
+  const server = createMcpServer(runtimePaths(dataDir, root));
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_option_search);
+  await tools.bitrix_index_project.handler({});
+
+  const compactResult = await tools.bitrix_option_search.handler({ module: "vendor.module", name: "server_option" });
+  const compact = JSON.parse(compactResult.content[0].text) as Array<{ type: string; module: string; name: string; operation: string; api: string }>;
+  assert.equal(compact[0]?.type, "option");
+  assert.equal(compact[0]?.module, "vendor.module");
+  assert.equal(compact[0]?.name, "server_option");
+  assert.equal(compact[0]?.operation, "get");
+  assert.equal(compact[0]?.api, "Option::get");
+
+  const fullResult = await tools.bitrix_option_search.handler({ operation: "set", format: "full" });
+  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; name: string; operation: string; api: string }>;
+  assert.equal(full[0]?.type, "option");
+  assert.equal(full[0]?.name, "server_set");
+  assert.equal(full[0]?.operation, "set");
+  assert.equal(full[0]?.api, "COption::SetOptionString");
+});

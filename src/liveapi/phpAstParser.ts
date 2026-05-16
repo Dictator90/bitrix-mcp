@@ -1,5 +1,5 @@
 import phpParser from "php-parser";
-import type { ComponentParamRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { ComponentParamRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, OrmEntityRecord, OrmFieldRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 type PhpNode = {
   kind: string;
@@ -410,6 +410,51 @@ function maybeIblockUsage(source: string, filePath: string, node: PhpNode, conte
   };
 }
 
+
+const OPTION_APIS = new Map<string, { api: string; operation: "get" | "set" }>([
+  ["option::get", { api: "Option::get", operation: "get" }],
+  ["option::set", { api: "Option::set", operation: "set" }],
+  ["bitrix\\main\\config\\option::get", { api: "Bitrix\\Main\\Config\\Option::get", operation: "get" }],
+  ["bitrix\\main\\config\\option::set", { api: "Bitrix\\Main\\Config\\Option::set", operation: "set" }],
+  ["coption::getoptionstring", { api: "COption::GetOptionString", operation: "get" }],
+  ["coption::setoptionstring", { api: "COption::SetOptionString", operation: "set" }],
+  ["coption::getoptionint", { api: "COption::GetOptionInt", operation: "get" }],
+  ["coption::setoptionint", { api: "COption::SetOptionInt", operation: "set" }]
+]);
+
+function normalizeOptionApi(className: string, methodName: string): { api: string; operation: "get" | "set" } | undefined {
+  return OPTION_APIS.get(`${className.replace(/^\\/u, "").toLowerCase()}::${methodName.toLowerCase()}`);
+}
+
+function maybeOptionUsage(source: string, filePath: string, node: PhpNode, context: ParserContext): OptionUsageRecord | undefined {
+  const what = isNode(node.what) ? node.what : undefined;
+  if (!what || what.kind !== "staticlookup") return undefined;
+  const methodName = nodeName(what.offset);
+  const targetName = callTargetName(node, context);
+  if (!methodName || !targetName) return undefined;
+  const config = normalizeOptionApi(targetName, methodName);
+  if (!config) return undefined;
+  const targetNode = isNode(what.what) ? what.what : undefined;
+  const rawTargetName = targetNode?.kind === "name" ? nodeName(targetNode)?.replace(/^\\/u, "") : undefined;
+  const api = rawTargetName?.toLowerCase() === "option" ? `Option::${methodName}` : config.api;
+  const args = Array.isArray(node.arguments) ? node.arguments.filter(isNode) : [];
+  const module = literalString(args[0], context);
+  const name = literalString(args[1], context);
+  if (!module || !name) return undefined;
+  return {
+    type: "option",
+    module,
+    name,
+    operation: config.operation,
+    api,
+    file: filePath,
+    line: nodeLine(node),
+    signature: sourceSlice(source, node) ?? `${api}(...)`,
+    contextType: context.currentSymbolType,
+    contextName: context.currentSymbolName
+  };
+}
+
 const ORM_USAGE_METHODS = new Set(["query", "getlist", "getbyid", "add", "update", "delete"]);
 
 function maybeOrmUsage(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext): OrmUsageRecord | undefined {
@@ -761,16 +806,16 @@ function childrenOf(node: PhpNode): PhpNode[] {
   return children;
 }
 
-function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[], ormEntities: OrmEntityRecord[], ormUsages: OrmUsageRecord[], iblockUsages: IblockUsageRecord[], hlblockUsages: HlblockUsageRecord[]): void {
+function visit(source: string, filePath: string, module: string | undefined, node: PhpNode, context: ParserContext, symbols: SymbolRecord[], ormEntities: OrmEntityRecord[], ormUsages: OrmUsageRecord[], iblockUsages: IblockUsageRecord[], hlblockUsages: HlblockUsageRecord[], optionUsages: OptionUsageRecord[]): void {
   switch (node.kind) {
     case "program":
     case "block":
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
 
     case "namespace": {
       const namespaceContext = cloneContext(context, { namespace: typeof node.name === "string" ? node.name : undefined, uses: new Map() });
-      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of Array.isArray(node.children) ? node.children.filter(isNode) : []) visit(source, filePath, module, child, namespaceContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
     }
 
@@ -795,7 +840,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const entity = maybeOrmEntity(source, filePath, module, node, context);
       if (entity) ormEntities.push(entity);
       const classContext = cloneContext(context, { className });
-      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of Array.isArray(node.body) ? node.body.filter(isNode) : []) visit(source, filePath, module, child, classContext, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
     }
 
@@ -811,7 +856,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "function", currentSymbolName: simpleName ? fullyQualifiedDeclarationName(simpleName, context) : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "function", currentSymbolName: simpleName ? fullyQualifiedDeclarationName(simpleName, context) : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
     }
 
@@ -828,7 +873,7 @@ function visit(source: string, filePath: string, module: string | undefined, nod
           signature: declarationSignature(source, node)
         });
       }
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "method", currentSymbolName: simpleName ? `${context.className ? `${context.className}::` : ""}${simpleName}` : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, cloneContext(context, { currentSymbolType: "method", currentSymbolName: simpleName ? `${context.className ? `${context.className}::` : ""}${simpleName}` : context.currentSymbolName }), symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
     }
 
@@ -865,17 +910,20 @@ function visit(source: string, filePath: string, module: string | undefined, nod
       const hlblockUsage = maybeHlblockUsage(source, filePath, node, context);
       if (hlblockUsage) hlblockUsages.push(hlblockUsage);
 
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      const optionUsage = maybeOptionUsage(source, filePath, node, context);
+      if (optionUsage) optionUsages.push(optionUsage);
+
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       const what = isNode(node.what) ? node.what : undefined;
-      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      if (what && what.kind !== "propertylookup" && what.kind !== "staticlookup") visit(source, filePath, module, what, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       const lookupTarget = what && (what.kind === "propertylookup" || what.kind === "staticlookup") && isNode(what.what) ? what.what : undefined;
-      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
-      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      if (lookupTarget) visit(source, filePath, module, lookupTarget, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
+      for (const argument of Array.isArray(node.arguments) ? node.arguments.filter(isNode) : []) visit(source, filePath, module, argument, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
       return;
     }
 
     default:
-      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
+      for (const child of childrenOf(node)) visit(source, filePath, module, child, context, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
   }
 }
 
@@ -885,6 +933,7 @@ export interface PhpAstParseResult {
   ormUsages: OrmUsageRecord[];
   iblockUsages: IblockUsageRecord[];
   hlblockUsages: HlblockUsageRecord[];
+  optionUsages: OptionUsageRecord[];
 }
 
 export function parsePhpWithAst(source: string, filePath: string): PhpAstParseResult {
@@ -894,8 +943,9 @@ export function parsePhpWithAst(source: string, filePath: string): PhpAstParseRe
   const ormUsages: OrmUsageRecord[] = [];
   const iblockUsages: IblockUsageRecord[] = [];
   const hlblockUsages: HlblockUsageRecord[] = [];
-  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages);
-  return { symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages };
+  const optionUsages: OptionUsageRecord[] = [];
+  visit(source, filePath, moduleFromPath(filePath), ast, { uses: new Map() }, symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages);
+  return { symbols, ormEntities, ormUsages, iblockUsages, hlblockUsages, optionUsages };
 }
 
 export function parsePhpSymbolsWithAst(source: string, filePath: string): SymbolRecord[] {

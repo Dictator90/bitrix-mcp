@@ -3,11 +3,11 @@ import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOrmEntityResults, formatOrmUsageResults, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -25,6 +25,7 @@ type WorkerTask =
   | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions }
   | { name: "searchIblockUsages"; paths: RuntimePaths; query: IblockUsageSearchQuery & IblockUsageSearchFormatOptions }
   | { name: "searchHlblockUsages"; paths: RuntimePaths; query: HlblockUsageSearchQuery & HlblockUsageSearchFormatOptions }
+  | { name: "searchOptionUsages"; paths: RuntimePaths; query: OptionSearchQuery & OptionSearchFormatOptions }
   | { name: "searchOrmEntities"; paths: RuntimePaths; query: OrmSearchQuery & OrmSearchFormatOptions }
   | { name: "getOrmEntityMap"; paths: RuntimePaths; query: OrmEntityMapQuery & OrmSearchFormatOptions }
   | { name: "searchOrmUsages"; paths: RuntimePaths; query: OrmUsageSearchQuery & OrmSearchFormatOptions }
@@ -92,6 +93,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchHlblockUsages": {
       const results = await searchHlblockUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatHlblockUsageSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchOptionUsages": {
+      const results = await searchOptionUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatOptionSearchResults(results, task.query), null, 2) }] };
     }
     case "searchOrmEntities": {
       const results = await searchOrmEntities(sqlitePath(task.paths.dataDir), task.query) ?? [];

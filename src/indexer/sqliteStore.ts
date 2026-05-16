@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "./template.js";
-import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 export interface SqliteStoreOptions {
   dbFile: string;
@@ -86,6 +86,17 @@ export interface IblockUsageSearchQuery {
 export interface HlblockUsageSearchQuery {
   query?: string;
   hlblockId?: string;
+  api?: string;
+  kind?: IndexKind | IndexKind[] | string | string[];
+  file?: string;
+  limit?: number;
+}
+
+export interface OptionSearchQuery {
+  query?: string;
+  module?: string;
+  name?: string;
+  operation?: "get" | "set";
   api?: string;
   kind?: IndexKind | IndexKind[] | string | string[];
   file?: string;
@@ -220,6 +231,23 @@ interface HlblockUsageRow {
   line: number;
   signature: string;
   context_type: HlblockUsageRecord["contextType"] | null;
+  context_name: string | null;
+}
+
+interface OptionUsageRow {
+  id: number;
+  file_id: number;
+  kind: IndexKind;
+  root: string;
+  module: string;
+  name: string;
+  operation: OptionUsageRecord["operation"];
+  api: string;
+  file: string;
+  relative_file: string | null;
+  line: number;
+  signature: string;
+  context_type: OptionUsageRecord["contextType"] | null;
   context_name: string | null;
 }
 
@@ -364,6 +392,23 @@ function rowToHlblockUsage(row: HlblockUsageRow): HlblockUsageRecord {
     type: "hlblock_usage",
     kind: row.kind,
     hlblockId: row.hlblock_id,
+    api: row.api,
+    file: row.file,
+    relativeFile: row.relative_file ?? undefined,
+    line: row.line,
+    signature: row.signature,
+    contextType: row.context_type ?? undefined,
+    contextName: row.context_name ?? undefined
+  };
+}
+
+function rowToOptionUsage(row: OptionUsageRow): OptionUsageRecord {
+  return {
+    type: "option",
+    kind: row.kind,
+    module: row.module,
+    name: row.name,
+    operation: row.operation,
     api: row.api,
     file: row.file,
     relativeFile: row.relative_file ?? undefined,
@@ -722,6 +767,23 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
         context_name TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS option_usages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        root TEXT NOT NULL,
+        module TEXT NOT NULL,
+        name TEXT NOT NULL,
+        operation TEXT NOT NULL CHECK(operation IN ('get', 'set')),
+        api TEXT NOT NULL,
+        file TEXT NOT NULL,
+        relative_file TEXT,
+        line INTEGER NOT NULL,
+        signature TEXT NOT NULL,
+        context_type TEXT,
+        context_name TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS orm_entities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
@@ -870,6 +932,13 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_hlblock_usages_kind ON hlblock_usages(kind);
       CREATE INDEX IF NOT EXISTS idx_hlblock_usages_file ON hlblock_usages(file);
       CREATE INDEX IF NOT EXISTS idx_hlblock_usages_relative_file ON hlblock_usages(relative_file);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_module ON option_usages(module);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_name ON option_usages(name);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_operation ON option_usages(operation);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_api ON option_usages(api);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_kind ON option_usages(kind);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_file ON option_usages(file);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_relative_file ON option_usages(relative_file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_relation_type ON bitrix_relations(relation_type);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source ON bitrix_relations(source_type, source_name);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target ON bitrix_relations(target_type, target_name);
@@ -1068,6 +1137,10 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       INSERT INTO hlblock_usages (file_id, kind, root, hlblock_id, api, file, relative_file, line, signature, context_type, context_name)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertOptionUsage = db.prepare(`
+      INSERT INTO option_usages (file_id, kind, root, module, name, operation, api, file, relative_file, line, signature, context_type, context_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
     const insertSymbolFts = db.prepare(`
       INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1096,6 +1169,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteOrmUsagesForFile = db.prepare("DELETE FROM orm_usages WHERE file_id = ?");
     const deleteIblockUsagesForFile = db.prepare("DELETE FROM iblock_usages WHERE file_id = ?");
     const deleteHlblockUsagesForFile = db.prepare("DELETE FROM hlblock_usages WHERE file_id = ?");
+    const deleteOptionUsagesForFile = db.prepare("DELETE FROM option_usages WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
@@ -1111,6 +1185,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
         db.prepare("DELETE FROM orm_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM iblock_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM hlblock_usages WHERE kind = ?").run(manifest.kind);
+        db.prepare("DELETE FROM option_usages WHERE kind = ?").run(manifest.kind);
         db.prepare("DELETE FROM files WHERE kind = ?").run(manifest.kind);
         existingByPath.clear();
       } else {
@@ -1122,6 +1197,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             deleteOrmEntitiesForFile.run(file.id);
             deleteOrmUsagesForFile.run(file.id);
             deleteIblockUsagesForFile.run(file.id);
+            deleteHlblockUsagesForFile.run(file.id);
+            deleteOptionUsagesForFile.run(file.id);
             deleteRelationsForFile.run(file.path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
@@ -1143,6 +1220,8 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteOrmEntitiesForFile.run(existing.id);
           deleteOrmUsagesForFile.run(existing.id);
           deleteIblockUsagesForFile.run(existing.id);
+          deleteHlblockUsagesForFile.run(existing.id);
+          deleteOptionUsagesForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
           deleteRelationsForFile.run(file.path);
         }
@@ -1333,6 +1412,16 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           insertRelation.run("file", relativeFile, "hlblock", usage.hlblockId, "uses_hlblock", usage.file, usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           if (usage.contextType && usage.contextName) {
             insertRelation.run(usage.contextType, usage.contextName, "hlblock", usage.hlblockId, "uses_hlblock", usage.file, usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          }
+        }
+        for (const usage of file.optionUsages ?? []) {
+          const usageKind = usage.kind ?? file.kind;
+          const relativeFile = usage.relativeFile ?? file.relativePath;
+          insertOptionUsage.run(fileId, usageKind, manifest.root, usage.module, usage.name, usage.operation, usage.api, usage.file, nullable(relativeFile), usage.line, usage.signature, nullable(usage.contextType), nullable(usage.contextName));
+          insertRelation.run("file", relativeFile, "option", `${usage.module}:${usage.name}`, "uses_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
+          insertRelation.run("module", usage.module, "option", `${usage.module}:${usage.name}`, "defines_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
+          if (usage.contextType && usage.contextName) {
+            insertRelation.run(usage.contextType, usage.contextName, "option", `${usage.module}:${usage.name}`, "uses_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
           }
         }
         for (const relation of componentRelationsForFile(file)) {
@@ -1844,6 +1933,66 @@ export async function searchHlblockUsages(dbFile: string, query: HlblockUsageSea
   }
 }
 
+
+export async function searchOptionUsages(dbFile: string, query: OptionSearchQuery): Promise<OptionUsageRecord[] | undefined> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return undefined;
+  }
+  await ensureSqliteStore(dbFile);
+  const db = openDatabase(dbFile);
+  try {
+    const filters: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (query.query !== undefined && query.query.trim()) {
+      const like = likeValue(query.query);
+      filters.push("(module LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR api LIKE ? ESCAPE '\\' OR coalesce(signature, '') LIKE ? ESCAPE '\\' OR coalesce(context_name, '') LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like, like);
+    }
+    if (query.module !== undefined) {
+      filters.push("module = ?");
+      params.push(query.module);
+    }
+    if (query.name !== undefined) {
+      filters.push("name = ?");
+      params.push(query.name);
+    }
+    if (query.operation !== undefined) {
+      filters.push("operation = ?");
+      params.push(query.operation);
+    }
+    if (query.api !== undefined) {
+      filters.push("api = ?");
+      params.push(query.api);
+    }
+    if (query.file !== undefined) {
+      filters.push("(file = ? OR relative_file = ?)");
+      params.push(query.file, query.file);
+    }
+    const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+    if (kinds.length > 0) {
+      filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
+      params.push(...kinds);
+    }
+
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    params.push(limit);
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT id, file_id, kind, root, module, name, operation, api, file, relative_file, line, signature, context_type, context_name
+      FROM option_usages
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(...params) as unknown as OptionUsageRow[];
+    return rows.map(rowToOptionUsage);
+  } finally {
+    db.close();
+  }
+}
+
 export async function searchOrmEntities(dbFile: string, query: OrmSearchQuery): Promise<OrmEntityRecord[] | undefined> {
   try {
     await fs.access(dbFile);
@@ -2007,6 +2156,7 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
     const ormUsageSelect = db.prepare("SELECT id, kind, root, entity, method, usage_kind, module, file, relative_file, line, signature FROM orm_usages WHERE file_id = ? ORDER BY id");
     const iblockUsageSelect = db.prepare("SELECT id, file_id, kind, root, iblock_id, api, file, relative_file, line, signature, context_type, context_name, component FROM iblock_usages WHERE file_id = ? ORDER BY id");
     const hlblockUsageSelect = db.prepare("SELECT id, file_id, kind, root, hlblock_id, api, file, relative_file, line, signature, context_type, context_name FROM hlblock_usages WHERE file_id = ? ORDER BY id");
+    const optionUsageSelect = db.prepare("SELECT id, file_id, kind, root, module, name, operation, api, file, relative_file, line, signature, context_type, context_name FROM option_usages WHERE file_id = ? ORDER BY id");
     const files: IndexFile[] = fileRows.map((file) => ({
       path: file.path,
       relativePath: file.relative_path,
@@ -2019,7 +2169,8 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
       ormEntities: (ormEntitySelect.all(file.id) as unknown as OrmEntityRow[]).map(rowToOrmEntity),
       ormUsages: (ormUsageSelect.all(file.id) as unknown as OrmUsageRow[]).map(rowToOrmUsage),
       iblockUsages: (iblockUsageSelect.all(file.id) as unknown as IblockUsageRow[]).map(rowToIblockUsage),
-      hlblockUsages: (hlblockUsageSelect.all(file.id) as unknown as HlblockUsageRow[]).map(rowToHlblockUsage)
+      hlblockUsages: (hlblockUsageSelect.all(file.id) as unknown as HlblockUsageRow[]).map(rowToHlblockUsage),
+      optionUsages: (optionUsageSelect.all(file.id) as unknown as OptionUsageRow[]).map(rowToOptionUsage)
     }));
     const warningRow = db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
     return {
@@ -2043,6 +2194,7 @@ export interface IndexStatus {
   events: number;
   moduleUsages: number;
   hlblockUsages: number;
+  optionUsages: number;
   documents: number;
   docChunks: number;
   phpParseFallbackFiles: number;
@@ -2084,6 +2236,7 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
       events: countRows(db, "events"),
       moduleUsages: countRows(db, "module_usages"),
       hlblockUsages: countRows(db, "hlblock_usages"),
+      optionUsages: countRows(db, "option_usages"),
       documents: countRows(db, "docs"),
       docChunks: countRows(db, "doc_chunks"),
       phpParseFallbackFiles: countPhpParseFallbackFiles(db),
