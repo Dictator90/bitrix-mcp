@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added documentation-to-symbol indexing with `doc_symbol_refs`, regex extraction for common Bitrix API references, and SQLite lookup by symbol.
+- Added `bitrix_docs_for_symbol` and `bitrix_explain_api_usage` MCP tools to combine documentation, local usages, core definitions, relations, and deterministic API recommendations.
+- Added tests for symbol extraction, doc-symbol storage/search, compact MCP outputs, missing-doc behavior, and combined API usage explanations.
+
 - Added Composer/autoload indexing for `composer.json` PSR-4 mappings, autoload files, classmaps, dependencies, dev dependencies, and common Bitrix bootstrap/config files.
 - Added `bitrix_autoload_search` and `bitrix_project_overview` MCP tools with compact JSON output, autoload/dependency relations, project summary counters, entity lists, and warnings.
 - Updated generated Bitrix MCP agent guidance and repository `AGENTS.md` to call `bitrix_index_status`, `bitrix_project_overview`, `bitrix_detect_changes`, and graph tools at the right stages.

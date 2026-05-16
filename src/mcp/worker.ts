@@ -4,7 +4,7 @@ import { detectChanges, type DetectChangesOptions } from "../indexer/detectChang
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { getComponentContext, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getComponentContext, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchDocSymbolRefs, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
@@ -18,6 +18,8 @@ type WorkerTask =
   | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
   | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
   | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions }
+  | { name: "docsForSymbol"; paths: RuntimePaths; query: { symbol: string; limit?: number; format?: "compact" | "full" } }
+  | { name: "explainApiUsage"; paths: RuntimePaths; query: { query: string; kind?: LiveApiQuery["kind"]; includeDocs?: boolean; includeLocalUsages?: boolean; includeCoreDefinition?: boolean; limit?: number; format?: "compact" | "full" } }
   | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions }
   | { name: "searchAutoloadRecords"; paths: RuntimePaths; query: AutoloadSearchQuery & AutoloadSearchFormatOptions }
   | { name: "projectOverview"; paths: RuntimePaths; query: Partial<ProjectOverviewOptions> }
@@ -67,6 +69,45 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchDocs": {
       const results = await searchSqliteDocs(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatDocSearchResults(results, task.query), null, 2) }] };
+    }
+    case "docsForSymbol": {
+      const refs = await searchDocSymbolRefs(sqlitePath(task.paths.dataDir), task.query.symbol, task.query.limit ?? 20) ?? [];
+      const results = task.query.format === "full" ? refs : refs.map((ref) => ({
+        title: ref.title,
+        uri: ref.docUri,
+        path: ref.docPath,
+        chunkIndex: ref.chunkIndex,
+        excerpt: ref.excerpt
+      }));
+      return { content: [{ type: "text", text: JSON.stringify({ symbol: task.query.symbol, results }, null, 2) }] };
+    }
+    case "explainApiUsage": {
+      const dbFile = sqlitePath(task.paths.dataDir);
+      const limit = task.query.limit ?? 10;
+      const format = task.query.format ?? "compact";
+      const includeDocs = task.query.includeDocs ?? true;
+      const includeLocalUsages = task.query.includeLocalUsages ?? true;
+      const includeCoreDefinition = task.query.includeCoreDefinition ?? true;
+      let docs: unknown[] = [];
+      if (includeDocs) {
+        const refs = await searchDocSymbolRefs(dbFile, task.query.query, limit) ?? [];
+        docs = refs.length > 0
+          ? (format === "full" ? refs : refs.map((ref) => ({ title: ref.title, uri: ref.docUri, path: ref.docPath, chunkIndex: ref.chunkIndex, excerpt: ref.excerpt })))
+          : formatDocSearchResults(await searchSqliteDocs(dbFile, { query: task.query.query, limit }) ?? [], { query: task.query.query, format }) ?? [];
+      }
+      const localKinds = task.query.kind ?? ["project", "template", "install"];
+      const localUsages = includeLocalUsages
+        ? formatLiveApiSearchResults(await searchLiveApi(dbFile, { query: task.query.query, kind: localKinds, preferLocal: true, limit }) ?? [], { query: task.query.query, format }) ?? []
+        : [];
+      const coreDefinitions = includeCoreDefinition
+        ? formatLiveApiSearchResults(await searchLiveApi(dbFile, { query: task.query.query, kind: "bitrix", preferLocal: false, limit }) ?? [], { query: task.query.query, format }) ?? []
+        : [];
+      const sourceRelations = await searchBitrixRelations(dbFile, { sourceName: task.query.query, limit }) ?? [];
+      const targetRelations = await searchBitrixRelations(dbFile, { targetName: task.query.query, limit }) ?? [];
+      const relationMap = new Map([...sourceRelations, ...targetRelations].map((relation) => [`${relation.sourceType}:${relation.sourceName}:${relation.relationType}:${relation.targetType}:${relation.targetName}:${relation.file}:${relation.line}`, relation]));
+      const relations = [...relationMap.values()].slice(0, limit);
+      const recommendations = apiUsageRecommendations(task.query.query);
+      return { content: [{ type: "text", text: JSON.stringify({ query: task.query.query, docs, localUsages, coreDefinitions, relations, recommendations }, null, 2) }] };
     }
     case "searchAgents": {
       const results = await searchAgents(sqlitePath(task.paths.dataDir), task.query) ?? [];
@@ -141,6 +182,23 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }
+}
+
+function apiUsageRecommendations(query: string): string[] {
+  const normalized = query.toLowerCase();
+  if (normalized.includes("ciblockelement::getlist")) {
+    return ["Check filter keys, selected fields, permissions, and pagination."];
+  }
+  if (normalized.includes("cevent::send")) {
+    return ["Check event name, site ID, fields, and mail templates."];
+  }
+  if (normalized.includes("loader::includemodule")) {
+    return ["Check module availability before using module APIs."];
+  }
+  if (normalized.includes("eventmanager") || normalized.includes("addeventhandler")) {
+    return ["Check handler signature and module/event names."];
+  }
+  return ["Check documented parameters, return values, error handling, and indexed local call sites before changing API usage."];
 }
 
 const activeParentPort = parentPort;
