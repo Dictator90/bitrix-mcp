@@ -179,6 +179,22 @@ export interface SearchResult<T = unknown> {
   item: T;
 }
 
+export type AutoloadRecordType = "psr-4" | "files" | "classmap" | "dependency" | "dev_dependency" | "bootstrap";
+
+export interface AutoloadRecord {
+  id?: number;
+  type: AutoloadRecordType;
+  namespace?: string;
+  paths?: string[];
+  file?: string;
+  package?: string;
+  version?: string;
+  sourceFile: string;
+  root: string;
+  dev?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
 export interface BitrixRelationRecord {
   id?: number;
   sourceType: string;

@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, writeBitrixRelations } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -1167,4 +1167,38 @@ $APPLICATION->IncludeComponent('vendor:demo', '.default', ['AJAX_MODE' => 'Y']);
   assert.ok(context?.assets.some((file) => file.relativePath.endsWith("script.js")));
   assert.ok(context?.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 42));
   assert.ok(context?.relations.some((relation) => relation.relationType === "uses_template"));
+});
+
+test("buildIndex indexes Composer autoload metadata, bootstraps, and relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-autoload-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-autoload-data-"));
+  await fs.mkdir(path.join(root, "local", "php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local", "php_interface", "init.php"), "<?php\n", "utf8");
+  await fs.writeFile(path.join(root, "composer.json"), JSON.stringify({
+    autoload: {
+      "psr-4": { "Vendor\\Module\\": "local/modules/vendor.module/lib" },
+      files: ["local/php_interface/functions.php"],
+      classmap: ["legacy"]
+    },
+    "autoload-dev": { "psr-4": { "Vendor\\Module\\Tests\\": "tests" } },
+    require: { "bitrix/framework": "^1.0" },
+    "require-dev": { "phpunit/phpunit": "^11.0" }
+  }), "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+  const psr4 = await searchAutoloadRecords(dbFile, { type: "psr-4", namespace: "Vendor\\Module\\" });
+  assert.equal(psr4?.[0]?.paths?.[0], "local/modules/vendor.module/lib");
+  const files = await searchAutoloadRecords(dbFile, { type: "files" });
+  assert.equal(files?.[0]?.file, "local/php_interface/functions.php");
+  const dependencies = await searchAutoloadRecords(dbFile, { package: "bitrix/framework" });
+  assert.equal(dependencies?.[0]?.type, "dependency");
+  const devDependencies = await searchAutoloadRecords(dbFile, { package: "phpunit/phpunit" });
+  assert.equal(devDependencies?.[0]?.type, "dev_dependency");
+  const bootstraps = await searchAutoloadRecords(dbFile, { type: "bootstrap" });
+  assert.equal(bootstraps?.[0]?.file, "local/php_interface/init.php");
+  const namespaceRelations = await searchBitrixRelations(dbFile, { sourceType: "namespace_prefix", sourceName: "Vendor\\Module\\", relationType: "autoloads_from" });
+  assert.equal(namespaceRelations?.[0]?.targetName, "local/modules/vendor.module/lib");
+  const bootstrapRelations = await searchBitrixRelations(dbFile, { targetType: "bootstrap", relationType: "is_bootstrap" });
+  assert.equal(bootstrapRelations?.[0]?.sourceName, "local/php_interface/init.php");
 });

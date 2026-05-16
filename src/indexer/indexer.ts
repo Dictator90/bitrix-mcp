@@ -7,6 +7,7 @@ import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
+import { indexAutoloadMetadata } from "./autoload.js";
 import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
@@ -160,6 +161,9 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
   };
 
   await writeIndexToSqlite(dbFile, manifest, { force: options.force });
+  if (options.kind === "project") {
+    await indexAutoloadMetadata(root, dbFile);
+  }
   return (await readIndexFromSqlite(dbFile, options.kind)) ?? manifest;
 }
 

@@ -4,11 +4,11 @@ import { detectChanges, type DetectChangesOptions } from "../indexer/detectChang
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
-import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getComponentContext, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type AutoloadSearchFormatOptions, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -19,6 +19,8 @@ type WorkerTask =
   | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
   | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions }
   | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions }
+  | { name: "searchAutoloadRecords"; paths: RuntimePaths; query: AutoloadSearchQuery & AutoloadSearchFormatOptions }
+  | { name: "projectOverview"; paths: RuntimePaths; query: Partial<ProjectOverviewOptions> }
   | { name: "searchComponents"; paths: RuntimePaths; query: ComponentSearchQuery & { format?: "compact" | "full" } }
   | { name: "getComponentContext"; paths: RuntimePaths; query: ComponentContextQuery }
   | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
@@ -73,6 +75,14 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "searchBitrixRelations": {
       const results = await searchBitrixRelations(sqlitePath(task.paths.dataDir), task.query) ?? [];
       return { content: [{ type: "text", text: JSON.stringify(formatBitrixRelationSearchResults(results, task.query), null, 2) }] };
+    }
+    case "searchAutoloadRecords": {
+      const results = await searchAutoloadRecords(sqlitePath(task.paths.dataDir), task.query) ?? [];
+      return { content: [{ type: "text", text: JSON.stringify(formatAutoloadSearchResults(results, task.query), null, 2) }] };
+    }
+    case "projectOverview": {
+      const result = await getProjectOverview(sqlitePath(task.paths.dataDir), { workspaceRoot: task.paths.workspaceRoot, bitrixRoot: task.paths.bitrixRoot, sqlitePath: sqlitePath(task.paths.dataDir), ...task.query });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     case "searchComponents": {
       const results = await searchComponents(sqlitePath(task.paths.dataDir), task.query) ?? [];

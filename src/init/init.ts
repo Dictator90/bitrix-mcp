@@ -77,11 +77,14 @@ Use the configured \`bitrix-mcp\` MCP server as the primary reference source for
 
 ## Workflow
 
-1. Search project symbols with \`bitrix_liveapi_search\` before editing unfamiliar PHP, JS, template, component, module, or event-handler code.
-2. Search documentation with \`bitrix_docs_search\` for Bitrix APIs, framework behavior, and examples. Use \`bitrix_semantic_docs_search\` only when it is available and semantic ranking is useful.
-3. Search event handlers with \`bitrix_event_search\` when changing module behavior, component lifecycle code, mail/events, sale/catalog flows, or integration hooks.
-4. Check \`bitrix_index_status\` when results look stale. Run \`bitrix_index_project\`, \`bitrix_index_template\`, \`bitrix_index_docs\`, or \`bitrix_index_all\` after relevant files or docs have changed.
-5. Prefer project and local documentation evidence over memory. Cite paths, symbols, or documentation resources when explaining Bitrix-specific changes.
+1. Call \`bitrix_index_status\` first to understand whether indexes exist and look current.
+2. Call \`bitrix_project_overview\` before large tasks to inspect autoloading, available indexes, discovered Bitrix entities, and warnings.
+3. Search project symbols with \`bitrix_liveapi_search\` before editing unfamiliar PHP, JS, template, component, module, or event-handler code.
+4. Search documentation with \`bitrix_docs_search\` for Bitrix APIs, framework behavior, and examples. Use \`bitrix_semantic_docs_search\` only when it is available and semantic ranking is useful.
+5. Search event handlers with \`bitrix_event_search\` when changing module behavior, component lifecycle code, mail/events, sale/catalog flows, or integration hooks.
+6. Use \`bitrix_detect_changes\` for review tasks, and \`bitrix_graph_neighbors\` / \`bitrix_graph_traverse\` for dependency analysis.
+7. Check \`bitrix_index_status\` when results look stale. Run \`bitrix_index_project\`, \`bitrix_index_template\`, \`bitrix_index_docs\`, or \`bitrix_index_all\` after relevant files or docs have changed.
+8. Prefer project and local documentation evidence over memory. Cite paths, symbols, or documentation resources when explaining Bitrix-specific changes.
 
 ## Safety
 
@@ -93,9 +96,11 @@ Use the configured \`bitrix-mcp\` MCP server as the primary reference source for
 const BITRIX_MCP_RULES = `# Bitrix MCP rules
 
 - Use the \`bitrix-mcp\` MCP server before making Bitrix-specific assumptions.
+- Call \`bitrix_index_status\` first, then \`bitrix_project_overview\` before large tasks.
 - Search LiveAPI/project indexes with \`bitrix_liveapi_search\` before editing unfamiliar symbols, components, templates, modules, or handlers.
 - Search Bitrix documentation with \`bitrix_docs_search\`; use \`bitrix_semantic_docs_search\` only when semantic mode is enabled.
 - Use \`bitrix_event_search\` for event-driven behavior and module hooks.
+- Use \`bitrix_detect_changes\` for reviews and \`bitrix_graph_neighbors\` / \`bitrix_graph_traverse\` for dependency analysis.
 - If MCP results look stale, check \`bitrix_index_status\` and reindex with the narrowest relevant tool.
 - Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`local/\`, project modules, and templates.
 `;
