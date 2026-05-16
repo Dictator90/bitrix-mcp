@@ -15,6 +15,7 @@ Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Des
 - **Template indexing**: separately indexes templates, components, scripts, styles, and layout assets.
 - **Documentation search**: exposes local Bitrix Framework documentation as MCP resources and searches indexed Markdown/text docs with SQLite FTS.
 - **Optional semantic documentation search**: delegates embedding search to a Python `sentence-transformers` FastAPI service when explicitly enabled.
+- **Bitrix dependency graph**: queries `bitrix_relations` as a Bitrix-aware graph of events, handlers, modules, agents, mail events, ORM entities, components, templates, iblocks, hlblocks, options, and inheritance.
 - **Local access model**: no token or Bitrix authentication is required; access is controlled by where you run the process and which local folders you expose.
 
 ## System requirements
@@ -127,6 +128,10 @@ npx bitrix-mcp index-docs --embeddings
 # Search indexed Bitrix module include/check API usages by module
 npx bitrix-mcp search-modules iblock
 
+# Query the Bitrix-aware dependency graph
+npx bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx bitrix-mcp impact-radius local/php_interface/init.php --depth 2
+
 # Show index counters, resolved runtime paths, or environment diagnostics
 npx bitrix-mcp status
 npx bitrix-mcp config
@@ -144,6 +149,53 @@ local/scripts/generated/**
 # Private custom code that should not be searchable
 private/*.php
 assets/ignored.js
+```
+
+## Bitrix dependency graph and impact radius
+
+Bitrix MCP builds a queryable graph from indexed `bitrix_relations` rather than a generic AST dependency graph. Each edge is a Bitrix relation in the form `source_type:source_name --relation_type--> target_type:target_name`, for example:
+
+- `event:main:OnBeforeProlog --handles_event--> method:Vendor\Module\Handler::onBeforeProlog`
+- `file:local/php_interface/init.php --registers_event_handler--> event:main:OnBeforeProlog`
+- `component:bitrix:catalog.section --uses_iblock--> iblock:CATALOG_IBLOCK_ID`
+- `orm_entity:Vendor\Module\ProductTable --references_orm_entity--> orm_entity:Bitrix\Main\UserTable`
+
+This graph differs from a code-review AST graph because it follows Bitrix concepts that are often dynamic or configured through framework APIs: events and event handlers, module includes, agents, mail events, ORM entity references, components/templates, iblock and highloadblock usage, options, assets, and PHP inheritance relations.
+
+MCP tools:
+
+- `bitrix_graph_neighbors` returns direct or bounded-depth neighbors for a node. Parameters include `nodeType`, `nodeName`, `direction` (`out`, `in`, `both`), `relationType`, `depth`, `limit`, and `format`.
+- `bitrix_graph_traverse` performs safe BFS traversal with cycle protection. Parameters include `startType`, `startName`, `direction`, `maxDepth`, `relationTypes`, `limit`, and `format`.
+- `bitrix_impact_radius` starts from provided files or `git diff --name-only <base>` (default `HEAD~1`) and groups impacted events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods. It can include relation-weighted risk reasons for high-impact relations such as `handles_event`, `registers_event_handler`, `registers_agent`, `sends_mail_event`, `references_orm_entity`, `includes_component`, `uses_template`, `extends`, and `implements`.
+
+Examples:
+
+```text
+bitrix_graph_neighbors({
+  "nodeType": "event",
+  "nodeName": "main:OnBeforeProlog",
+  "direction": "both"
+})
+
+bitrix_graph_traverse({
+  "startType": "component",
+  "startName": "bitrix:catalog.section",
+  "maxDepth": 2,
+  "relationTypes": ["uses_iblock", "uses_template"]
+})
+
+bitrix_impact_radius({
+  "files": ["local/php_interface/init.php"],
+  "maxDepth": 2,
+  "includeRisk": true
+})
+```
+
+Optional CLI equivalents are available for quick inspection:
+
+```bash
+npx bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx bitrix-mcp impact-radius local/php_interface/init.php --depth 2
 ```
 
 ## Configuration

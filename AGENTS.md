@@ -6,3 +6,5 @@
 - For Bitrix module/package development, verify Bitrix APIs against documentation or source packages instead of inventing behavior.
 - Prefer `rg`/targeted file reads over recursive `ls` or `grep`.
 - Run relevant type checks, tests, and builds before finalizing changes when practical.
+
+- For Bitrix dependency graph work, treat `bitrix_relations` as canonical graph edges and keep traversals bounded/cycle-safe.

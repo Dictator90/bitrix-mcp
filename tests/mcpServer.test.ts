@@ -335,6 +335,37 @@ test("MCP bitrix_relation_search is registered and searches relation storage", a
   assert.deepEqual(full[0]?.metadata, { sort: 100 });
 });
 
+
+test("MCP graph tools are registered and query relation graph", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-graph-"));
+  const paths = runtimePaths(dataDir);
+  const server = createMcpServer(paths);
+  const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
+
+  assert.ok(tools.bitrix_graph_neighbors);
+  assert.ok(tools.bitrix_graph_traverse);
+  assert.ok(tools.bitrix_impact_radius);
+
+  await writeBitrixRelations(sqlitePath(dataDir), [
+    { sourceType: "file", sourceName: "local/php_interface/init.php", targetType: "event", targetName: "main:OnBeforeProlog", relationType: "registers_event_handler", file: "local/php_interface/init.php", line: 12, module: "main", kind: "project" },
+    { sourceType: "event", sourceName: "main:OnBeforeProlog", targetType: "method", targetName: "Vendor\\Module\\Handler::run", relationType: "handles_event", file: "local/php_interface/init.php", line: 13, module: "main", kind: "project" }
+  ]);
+
+  const neighborsResult = await tools.bitrix_graph_neighbors.handler({ nodeType: "event", nodeName: "main:OnBeforeProlog", direction: "both" });
+  const neighbors = JSON.parse(neighborsResult.content[0].text) as { neighbors: Array<{ type: string; relationType: string }> };
+  assert.equal(neighbors.neighbors.some((neighbor) => neighbor.type === "method" && neighbor.relationType === "handles_event"), true);
+
+  const traverseResult = await tools.bitrix_graph_traverse.handler({ startType: "file", startName: "local/php_interface/init.php", maxDepth: 2 });
+  const traversal = JSON.parse(traverseResult.content[0].text) as { nodes: Array<{ id: string; depth: number }> };
+  assert.equal(traversal.nodes.some((node) => node.id === "method:Vendor\\Module\\Handler::run" && node.depth === 2), true);
+
+  const impactResult = await tools.bitrix_impact_radius.handler({ files: ["local/php_interface/init.php"], maxDepth: 2 });
+  const impact = JSON.parse(impactResult.content[0].text) as { impacted: { events: unknown[]; methods: unknown[] }; risk: { score: number } };
+  assert.equal(impact.impacted.events.length, 1);
+  assert.equal(impact.impacted.methods.length, 1);
+  assert.ok(impact.risk.score > 0);
+});
+
 test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-search-"));
   const paths: RuntimePaths = {

@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
+import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
 import { buildIndex } from "../indexer/indexer.js";
 import { getComponentContext, getOrmEntityMap, searchAgents, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type BitrixRelationSearchQuery, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
@@ -29,7 +30,10 @@ type WorkerTask =
   | { name: "searchOrmEntities"; paths: RuntimePaths; query: OrmSearchQuery & OrmSearchFormatOptions }
   | { name: "getOrmEntityMap"; paths: RuntimePaths; query: OrmEntityMapQuery & OrmSearchFormatOptions }
   | { name: "searchOrmUsages"; paths: RuntimePaths; query: OrmUsageSearchQuery & OrmSearchFormatOptions }
-  | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions };
+  | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions }
+  | { name: "graphNeighbors"; paths: RuntimePaths; query: { nodeType: string; nodeName: string } & GraphNeighborsOptions }
+  | { name: "graphTraverse"; paths: RuntimePaths; query: { startType: string; startName: string } & GraphTraverseOptions }
+  | { name: "impactRadius"; paths: RuntimePaths; query: ImpactRadiusOptions };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
@@ -112,6 +116,18 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     }
     case "detectChanges": {
       const result = await detectChanges(task.paths, task.query);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "graphNeighbors": {
+      const result = await getGraphNeighbors(sqlitePath(task.paths.dataDir), { type: task.query.nodeType, name: task.query.nodeName }, task.query);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "graphTraverse": {
+      const result = await traverseGraph(sqlitePath(task.paths.dataDir), { type: task.query.startType, name: task.query.startName }, task.query);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "impactRadius": {
+      const result = await getImpactRadiusForPaths(task.paths, task.query);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }
