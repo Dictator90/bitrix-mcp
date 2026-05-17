@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Stabilized Windows test runs by using slash-normalized relative path expectations and file URL `--import` loader paths for CLI test launches.
+- Stored generated Bitrix relation file paths as slash-normalized workspace-relative paths so detect-changes and graph lookups can match indexed records consistently across platforms.
+- Skipped the Unix-shell-dependent `autrobin/bitrix.core` updater integration test on Windows instead of requiring Git Bash.
+
 ## 0.2.0
 
 Initial public npm release under `@mb4it/bitrix-mcp`.

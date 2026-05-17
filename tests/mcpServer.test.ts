@@ -10,6 +10,10 @@ import { addPathDocSource } from "../src/resources/docs.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
+function slashPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 function runtimePaths(dataDir: string, workspaceRoot = fixtureRoot): RuntimePaths {
   return {
     workspaceRoot,
@@ -572,7 +576,7 @@ test("MCP bitrix_module_usage_search is registered and returns compact module us
     module: "iblock",
     call: "Loader::includeModule",
     kind: "project",
-    file: path.join("local", "php_interface", "init.php"),
+    file: slashPath("local/php_interface/init.php"),
     line: 2,
     signature: "\\Bitrix\\Main\\Loader::includeModule('iblock')"
   });
@@ -601,7 +605,7 @@ CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400)
     periodic: "N",
     interval: 86400,
     kind: "install",
-    file: path.join("local", "modules", "vendor.module", "install", "index.php"),
+    file: slashPath("local/modules/vendor.module/install/index.php"),
     line: 2,
     signature: 'CAgent::AddAgent("\\\\Vendor\\\\Module\\\\Agent::run();", "vendor.module", "N", 86400);'
   });
@@ -628,7 +632,7 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
   assert.equal(compact[0]?.api, "CEvent::Send");
   assert.equal(compact[0]?.siteId, "SITE_ID");
   assert.equal(compact[0]?.kind, "project");
-  assert.equal(compact[0]?.file, path.join("local", "php_interface", "mail.php"));
+  assert.equal(compact[0]?.file, slashPath("local/php_interface/mail.php"));
   assert.equal(compact[0]?.line, 2);
   assert.match(compact[0]?.signature, /CEvent::Send/);
   assert.equal(compact[0]?.handlers?.[0]?.eventName, "OnBeforeEventSend");
@@ -888,7 +892,7 @@ test("MCP bitrix_project_overview summarizes indexed Bitrix entities", async () 
     kind: "install",
     files: [{
       path: agentFile,
-      relativePath: path.join("local", "modules", "vendor.module", "install", "agent.php"),
+      relativePath: slashPath("local/modules/vendor.module/install/agent.php"),
       kind: "install",
       size: 1,
       mtimeMs: 1,
