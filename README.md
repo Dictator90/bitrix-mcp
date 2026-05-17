@@ -21,7 +21,7 @@ Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Des
 ## System requirements
 
 - Operating system: Linux, macOS, or Windows / Windows PowerShell.
-- Node.js **22.12+ recommended** (minimum **22.5+**) because Bitrix MCP uses `node:sqlite`.
+- Node.js **22.12+** because Bitrix MCP uses `node:sqlite`.
 - npm **10+**.
 - Disk access to the Bitrix project you want to index.
 - Network access is recommended for the first documentation index because the official Bitrix Framework docs repository is cloned or updated by default.
@@ -40,6 +40,29 @@ Runtime dependencies are installed by `npm install` and include:
 
 Optional semantic search dependencies live in `embeddings/requirements.txt` and are installed only if you run the Python embeddings service.
 
+## Installation from npm
+
+Install globally:
+
+```bash
+npm install -g @mb4it/bitrix-mcp
+```
+
+Or run without a global install:
+
+```bash
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
+```
+
+The installed CLI command remains `bitrix-mcp`:
+
+```bash
+bitrix-mcp --help
+bitrix-mcp init --agent cursor --no-serve
+bitrix-mcp index-all
+bitrix-mcp serve
+```
+
 ## Quick start
 
 From the root of your Bitrix project:
@@ -54,7 +77,7 @@ cd /path/to/bitrix/project
 
 # 3. Configure your MCP client and create .bitrix-mcp indexes
 # In CI or scripts, --no-serve avoids taking over stdio after setup.
-npx bitrix-mcp init --agent cursor --no-serve
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 ```
 
 During interactive `init`, select one or more AI agents from the prompt. For non-interactive setup, pass `--agent <id>` (repeat or comma-separate IDs), `--all-agents`, or `--yes` for the default Cursor setup. Bitrix MCP writes or updates the selected agents' MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio unless `--no-serve` is passed or a CI environment is detected.
@@ -69,73 +92,73 @@ If you only need to run or refresh indexes manually:
 
 ```bash
 # Index everything: project, templates, Bitrix modules, install assets, and docs
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Show index counters, resolved runtime paths, and diagnostics
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp config
+npx @mb4it/bitrix-mcp doctor
 
 # Start the MCP server after indexes already exist
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 ```
 
 ## CLI usage
 
 ```bash
 # Configure an agent, create .bitrix-mcp indexes, and start stdio server
-npx bitrix-mcp init
+npx @mb4it/bitrix-mcp init
 
 # Non-interactive init for scripts/CI: configure Cursor, skip serving after setup
-npx bitrix-mcp init --agent cursor --no-serve
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 
 # Configure MCP config and guidance only; do not index or start the server
-npx bitrix-mcp configure --agent cursor
+npx @mb4it/bitrix-mcp configure --agent cursor
 
 # Start MCP server over stdio for Cursor, PhpStorm, Claude Desktop, Kilo, etc.
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 
 # Index everything: project, templates, Bitrix modules, install assets, and docs
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Index all code scopes without documentation
-npx bitrix-mcp index-code
+npx @mb4it/bitrix-mcp index-code
 
 # Index the current project
-npx bitrix-mcp index-project /path/to/project
+npx @mb4it/bitrix-mcp index-project /path/to/project
 
 # Index templates/components/scripts/styles separately
-npx bitrix-mcp index-template /path/to/project
+npx @mb4it/bitrix-mcp index-template /path/to/project
 
 # Index installed Bitrix Framework PHP sources for LiveAPI
 cd /path/to/bitrix/project
-npx bitrix-mcp index-bitrix
+npx @mb4it/bitrix-mcp index-bitrix
 
 # Index Bitrix module install assets
-npx bitrix-mcp index-install /path/to/project
+npx @mb4it/bitrix-mcp index-install /path/to/project
 
 # Register, update, and index documentation sources
-npx bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
-npx bitrix-mcp docs-add-path /path/to/local/docs
-npx bitrix-mcp docs-update
-npx bitrix-mcp index-docs
+npx @mb4it/bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
+npx @mb4it/bitrix-mcp docs-add-path /path/to/local/docs
+npx @mb4it/bitrix-mcp docs-update
+npx @mb4it/bitrix-mcp index-docs
 
 # Send SQLite documentation chunks to the embeddings service
-npx bitrix-mcp index-embeddings
+npx @mb4it/bitrix-mcp index-embeddings
 # Or reindex SQLite docs and embeddings together when the service is running
-npx bitrix-mcp index-docs --embeddings
+npx @mb4it/bitrix-mcp index-docs --embeddings
 
 # Search indexed Bitrix module include/check API usages by module
-npx bitrix-mcp search-modules iblock
+npx @mb4it/bitrix-mcp search-modules iblock
 
 # Query the Bitrix-aware dependency graph
-npx bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
-npx bitrix-mcp impact-radius local/php_interface/init.php --depth 2
+npx @mb4it/bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx @mb4it/bitrix-mcp impact-radius local/php_interface/init.php --depth 2
 
 # Show index counters, resolved runtime paths, or environment diagnostics
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp config
+npx @mb4it/bitrix-mcp doctor
 ```
 
 Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`, and `generated/`; it also reads project `.gitignore` rules when present.
@@ -194,8 +217,8 @@ bitrix_impact_radius({
 Optional CLI equivalents are available for quick inspection:
 
 ```bash
-npx bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
-npx bitrix-mcp impact-radius local/php_interface/init.php --depth 2
+npx @mb4it/bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx @mb4it/bitrix-mcp impact-radius local/php_interface/init.php --depth 2
 ```
 
 ## Configuration
@@ -222,7 +245,7 @@ Use local FTS as the baseline documentation search. Enable semantic mode only wh
 
 ## `bitrix-mcp init`
 
-Run `init` from the root of a Bitrix project after installing `bitrix-mcp` globally or making it available on your `PATH`:
+Run `init` from the root of a Bitrix project after installing `@mb4it/bitrix-mcp` globally or making `bitrix-mcp` available on your `PATH`:
 
 ```bash
 cd /path/to/bitrix/project
