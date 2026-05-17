@@ -828,6 +828,22 @@ test("incremental build removes deleted files from SQLite", async () => {
 });
 
 
+
+test("buildIndex skips generated/cache/upload/vendor and node_modules directories", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignored-dirs-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignored-dirs-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  await fs.writeFile(path.join(root, "keep.php"), "<?php function keep_generated_ignore(): void {}\n", "utf8");
+  for (const ignored of ["generated", "cache", "upload", "vendor", "node_modules"]) {
+    await fs.mkdir(path.join(root, ignored), { recursive: true });
+    await fs.writeFile(path.join(root, ignored, "ignored.php"), `<?php function ignored_${ignored.replace(/[^a-z]/g, "_")}(): void {}\n`, "utf8");
+  }
+
+  const manifest = await buildIndex({ root, kind: "project", outFile });
+
+  assert.deepEqual(manifest.files.map((file) => file.relativePath), ["keep.php"]);
+});
+
 test("readIndex falls back to legacy JSON files", async () => {
   const legacyFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-legacy-")), "project-index.json");
   const legacyManifest = {

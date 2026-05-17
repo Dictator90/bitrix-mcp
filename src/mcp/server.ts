@@ -198,9 +198,11 @@ function buildFileContext(contents: string, absolutePath: string, relativePath: 
 }
 
 const indexKindSchema = z.enum(["project", "bitrix", "template", "install"]);
-const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1)]);
+const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1).max(4)]);
 const symbolContextTypeSchema = z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]);
 const inheritanceRelationSchema = z.enum(["extends", "implements", "uses_trait", "any"]);
+const changedFileKindSchema = z.enum(["project", "template", "component", "bitrix", "install", "docs", "asset", "unknown"]);
+const changedFileKindFilterSchema = z.union([changedFileKindSchema, z.array(changedFileKindSchema).min(1).max(8)]);
 
 function compactInheritanceRelation(relation: { sourceName: string; targetName: string; relationType: string; targetType: string; file: string; line: number; module?: string; kind?: string; signature?: string }): Record<string, unknown> {
   return {
@@ -405,7 +407,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       query: z.string().optional(),
       component: z.string().optional(),
       template: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       file: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
@@ -455,7 +457,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       query: z.string().optional(),
       iblockId: z.string().optional(),
       api: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       file: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns iblockId/api/kind/file/line/context/signature; full returns raw IBlock usage records.")
@@ -472,7 +474,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       query: z.string().optional(),
       hlblockId: z.string().optional(),
       api: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       file: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns hlblockId/api/kind/file/line/context/signature; full returns raw Highloadblock usage records.")
@@ -492,7 +494,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       name: z.string().optional(),
       operation: z.enum(["get", "set"]).optional(),
       api: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       file: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns option module/name/operation/api/kind/file/line/context/signature; full returns raw option records.")
@@ -510,7 +512,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       tableName: z.string().optional(),
       className: z.string().optional(),
       module: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
@@ -541,7 +543,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       entity: z.string().optional(),
       method: z.string().optional(),
       file: z.string().optional(),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional(),
+      kind: searchKindSchema.optional(),
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
@@ -612,7 +614,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       startName: z.string().min(1),
       direction: z.enum(["out", "in", "both"]).optional(),
       maxDepth: z.number().int().min(0).max(8).optional(),
-      relationTypes: z.array(z.string()).optional(),
+      relationTypes: z.array(z.string().min(1)).max(25).optional(),
       limit: z.number().int().min(1).max(1000).default(100),
       format: z.enum(["compact", "full"]).optional()
     },
@@ -625,10 +627,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix_impact_radius",
     "Find impacted Bitrix events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods for changed files.",
     {
-      files: z.array(z.string()).optional(),
+      files: z.array(z.string().min(1)).max(1000).optional(),
       base: z.string().optional().describe("Git base ref used when files are not provided; defaults to HEAD~1."),
       maxDepth: z.number().int().min(0).max(8).optional(),
-      relationTypes: z.array(z.string()).optional(),
+      relationTypes: z.array(z.string().min(1)).max(25).optional(),
       includeChangedSymbols: z.boolean().optional(),
       includeRisk: z.boolean().optional(),
       limit: z.number().int().min(1).max(1000).default(100),
@@ -645,7 +647,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "Analyze Git-changed Bitrix files against the SQLite index, returning changed symbols, events, module usages, agents, mail events, relations, risk, and recommendations.",
     {
       base: z.string().optional().describe("Git base ref for git diff --name-only <base> --; defaults to HEAD~1."),
-      kind: z.union([z.string(), z.array(z.string()).min(1)]).optional().describe("Restrict changed files by detected kind: project, template, component, bitrix, install, docs, asset, or unknown."),
+      kind: changedFileKindFilterSchema.optional().describe("Restrict changed files by detected kind: project, template, component, bitrix, install, docs, asset, or unknown."),
       includeSource: z.boolean().optional().describe("Include compact source signatures when available."),
       includeRelations: z.boolean().optional().describe("Include related relation rows; enabled by default."),
       maxFiles: z.number().int().min(1).max(1000).optional(),

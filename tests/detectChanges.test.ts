@@ -136,6 +136,26 @@ test("detect changes compact output shape includes all top-level fields", async 
   assert.equal(result.risk.level, "low");
 });
 
+
+test("detect changes returns a warning instead of crashing outside git", async () => {
+  const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-detect-nongit-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-detect-nongit-data-"));
+  const paths: RuntimePaths = {
+    workspaceRoot,
+    dataDir,
+    docsDir: path.join(workspaceRoot, "docs"),
+    docsPaths: [],
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  const result = await detectChanges(paths);
+
+  assert.deepEqual(result.changedFiles, []);
+  assert.equal(result.summary.files, 0);
+  assert.ok(result.warnings?.[0]?.includes("Unable to read git changes"));
+});
+
 test("MCP registers bitrix_detect_changes", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-detect-server-"));
   const server = createMcpServer({ workspaceRoot: fixtureRoot, dataDir, docsDir: path.join(fixtureRoot, "docs"), docsPaths: [], embeddingsUrl: "http://127.0.0.1:8765", semanticEnabled: false });
