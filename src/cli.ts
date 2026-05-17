@@ -35,7 +35,7 @@ Commands:
   search-modules <module>       Search indexed Bitrix module include/check API usages
   status                        Show SQLite DB path and index counters
   doctor [--json] [--verbose]   Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
-  detect-changes [--base <ref>] [--json] Analyze Git-changed Bitrix files and indexed relations
+  detect-changes [--base <ref>] [--json] [--depth <n>] Analyze Git-changed Bitrix files, indexed entities, and impact
   graph-neighbors <type> <name> [--direction out|in|both] [--relation-type <type>] [--depth <n>] [--json]
   impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
   benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
@@ -125,6 +125,17 @@ function parseDetectChangesOptions(argv: string[]): DetectChangesOptions {
       options.includeSource = true;
     } else if (value === "--no-relations") {
       options.includeRelations = false;
+    } else if (value === "--no-impact") {
+      options.includeImpact = false;
+    } else if (value === "--no-risk") {
+      options.includeRisk = false;
+    } else if (value === "--depth") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
+      options.maxDepth = Number(next);
+      index += 1;
+    } else if (value.startsWith("--depth=")) {
+      options.maxDepth = Number(value.slice("--depth=".length));
     } else if (value === "--max-files") {
       const next = argv[index + 1];
       if (!next || next.startsWith("--")) throw new Error("--max-files requires a number.");

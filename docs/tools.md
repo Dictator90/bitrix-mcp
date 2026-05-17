@@ -5,10 +5,12 @@ This page documents the MCP tools implemented in `src/mcp/server.ts`. Tools retu
 Recommended AI workflow:
 
 - General project work: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` as needed → `bitrix_read_file_context` or `bitrix_read_symbol_context`.
-- Review work: `bitrix_detect_changes` → `bitrix_impact_radius` → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → source context tools.
+- Review work: `bitrix_detect_changes` (includes impact by default) → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → source context tools.
 - Bitrix events: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
 - ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
 - Components: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.
+
+Implemented tool groups: index/status, project overview, LiveAPI search, event search, module usage search, agents, mail events, components, ORM, IBlock/Highloadblock/options, relations, graph neighbors/traverse, impact radius, detect changes, autoload, docs search, docs for symbol / API usage explanation, file/symbol context, inheritance search, and CLI benchmarks.
 
 ## Tool reference
 
@@ -157,9 +159,9 @@ Recommended AI workflow:
 - Limitations: impact is graph-derived and should be validated with tests.
 
 ### `bitrix_detect_changes`
-- Purpose: analyze Git-changed Bitrix files against indexed symbols and relations.
-- Parameters: `base`, `kind`, `includeSource`, `includeRelations`, `maxFiles`, `maxItems`, `format`.
-- Example response: `{ "summary": { "files": 2, "symbols": 5, "relations": 3 }, "recommendations": [] }`.
+- Purpose: analyze Git-changed Bitrix files against indexed symbols, indexed Bitrix entity groups, relations, and graph impact.
+- Parameters: `base`, `kind`, `includeSource`, `includeRelations`, `includeImpact`, `includeRisk`, `maxFiles`, `maxItems`, `maxDepth`, `format`.
+- Example response: `{ "summary": { "files": 2, "symbols": 5, "components": 1, "relations": 3 }, "impact": { "truncated": false }, "recommendations": [] }`.
 - Recommended prompt: "Use Bitrix MCP to analyze changes since origin/main."
 - Use when: code review or PR preparation.
 - Limitations: requires Git to calculate changed files; if Git is unavailable or the base cannot be read, the tool returns an empty result with a `warnings` entry instead of crashing.

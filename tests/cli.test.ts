@@ -122,4 +122,11 @@ test("cli detect-changes --json emits compact change analysis", async () => {
   assert.equal(parsed.base, "HEAD~1");
   assert.deepEqual(parsed.changedFiles, [{ file: "docs/framework/search.md", kind: "docs" }]);
   assert.equal(parsed.summary.files, 1);
+  assert.ok(parsed.impact);
+
+  const text = await execFileAsync(process.execPath, ["--import", tsxLoaderPath, cliPath, "detect-changes"], {
+    cwd: workspaceRoot,
+    env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
+  });
+  assert.match(text.stdout, /Impact: events/);
 });

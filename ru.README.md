@@ -20,7 +20,7 @@ Bitrix MCP полезен, если вы хотите подключить Curso
 ## Системные требования
 
 - ОС: Linux, macOS или Windows / Windows PowerShell.
-- Node.js **20+**.
+- Node.js **22.12+ recommended** (minimum **22.5+**) because Bitrix MCP uses `node:sqlite`.
 - npm **10+**.
 - Доступ к диску с проектом Битрикс, который нужно индексировать.
 - Доступ в интернет рекомендуется при первой индексации документации: официальный репозиторий документации Bitrix Framework клонируется или обновляется по умолчанию.
@@ -204,15 +204,18 @@ bitrix-mcp init
 
 ## MCP-инструменты
 
-- `bitrix_liveapi_search` — поиск по проиндексированным PHP-символам.
-- `bitrix_event_search` — поиск обработчиков событий Битрикс по модулю, имени события, классу/методу или функции.
-- `bitrix_index_project` — индексация текущего проекта из агента.
-- `bitrix_index_all` — индексация файлов проекта, шаблонов, модулей Битрикс, install-ресурсов и документации, включая официальный репозиторий Bitrix Framework docs, если официальная документация включена.
-- `bitrix_index_status` — показывает путь к SQLite DB, количество файлов, символов, событий, документов и время последней индексации.
-- `bitrix_index_template` — индексирует стандартные расположения шаблонов или принимает `templatePath` относительно корня проекта, например `local/templates/site`, чтобы индексировать конкретную директорию шаблона. Временный аргумент `root` устарел; используйте `templatePath`.
-- `bitrix_index_docs` — клонирует/обновляет и индексирует источники документации в SQLite, включая официальный репозиторий Bitrix Framework docs, если официальная документация включена.
-- `bitrix_docs_search` — базовый локальный поиск по документации через SQLite FTS.
-- `bitrix_semantic_docs_search` — опциональный семантический поиск по документации через embeddings; доступен только при включенном `BITRIX_MCP_SEMANTIC_ENABLED`.
+- **Индексация/статус/config/doctor**: `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status`, а также CLI `config` и `doctor`.
+- **LiveAPI и поиск символов**: `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`.
+- **Контекст исходников**: `bitrix_read_file_context`, `bitrix_read_symbol_context`.
+- **Агенты и почтовые события**: `bitrix_agent_search`, `bitrix_mail_event_search`.
+- **Компоненты**: `bitrix_component_search`, `bitrix_component_context`.
+- **ORM**: `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`.
+- **IBlock / Highloadblock / Options**: `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`.
+- **Связи и граф**: `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`.
+- **Detect changes**: `bitrix_detect_changes` объединяет Git-изменения, индексированные сущности, graph impact, риск и рекомендации.
+- **Autoload и обзор проекта**: `bitrix_autoload_search`, `bitrix_project_overview`.
+- **Документация и объяснение API**: `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage`, опционально `bitrix_semantic_docs_search` при включенном `BITRIX_MCP_SEMANTIC_ENABLED`.
+- **Бенчмарки**: CLI `benchmark` пишет `.bitrix-mcp/benchmark.json` и `.bitrix-mcp/benchmark.md`.
 
 ## MCP resources
 

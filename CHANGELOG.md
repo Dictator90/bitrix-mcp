@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Corrected the Node.js runtime requirement to Node.js 22.12+ recommended / 22.5+ minimum for `node:sqlite` compatibility across package metadata and docs.
+- Hardened `bitrix_detect_changes` to reuse graph impact radius, include components, ORM entities/usages, IBlock usages, Highloadblock usages, and options, merge graph risk reasons deterministically, and emit impact-aware CLI/MCP output.
+- Updated README/tool documentation, AGENTS.md guidance, and tests for the expanded detect-changes output, CLI impact summary, and runtime compatibility.
+
 - Hardened Phase 18 consistency: compact LiveAPI/event search now prefers workspace-relative file paths, MCP schemas have tighter kind/relation/file limits, `detect-changes` returns deterministic warnings when Git is unavailable, graph impact input files are capped, and generated directories are skipped by default.
 - Added tests for Git-unavailable change detection and built-in generated/cache/upload/vendor/node_modules index ignores.
 

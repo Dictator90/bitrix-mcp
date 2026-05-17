@@ -128,14 +128,64 @@ test("detect changes compact output shape includes all top-level fields", async 
     "changedModuleUsages",
     "changedAgents",
     "changedMailEvents",
+    "changedComponents",
+    "changedOrmEntities",
+    "changedOrmUsages",
+    "changedIblockUsages",
+    "changedHlblockUsages",
+    "changedOptions",
     "relatedRelations",
+    "impact",
     "risk",
     "recommendations"
   ]);
-  assert.deepEqual(result.summary, { files: 1, symbols: 0, events: 0, moduleUsages: 0, agents: 0, mailEvents: 0, relations: 0 });
+  assert.deepEqual(result.summary, { files: 1, symbols: 0, events: 0, moduleUsages: 0, agents: 0, mailEvents: 0, components: 0, ormEntities: 0, ormUsages: 0, iblockUsages: 0, hlblockUsages: 0, options: 0, relations: 0 });
+  assert.deepEqual(result.impact?.impacted.events, []);
   assert.equal(result.risk.level, "low");
 });
 
+
+test("detect changes includes indexed components, ORM, iblock, hlblock, options, and impact controls", async () => {
+  const { workspaceRoot, dataDir, paths } = await createGitWorkspace();
+  await fs.appendFile(path.join(workspaceRoot, "index.php"), String.raw`
+namespace Vendor\Module;
+use Bitrix\Main\ORM\Data\DataManager;
+use Bitrix\Main\Config\Option;
+use Bitrix\Highloadblock\HighloadBlockTable;
+class ProductTable extends DataManager
+{
+    public static function getTableName() { return 'vendor_product'; }
+    public static function getMap() { return []; }
+}
+ProductTable::getList([]);
+\CIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);
+HighloadBlockTable::compileEntity(['ID' => 3]);
+Option::get('vendor.module', 'some_option');
+`, "utf8");
+  await buildIndex({ root: workspaceRoot, kind: "project", outFile: path.join(dataDir, "unused.json"), force: true });
+
+  const result = await detectChanges(paths, { maxItems: 50 });
+
+  assert.ok(result.summary.components >= 1);
+  assert.equal(result.summary.ormEntities, 1);
+  assert.ok(result.summary.ormUsages >= 1);
+  assert.ok(result.summary.iblockUsages >= 1);
+  assert.ok(result.summary.hlblockUsages >= 1);
+  assert.ok(result.summary.options >= 1);
+  assert.ok(result.changedComponents.some((component) => (component as { name?: string }).name === "bitrix:news.list"));
+  assert.ok(result.changedOrmEntities.some((entity) => (entity as { className?: string }).className === "Vendor\\Module\\ProductTable"));
+  assert.ok(result.changedOrmUsages.some((usage) => (usage as { method?: string }).method === "getList"));
+  assert.ok(result.changedIblockUsages.some((usage) => (usage as { api?: string }).api === "CIBlockElement::GetList"));
+  assert.ok(result.changedHlblockUsages.some((usage) => (usage as { hlblockId?: string }).hlblockId === "3"));
+  assert.ok(result.changedOptions.some((usage) => (usage as { name?: string }).name === "some_option"));
+  assert.ok(result.impact);
+  assert.ok(result.risk.reasons.length === new Set(result.risk.reasons).size);
+  assert.ok(result.recommendations.includes("Check ORM getMap, table fields, references, filters, and migrations."));
+  assert.ok(result.recommendations.includes("Check component params, cache, template rendering, and related assets."));
+
+  const withoutImpact = await detectChanges(paths, { includeImpact: false });
+  assert.equal("impact" in withoutImpact, false);
+});
 
 test("detect changes returns a warning instead of crashing outside git", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-detect-nongit-"));

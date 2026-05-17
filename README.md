@@ -21,7 +21,7 @@ Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Des
 ## System requirements
 
 - Operating system: Linux, macOS, or Windows / Windows PowerShell.
-- Node.js **20+**.
+- Node.js **22.12+ recommended** (minimum **22.5+**) because Bitrix MCP uses `node:sqlite`.
 - npm **10+**.
 - Disk access to the Bitrix project you want to index.
 - Network access is recommended for the first documentation index because the official Bitrix Framework docs repository is cloned or updated by default.
@@ -285,17 +285,18 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 ## MCP tools
 
-- `bitrix_liveapi_search` — search indexed PHP symbols; use `kind` to limit sources to `project`, `template`, `bitrix`, `install`, or an array of those kinds.
-- `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function; use `kind` to search only project/template/core/install handlers.
-- `bitrix_module_usage_search` — search indexed Bitrix module include/check calls such as `Loader::includeModule`, `CModule::IncludeModule`, `IsModuleInstalled`, and `ModuleManager::isModuleInstalled`; filter by `module`, `call`, `kind`, or `file`.
-- `bitrix_index_project` — index the current project from an agent.
-- `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
-- `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, module usages, documents, and last index timestamp.
-- `bitrix_read_file_context` — read numbered source lines around a specific line from a file inside the configured workspace or Bitrix MCP data directory; returns absolute/relative path metadata and detected language.
-- `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
-- `bitrix_index_docs` — clone/pull and index documentation sources into SQLite, including the official Bitrix Framework docs repository when official docs are enabled.
-- `bitrix_docs_search` — default local SQLite FTS documentation search.
-- `bitrix_semantic_docs_search` — optional semantic documentation search through embeddings; available only when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
+- **Index/status/config/doctor**: `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status` plus CLI `config` and `doctor`.
+- **LiveAPI and symbol search**: `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`.
+- **Source context**: `bitrix_read_file_context`, `bitrix_read_symbol_context`.
+- **Agents and mail events**: `bitrix_agent_search`, `bitrix_mail_event_search`.
+- **Components**: `bitrix_component_search`, `bitrix_component_context`.
+- **ORM**: `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`.
+- **IBlock / Highloadblock / Options**: `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`.
+- **Relations and graph**: `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`.
+- **Detect changes**: `bitrix_detect_changes` combines Git-changed indexed records with graph impact, merged risk, and recommendations.
+- **Autoload and overview**: `bitrix_autoload_search`, `bitrix_project_overview`.
+- **Docs search and API explanation**: `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage`, and optional `bitrix_semantic_docs_search` when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
+- **Benchmarks**: CLI `benchmark` writes `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`.
 
 ### Search result formats
 
