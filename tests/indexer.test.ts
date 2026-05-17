@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, searchDocSymbolRefs, writeBitrixRelations, writeDocsToSqlite } from "../src/indexer/sqliteStore.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, searchDocSymbolRefs, searchSymbolsForContext, readIndexedRecordsForFiles, writeBitrixRelations, writeDocsToSqlite } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource, extractDocSymbolRefs, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
@@ -340,6 +340,13 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
 
   const classResults = await searchLiveApi(sqlitePath(dataDir), { query: "DemoComponent", type: "class", limit: 5 });
   assert.equal(classResults?.[0]?.item.name, "DemoComponent");
+  assert.equal(classResults?.[0]?.item.line, 2);
+  assert.equal(classResults?.[0]?.item.lineEnd, 5);
+
+  const contextSymbols = await searchSymbolsForContext(sqlitePath(dataDir), { name: "executeComponent", type: "method", file: "./index.php", limit: 5 });
+  assert.equal(contextSymbols?.[0]?.name, "executeComponent");
+  assert.equal(contextSymbols?.[0]?.line, 4);
+  assert.equal(contextSymbols?.[0]?.lineEnd, 4);
 
   const methodResults = await searchLiveApi(sqlitePath(dataDir), { query: "execute", type: "method", limit: 5 });
   assert.equal(methodResults?.[0]?.item.name, "executeComponent");
@@ -1269,4 +1276,18 @@ test("buildIndex indexes Composer autoload metadata, bootstraps, and relations",
   assert.equal(namespaceRelations?.[0]?.targetName, "local/modules/vendor.module/lib");
   const bootstrapRelations = await searchBitrixRelations(dbFile, { targetType: "bootstrap", relationType: "is_bootstrap" });
   assert.equal(bootstrapRelations?.[0]?.sourceName, "local/php_interface/init.php");
+});
+
+test("readIndexedRecordsForFiles resolves normalized relative and absolute file paths", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-record-paths-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  await buildIndex({ root: fixtureRoot, kind: "project", outFile });
+
+  const relativeRecords = await readIndexedRecordsForFiles(sqlitePath(dataDir), [".\\index.php"]);
+  assert.equal(relativeRecords.symbols.find((symbol) => symbol.type === "class")?.name, "DemoComponent");
+  assert.ok(relativeRecords.relations.some((relation) => relation.targetType === "component" && relation.targetName === "bitrix:news.list"));
+
+  const absoluteRecords = await readIndexedRecordsForFiles(sqlitePath(dataDir), [path.join(fixtureRoot, "index.php").replace(/\//g, "\\")]);
+  assert.equal(absoluteRecords.symbols.find((symbol) => symbol.type === "method")?.name, "executeComponent");
+  assert.ok(absoluteRecords.relations.some((relation) => relation.targetType === "component" && relation.targetName === "bitrix:news.list"));
 });
