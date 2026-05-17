@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added benchmark reporting via `npm run benchmark` and `bitrix-mcp benchmark`, writing `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md` with graceful skips for missing Bitrix roots, docs, and optional indexes.
+- Added Phase 17 documentation for implemented MCP tools, indexing, events, ORM, components, graph traversal, change detection, security, and example prompts.
+
 - Added documentation-to-symbol indexing with `doc_symbol_refs`, regex extraction for common Bitrix API references, and SQLite lookup by symbol.
 - Added `bitrix_docs_for_symbol` and `bitrix_explain_api_usage` MCP tools to combine documentation, local usages, core definitions, relations, and deterministic API recommendations.
 - Added tests for symbol extraction, doc-symbol storage/search, compact MCP outputs, missing-doc behavior, and combined API usage explanations.

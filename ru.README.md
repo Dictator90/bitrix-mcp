@@ -313,3 +313,35 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Отчёты benchmark Phase 17
+
+Запуск из репозитория или установленного пакета:
+
+```bash
+npm run benchmark
+# или после сборки/установки
+bitrix-mcp benchmark
+```
+
+Отчёты создаются в `.bitrix-mcp/benchmark.json` и `.bitrix-mcp/benchmark.md`. Benchmark измеряет инкрементальные `index-all`, `index-project`, `index-template`, опциональный `index-bitrix`, задержки поиска по docs/LiveAPI/events/relations, обход графа, impact-radius, detect-changes, размер SQLite DB и счётчики файлов, символов, событий, relations и docs chunks. Если корень Bitrix, документация или опциональные индексы отсутствуют, шаг пропускается с предупреждением. Полная переиндексация не форсируется без `--force`.
+
+## Карта документации
+
+- [MCP tools](./docs/tools.md) — только реально реализованные инструменты, параметры, примеры, prompts, сценарии и ограничения.
+- [Indexing](./docs/indexing.md) — области индексации и benchmark.
+- [Bitrix events](./docs/bitrix-events.md) — workflow для событий.
+- [ORM](./docs/orm.md) — workflow для D7 ORM.
+- [Components](./docs/components.md) — workflow для компонентов и шаблонов.
+- [Graph](./docs/graph.md) — `bitrix_relations`, neighbors, traverse, impact radius.
+- [Detect changes](./docs/detect-changes.md) — workflow ревью изменений.
+- [Security](./docs/security.md) — локальные данные и ограничения путей.
+- [Examples](./docs/examples.md) — готовые prompts.
+
+Рекомендуемый AI workflow:
+
+1. Общая работа: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` → `bitrix_read_file_context` или `bitrix_read_symbol_context`.
+2. Ревью: `bitrix_detect_changes` → `bitrix_impact_radius` → `bitrix_graph_neighbors` или `bitrix_graph_traverse` → `bitrix_relation_search` → context tools.
+3. События Bitrix: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
+4. ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
+5. Компоненты: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` при изменении файлов компонента.

@@ -10,6 +10,7 @@ import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { configureAgents, initAndServe, parseAgentIds, type InitOptions } from "./init/init.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
 import { serveStdio } from "./mcp/server.js";
+import { runBenchmark } from "./benchmark/report.js";
 import { formatModuleUsageSearchResults } from "./mcp/format.js";
 
 function usage(): string {
@@ -37,6 +38,7 @@ Commands:
   detect-changes [--base <ref>] [--json] Analyze Git-changed Bitrix files and indexed relations
   graph-neighbors <type> <name> [--direction out|in|both] [--relation-type <type>] [--depth <n>] [--json]
   impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
+  benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
@@ -389,6 +391,13 @@ async function main(argv: string[]): Promise<void> {
   if (command === "detect-changes") {
     const result = await detectChanges(paths, parseDetectChangesOptions(argv.slice(1)));
     console.log(argv.includes("--json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
+    return;
+  }
+
+  if (command === "benchmark") {
+    const report = await runBenchmark({ force });
+    console.log(`Benchmark report written to ${paths.dataDir}/benchmark.json and ${paths.dataDir}/benchmark.md`);
+    console.log(JSON.stringify({ metrics: report.metrics, warnings: report.warnings }, null, 2));
     return;
   }
 
