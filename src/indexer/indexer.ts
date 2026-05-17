@@ -12,7 +12,7 @@ import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRec
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
-const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**"];
+const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**"];
 const PROJECT_KIND_IGNORES = [
   "bitrix/modules/**",
   "local/modules/**",

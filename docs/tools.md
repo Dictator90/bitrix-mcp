@@ -162,7 +162,7 @@ Recommended AI workflow:
 - Example response: `{ "summary": { "files": 2, "symbols": 5, "relations": 3 }, "recommendations": [] }`.
 - Recommended prompt: "Use Bitrix MCP to analyze changes since origin/main."
 - Use when: code review or PR preparation.
-- Limitations: requires a valid Git base when `files` are not provided indirectly through impact-radius.
+- Limitations: requires Git to calculate changed files; if Git is unavailable or the base cannot be read, the tool returns an empty result with a `warnings` entry instead of crashing.
 
 ### `bitrix_inheritance_search`
 - Purpose: find classes extending/implementing/using a target class/interface/trait.

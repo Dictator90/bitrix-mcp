@@ -102,7 +102,7 @@ export function formatLiveApiSearchResults(results: SearchResult<SymbolRecord>[]
     kind: result.item.kind,
     name: result.item.name,
     module: result.item.module,
-    file: result.item.file,
+    file: result.item.relativeFile ?? result.item.file,
     line: result.item.line,
     signature: normalized.includeSignature ? truncateText(result.item.signature, normalized.maxSignatureChars) : undefined
   }));
@@ -120,7 +120,7 @@ export function formatEventSearchResults(results: SearchResult<EventRecord>[] | 
     kind: result.item.kind,
     name: result.item.eventName,
     module: result.item.module,
-    file: result.item.file,
+    file: result.item.relativeFile ?? result.item.file,
     line: result.item.line,
     signature: normalized.includeSignature ? truncateText(result.item.signature, normalized.maxSignatureChars) : undefined
   }));

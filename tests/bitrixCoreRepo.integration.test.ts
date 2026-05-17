@@ -148,7 +148,7 @@ test("MCP tools index and search a standard Bitrix checkout deployed from autrob
     await tools.bitrix_liveapi_search.handler({ query: "Application", type: "class", module: "main", limit: 5 })
   );
   assert.equal(classSearch[0]?.name, "Bitrix\\Main\\Application");
-  assert.ok(classSearch[0]?.file.startsWith(path.join(standardRoot, "bitrix/modules/main")));
+  assert.ok(classSearch[0]?.file.startsWith("bitrix/modules/main"));
 
   const installSearch = parseJsonTool<Array<{ name: string; module?: string }>>(
     await tools.bitrix_liveapi_search.handler({ query: "StandardAdminPanel", type: "class", module: "main", limit: 5 })

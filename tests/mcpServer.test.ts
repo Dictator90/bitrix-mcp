@@ -385,7 +385,7 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
 
   assert.equal(results[0]?.name, "demo_helper");
   assert.equal(results[0]?.type, "function");
-  assert.ok(results[0]?.file);
+  assert.equal(results[0]?.file, "index.php");
   assert.ok(results[0]?.line);
 
   const eventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5 });
@@ -394,6 +394,7 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   assert.equal(eventResults[0]?.type, "event");
   assert.equal(eventResults[0]?.name, "OnBeforeProlog");
   assert.equal(eventResults[0]?.module, "main");
+  assert.equal(eventResults[0]?.file, "index.php");
 
   const fullEventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5, format: "full" });
   const fullEventResults = JSON.parse(fullEventResult.content[0].text) as Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }>;

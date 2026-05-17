@@ -55,6 +55,7 @@ export interface DetectChangesResult {
   relatedRelations: unknown[];
   risk: ChangeRisk;
   recommendations: string[];
+  warnings?: string[];
 }
 
 function normalizeSlashes(value: string): string {
@@ -83,6 +84,20 @@ export async function gitChangedFiles(workspaceRoot: string, base?: string): Pro
     .map((line) => normalizeSlashes(line.trim()))
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));
+}
+
+
+function gitUnavailableWarning(error: unknown, base: string): string {
+  const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+  return `Unable to read git changes for base ${base}; returning an empty change set. ${message}`;
+}
+
+async function gitChangedFilesOrWarning(workspaceRoot: string, base: string): Promise<{ files: string[]; warnings: string[] }> {
+  try {
+    return { files: await gitChangedFiles(workspaceRoot, base), warnings: [] };
+  } catch (error) {
+    return { files: [], warnings: [gitUnavailableWarning(error, base)] };
+  }
 }
 
 function isInside(root: string, target: string): boolean {
@@ -206,7 +221,7 @@ export async function detectChanges(paths: RuntimePaths, options: DetectChangesO
   const includeSource = options.includeSource === true || options.format === "full";
   const includeRelations = options.includeRelations !== false;
 
-  const gitFiles = await gitChangedFiles(paths.workspaceRoot, base);
+  const { files: gitFiles, warnings } = await gitChangedFilesOrWarning(paths.workspaceRoot, base);
   const changedFiles = gitFiles.map((file) => resolveChangedFile(paths.workspaceRoot, file)).filter((file) => includesKind(options.kind, file.kind)).slice(0, maxFiles);
   const filePaths = changedFiles.flatMap((file) => [file.file, file.absolutePath ?? file.file]);
   const indexed = await readIndexedRecordsForFiles(sqlitePath(paths.dataDir), filePaths, { includeRelations });
@@ -236,7 +251,8 @@ export async function detectChanges(paths: RuntimePaths, options: DetectChangesO
     changedMailEvents: limitItems<unknown>(options.format === "full" ? changedMailEvents : changedMailEvents.map((symbol) => compactSymbol(symbol, includeSource)), maxItems),
     relatedRelations: includeRelations ? limitItems<unknown>(options.format === "full" ? indexed.relations : indexed.relations.map((relation) => compactRelation(relation, includeSource)), maxItems) : [],
     risk,
-    recommendations: recommendationsForRisk(risk)
+    recommendations: recommendationsForRisk(risk),
+    ...(warnings.length > 0 ? { warnings } : {})
   };
 }
 
@@ -246,6 +262,9 @@ export function formatDetectChangesText(result: DetectChangesResult): string {
     `Risk: ${result.risk.level} (${result.risk.score}/100)`,
     `Symbols: ${result.summary.symbols}; events: ${result.summary.events}; module usages: ${result.summary.moduleUsages}; agents: ${result.summary.agents}; mail events: ${result.summary.mailEvents}; relations: ${result.summary.relations}`
   ];
+  if (result.warnings && result.warnings.length > 0) {
+    lines.push("", "Warnings:", ...result.warnings.map((warning) => `- ${warning}`));
+  }
   if (result.changedFiles.length > 0) {
     lines.push("", "Files:", ...result.changedFiles.map((file) => `- ${file.file} [${file.kind}]`));
   }

@@ -138,7 +138,7 @@ npx bitrix-mcp config
 npx bitrix-mcp doctor
 ```
 
-Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, and `cache/`; it also reads project `.gitignore` rules when present.
+Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`, and `generated/`; it also reads project `.gitignore` rules when present.
 
 To exclude additional project-specific files from LiveAPI and template indexes, add a `.bitrixmcpignore` file to the project root. It uses the same pattern syntax as `.gitignore` and is applied together with the built-in rules and `.gitignore`:
 
@@ -308,7 +308,7 @@ Search tools support shared response-shaping options:
 - `maxSignatureChars`: truncate compact signatures to this many characters; defaults to `160`.
 - `maxTextChars`: truncate documentation excerpts to this many characters; defaults to `500`.
 
-Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `kind`, `name`, `module`, `file`, `line`, and a truncated `signature` when available:
+Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `kind`, `name`, `module`, workspace-relative `file`, `line`, and a truncated `signature` when available:
 
 ```json
 {

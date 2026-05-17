@@ -169,6 +169,7 @@ export interface EventRecord {
   handlerFunction?: string;
   anonymous?: boolean;
   file: string;
+  relativeFile?: string;
   line: number;
   signature?: string;
   description?: string;

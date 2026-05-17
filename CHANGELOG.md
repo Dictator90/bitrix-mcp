@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hardened Phase 18 consistency: compact LiveAPI/event search now prefers workspace-relative file paths, MCP schemas have tighter kind/relation/file limits, `detect-changes` returns deterministic warnings when Git is unavailable, graph impact input files are capped, and generated directories are skipped by default.
+- Added tests for Git-unavailable change detection and built-in generated/cache/upload/vendor/node_modules index ignores.
+
 - Added benchmark reporting via `npm run benchmark` and `bitrix-mcp benchmark`, writing `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md` with graceful skips for missing Bitrix roots, docs, and optional indexes.
 - Added Phase 17 documentation for implemented MCP tools, indexing, events, ORM, components, graph traversal, change detection, security, and example prompts.
 

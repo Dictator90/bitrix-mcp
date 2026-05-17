@@ -320,8 +320,12 @@ export async function traverseGraph(dbFile: string, startNode: { type: string; n
 }
 
 async function gitChangedFiles(workspaceRoot: string, base: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("git", ["-C", workspaceRoot, "diff", "--name-only", base, "--"], { maxBuffer: 1024 * 1024 });
-  return stdout.split(/\r?\n/u).map((file) => normalizeSlashes(file.trim())).filter(Boolean);
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", workspaceRoot, "diff", "--name-only", base, "--"], { maxBuffer: 1024 * 1024 });
+    return stdout.split(/\r?\n/u).map((file) => normalizeSlashes(file.trim())).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function symbolToNode(symbol: SymbolRecord): GraphNode | undefined {
@@ -381,7 +385,7 @@ function scoreImpactRisk(edges: GraphEdge[]): ImpactRisk {
 export async function getImpactRadius(dbFile: string, options: ImpactRadiusOptions = {}): Promise<ImpactRadiusResult> {
   const base = validateGitBase(options.base);
   const workspaceRoot = options.workspaceRoot ?? process.cwd();
-  const changedFiles = (options.files && options.files.length > 0 ? options.files : await gitChangedFiles(workspaceRoot, base)).map((file) => normalizeSlashes(file));
+  const changedFiles = (options.files && options.files.length > 0 ? options.files : await gitChangedFiles(workspaceRoot, base)).slice(0, MAX_LIMIT).map((file) => normalizeSlashes(file));
   const fileCandidates = changedFiles.flatMap((file) => [file, path.resolve(workspaceRoot, file)]);
   const indexed = await readIndexedRecordsForFiles(dbFile, fileCandidates, { includeRelations: true });
   const startNodeMap = new Map<string, GraphNode>();
