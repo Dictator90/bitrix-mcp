@@ -6,6 +6,7 @@
 - For Bitrix module/package development, verify Bitrix APIs against documentation or source packages instead of inventing behavior.
 - Prefer `rg`/targeted file reads over recursive `ls` or `grep`.
 - Run relevant type checks, tests, and builds before finalizing changes when practical.
+- Use Node.js 22.12+ when running this project; it depends on `node:sqlite`/`DatabaseSync` and does not support Node.js 20.
 - For benchmark work, keep reports in `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`, skip missing optional indexes gracefully, and do not force full reindexing unless `--force` is explicitly requested.
 
 - For Bitrix dependency graph work, treat `bitrix_relations` as canonical graph edges and keep traversals bounded/cycle-safe.

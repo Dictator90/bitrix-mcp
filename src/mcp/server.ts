@@ -644,18 +644,21 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
   server.tool(
     "bitrix_detect_changes",
-    "Analyze Git-changed Bitrix files against the SQLite index, returning changed symbols, events, module usages, agents, mail events, relations, risk, and recommendations.",
+    "Analyze Git-changed Bitrix files against the SQLite index and graph impact, returning changed symbols, events, module usages, agents, mail events, components, ORM/IBlock/HLBlock/options, relations, risk, and recommendations.",
     {
       base: z.string().optional().describe("Git base ref for git diff --name-only <base> --; defaults to HEAD~1."),
       kind: changedFileKindFilterSchema.optional().describe("Restrict changed files by detected kind: project, template, component, bitrix, install, docs, asset, or unknown."),
       includeSource: z.boolean().optional().describe("Include compact source signatures when available."),
       includeRelations: z.boolean().optional().describe("Include related relation rows; enabled by default."),
+      includeImpact: z.boolean().optional().describe("Include graph impact radius; enabled by default."),
+      includeRisk: z.boolean().optional().describe("Include merged file/entity/graph risk; enabled by default."),
+      maxDepth: z.number().int().min(0).max(8).optional().describe("Graph impact traversal depth; defaults to 2."),
       maxFiles: z.number().int().min(1).max(1000).optional(),
       maxItems: z.number().int().min(1).max(1000).optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ base, kind, includeSource, includeRelations, maxFiles, maxItems, format }) => {
-      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, maxFiles, maxItems, format } });
+    async ({ base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format }) => {
+      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format } });
     }
   );
 

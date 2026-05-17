@@ -2873,17 +2873,26 @@ export { searchSqliteLiveApi, searchSqliteDocs } from "../liveapi/search.js";
 export interface IndexedRecordsForFiles {
   symbols: SymbolRecord[];
   moduleUsages: ModuleUsageRecord[];
+  ormEntities: OrmEntityRecord[];
+  ormUsages: OrmUsageRecord[];
+  iblockUsages: IblockUsageRecord[];
+  hlblockUsages: HlblockUsageRecord[];
+  optionUsages: OptionUsageRecord[];
   relations: BitrixRelationRecord[];
+}
+
+function emptyIndexedRecordsForFiles(): IndexedRecordsForFiles {
+  return { symbols: [], moduleUsages: [], ormEntities: [], ormUsages: [], iblockUsages: [], hlblockUsages: [], optionUsages: [], relations: [] };
 }
 
 export async function readIndexedRecordsForFiles(dbFile: string, files: string[], options: { includeRelations?: boolean } = {}): Promise<IndexedRecordsForFiles> {
   if (files.length === 0) {
-    return { symbols: [], moduleUsages: [], relations: [] };
+    return emptyIndexedRecordsForFiles();
   }
   try {
     await fs.access(dbFile);
   } catch {
-    return { symbols: [], moduleUsages: [], relations: [] };
+    return emptyIndexedRecordsForFiles();
   }
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
@@ -2907,6 +2916,46 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       ORDER BY coalesce(m.relative_file, m.file), m.line, m.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as ModuleUsageRow[];
 
+    const ormEntityRows = db.prepare(`
+      SELECT o.id, o.kind, o.root, o.class_name, o.fully_qualified_name, o.namespace, o.parent_class, o.module, o.table_name, o.file, o.relative_file, o.line, o.fields_json, o.references_json, o.signature
+      FROM orm_entities o
+      JOIN files f ON f.id = o.file_id
+      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as OrmEntityRow[];
+
+    const ormUsageRows = db.prepare(`
+      SELECT o.id, o.kind, o.root, o.entity, o.method, o.usage_kind, o.module, o.file, o.relative_file, o.line, o.signature
+      FROM orm_usages o
+      JOIN files f ON f.id = o.file_id
+      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as OrmUsageRow[];
+
+    const iblockUsageRows = db.prepare(`
+      SELECT i.id, i.file_id, i.kind, i.root, i.iblock_id, i.api, i.file, i.relative_file, i.line, i.signature, i.context_type, i.context_name, i.component
+      FROM iblock_usages i
+      JOIN files f ON f.id = i.file_id
+      WHERE f.relative_path IN (${placeholders}) OR i.relative_file IN (${placeholders}) OR i.file IN (${placeholders})
+      ORDER BY coalesce(i.relative_file, i.file), i.line, i.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as IblockUsageRow[];
+
+    const hlblockUsageRows = db.prepare(`
+      SELECT h.id, h.file_id, h.kind, h.root, h.hlblock_id, h.api, h.file, h.relative_file, h.line, h.signature, h.context_type, h.context_name
+      FROM hlblock_usages h
+      JOIN files f ON f.id = h.file_id
+      WHERE f.relative_path IN (${placeholders}) OR h.relative_file IN (${placeholders}) OR h.file IN (${placeholders})
+      ORDER BY coalesce(h.relative_file, h.file), h.line, h.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as HlblockUsageRow[];
+
+    const optionUsageRows = db.prepare(`
+      SELECT o.id, o.file_id, o.kind, o.root, o.module, o.name, o.operation, o.api, o.file, o.relative_file, o.line, o.signature, o.context_type, o.context_name
+      FROM option_usages o
+      JOIN files f ON f.id = o.file_id
+      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
+    `).all(...normalized, ...normalized, ...normalized) as unknown as OptionUsageRow[];
+
     let relationRows: BitrixRelationRow[] = [];
     if (options.includeRelations !== false) {
       relationRows = db.prepare(`
@@ -2920,6 +2969,11 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
     return {
       symbols: symbolRows.map(rowToSymbol),
       moduleUsages: moduleUsageRows.map(rowToModuleUsage),
+      ormEntities: ormEntityRows.map(rowToOrmEntity),
+      ormUsages: ormUsageRows.map(rowToOrmUsage),
+      iblockUsages: iblockUsageRows.map(rowToIblockUsage),
+      hlblockUsages: hlblockUsageRows.map(rowToHlblockUsage),
+      optionUsages: optionUsageRows.map(rowToOptionUsage),
       relations: relationRows.map(rowToBitrixRelation)
     };
   } finally {
