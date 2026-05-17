@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { sqlitePath } from "../src/config/paths.js";
 import { readIndexFromSqlite } from "../src/indexer/sqliteStore.js";
 import type { IndexManifest } from "../src/types.js";
@@ -12,11 +13,12 @@ import type { IndexManifest } from "../src/types.js";
 const execFileAsync = promisify(execFile);
 const cliPath = path.resolve("src/cli.ts");
 const tsxLoaderPath = path.resolve("node_modules/tsx/dist/loader.mjs");
+const tsxLoaderUrl = pathToFileURL(tsxLoaderPath).href;
 const fixtureRoot = path.resolve("tests/fixtures/project");
 
 async function runCliIndexTemplate(args: string[] = []): Promise<IndexManifest> {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-cli-"));
-  await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "index-template", ...args], {
+  await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "index-template", ...args], {
     cwd: fixtureRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
   });
@@ -44,7 +46,7 @@ test("cli index-template without an argument indexes standard template locations
 });
 
 test("cli help documents embeddings indexing commands", async () => {
-  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "--help"], { cwd: fixtureRoot });
+  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "--help"], { cwd: fixtureRoot });
 
   assert.match(stdout, /index-docs \[--force\] \[--embeddings\]/);
   assert.match(stdout, /index-embeddings/);
@@ -55,7 +57,7 @@ test("cli config prints resolved runtime paths and MCP config file presence", as
   await fs.mkdir(path.join(fixtureRoot, ".cursor"), { recursive: true });
   await fs.writeFile(path.join(fixtureRoot, ".cursor", "mcp.json"), "{}\n", "utf8");
   try {
-    const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "config"], {
+    const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "config"], {
       cwd: fixtureRoot,
       env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir, BITRIX_MCP_SEMANTIC_ENABLED: "1" }
     });
@@ -73,7 +75,7 @@ test("cli config prints resolved runtime paths and MCP config file presence", as
 
 test("cli config --json emits script-friendly diagnostics", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-config-json-"));
-  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "config", "--json"], {
+  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "config", "--json"], {
     cwd: fixtureRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir, BITRIX_MCP_OFFICIAL_DOCS_ENABLED: "0" }
   });
@@ -89,7 +91,7 @@ test("cli config --json emits script-friendly diagnostics", async () => {
 
 test("cli doctor --json includes checks and config diagnostics", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doctor-json-"));
-  const { stdout } = await execFileAsync(process.execPath, ["--import", "tsx", cliPath, "doctor", "--json"], {
+  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "doctor", "--json"], {
     cwd: fixtureRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
   });
@@ -113,7 +115,7 @@ test("cli detect-changes --json emits compact change analysis", async () => {
   await execFileAsync("git", ["commit", "--allow-empty", "-m", "baseline"], { cwd: workspaceRoot });
   await fs.appendFile(path.join(workspaceRoot, "docs/framework/search.md"), "\nCLI update.\n", "utf8");
 
-  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderPath, cliPath, "detect-changes", "--json"], {
+  const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "detect-changes", "--json"], {
     cwd: workspaceRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
   });
@@ -124,7 +126,7 @@ test("cli detect-changes --json emits compact change analysis", async () => {
   assert.equal(parsed.summary.files, 1);
   assert.ok(parsed.impact);
 
-  const text = await execFileAsync(process.execPath, ["--import", tsxLoaderPath, cliPath, "detect-changes"], {
+  const text = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, "detect-changes"], {
     cwd: workspaceRoot,
     env: { ...process.env, BITRIX_MCP_DATA_DIR: dataDir }
   });

@@ -18,6 +18,10 @@ import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
 
+function slashPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 
 test("extracts Bitrix API symbols from documentation text", () => {
   const symbols = extractDocSymbolRefs(`
@@ -261,7 +265,7 @@ CAgent::AddAgent("vendor_agent_run();", "vendor.module", "Y", 60);
   const staticAgent = agents?.find((agent) => agent.name === "\\Vendor\\Module\\Agent::run");
   assert.equal(staticAgent?.periodic, "N");
   assert.equal(staticAgent?.interval, 86400);
-  assert.equal(staticAgent?.relativeFile, path.join("local", "modules", "vendor.module", "install", "index.php"));
+  assert.equal(staticAgent?.relativeFile, slashPath("local/modules/vendor.module/install/index.php"));
 
   const relations = await searchBitrixRelations(dbFile, { targetType: "agent", targetName: "\\Vendor\\Module\\Agent::run", limit: 10 });
   assert.ok(relations?.some((relation) => relation.sourceType === "module" && relation.sourceName === "vendor.module" && relation.relationType === "registers_agent"));
@@ -403,7 +407,7 @@ test("documentation markdown chunks preserve section heading metadata", async ()
   const results = await searchSqliteDocs(sqlitePath(dataDir), { query: "unique-heading-preservation-token", limit: 5 });
   assert.equal(results?.[0]?.item.headingPath, "Framework Guide > Caching > Managed Cache Details");
   assert.equal(results?.[0]?.item.sectionAnchor, "managed-cache-details");
-  assert.equal(results?.[0]?.item.relativePath, path.join("framework", "markdown-headings.md"));
+  assert.equal(results?.[0]?.item.relativePath, slashPath("framework/markdown-headings.md"));
 
   const db = new DatabaseSync(sqlitePath(dataDir));
   try {
@@ -417,7 +421,7 @@ test("documentation markdown chunks preserve section heading metadata", async ()
     assert.equal(row?.heading_path, "Framework Guide > Caching > Managed Cache Details");
     assert.equal(row?.section_anchor, "managed-cache-details");
     assert.match(row?.source_uri ?? "", /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md$/);
-    assert.equal(row?.relative_path, path.join("framework", "markdown-headings.md"));
+    assert.equal(row?.relative_path, slashPath("framework/markdown-headings.md"));
   } finally {
     db.close();
   }
@@ -437,7 +441,7 @@ test("documentation chunks are prepared as embeddings documents", async () => {
   assert.match(headingDocument.id, /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md#chunk-\d+$/);
   assert.equal(headingDocument.metadata?.headingPath, "Framework Guide > Caching > Managed Cache Details");
   assert.equal(headingDocument.metadata?.sectionAnchor, "managed-cache-details");
-  assert.equal(headingDocument.metadata?.relativePath, path.join("framework", "markdown-headings.md"));
+  assert.equal(headingDocument.metadata?.relativePath, slashPath("framework/markdown-headings.md"));
 });
 
 
@@ -887,13 +891,13 @@ AddEventHandler('sale', 'OnSaleOrderSaved', function () {});
 
   const fileToEvent = await searchBitrixRelations(sqlitePath(dataDir), {
     sourceType: "file",
-    sourceName: path.join("local", "php_interface", "init.php"),
+    sourceName: slashPath("local/php_interface/init.php"),
     targetType: "event",
     targetName: "main:OnBeforeProlog",
     relationType: "registers_event_handler",
     limit: 5
   });
-  assert.equal(fileToEvent?.[0]?.file, path.join(root, "local/php_interface/init.php"));
+  assert.equal(fileToEvent?.[0]?.file, slashPath("local/php_interface/init.php"));
   assert.match(fileToEvent?.[0]?.signature ?? "", /addEventHandler/);
 
   const closureRelation = await searchBitrixRelations(sqlitePath(dataDir), {
@@ -924,7 +928,7 @@ ModuleManager::isModuleInstalled('sale');
   assert.equal(usages?.length, 1);
   assert.equal(usages?.[0]?.call, "Loader::includeModule");
   assert.equal(usages?.[0]?.kind, "project");
-  assert.equal(usages?.[0]?.relativeFile, path.join("local", "php_interface", "init.php"));
+  assert.equal(usages?.[0]?.relativeFile, slashPath("local/php_interface/init.php"));
   assert.match(usages?.[0]?.signature ?? "", /Loader::includeModule\('iblock'\)/);
 
   const allUsages = await searchModuleUsages(sqlitePath(dataDir), { limit: 10 });
@@ -932,7 +936,7 @@ ModuleManager::isModuleInstalled('sale');
 
   const relations = await searchBitrixRelations(sqlitePath(dataDir), {
     sourceType: "file",
-    sourceName: path.join("local", "php_interface", "init.php"),
+    sourceName: slashPath("local/php_interface/init.php"),
     targetType: "module",
     targetName: "iblock",
     relationType: "includes_module",
@@ -970,7 +974,7 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
   assert.equal(mailEvents?.length, 1);
   assert.equal(mailEvents?.[0]?.api, "CEvent::Send");
   assert.equal(mailEvents?.[0]?.siteId, "SITE_ID");
-  assert.equal(mailEvents?.[0]?.relativeFile, path.join("local", "php_interface", "service.php"));
+  assert.equal(mailEvents?.[0]?.relativeFile, slashPath("local/php_interface/service.php"));
   assert.equal(mailEvents?.[0]?.handlers?.length, 2);
   assert.ok(mailEvents?.[0]?.handlers?.some((handler) => handler.eventName === "OnBeforeEventSend" && handler.handlerClass === "MailHandlers"));
 
@@ -986,7 +990,7 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
 
   const fileRelations = await searchBitrixRelations(dbFile, {
     sourceType: "file",
-    sourceName: path.join("local", "php_interface", "service.php"),
+    sourceName: slashPath("local/php_interface/service.php"),
     targetType: "mail_event",
     targetName: "SALE_NEW_ORDER",
     relationType: "sends_mail_event",
@@ -1101,7 +1105,7 @@ class CatalogUsage
   const numericUsages = await searchIblockUsages(dbFile, { iblockId: "12", api: "CIBlockElement::GetList", limit: 10 });
   assert.equal(numericUsages?.length, 1);
   assert.equal(numericUsages?.[0]?.kind, "project");
-  assert.equal(numericUsages?.[0]?.relativeFile, path.join("local", "php_interface", "iblock.php"));
+  assert.equal(numericUsages?.[0]?.relativeFile, slashPath("local/php_interface/iblock.php"));
 
   const constantUsages = await searchIblockUsages(dbFile, { iblockId: "CATALOG_IBLOCK_ID", limit: 10 });
   assert.equal(constantUsages?.[0]?.api, "CIBlockElement::GetList");
@@ -1147,7 +1151,7 @@ function loadHl($dynamicId) {
   const byIdUsages = await searchHlblockUsages(dbFile, { hlblockId: "3", api: "HighloadBlockTable::getById", limit: 10 });
   assert.equal(byIdUsages?.length, 1);
   assert.equal(byIdUsages?.[0]?.kind, "project");
-  assert.equal(byIdUsages?.[0]?.relativeFile, path.join("local", "php_interface", "hlblock.php"));
+  assert.equal(byIdUsages?.[0]?.relativeFile, slashPath("local/php_interface/hlblock.php"));
 
   const listUsages = await searchHlblockUsages(dbFile, { api: "HighloadBlockTable::getList", limit: 10 });
   assert.ok(listUsages?.some((usage) => usage.hlblockId === "3"));

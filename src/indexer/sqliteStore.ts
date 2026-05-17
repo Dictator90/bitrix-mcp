@@ -338,6 +338,16 @@ function nullable(value: string | undefined): string | null {
   return value ?? null;
 }
 
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/gu, "/");
+}
+
+function relationFileForStorage(relationFile: string, file: IndexFile): string {
+  const normalizedRelationFile = normalizeSlashes(relationFile);
+  const normalizedAbsolutePath = normalizeSlashes(file.path);
+  return normalizedRelationFile === normalizedAbsolutePath ? file.relativePath : normalizedRelationFile;
+}
+
 function openDatabase(dbFile: string): DatabaseSync {
   return new DatabaseSync(dbFile);
 }
@@ -1300,7 +1310,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
     const deleteHlblockUsagesForFile = db.prepare("DELETE FROM hlblock_usages WHERE file_id = ?");
     const deleteOptionUsagesForFile = db.prepare("DELETE FROM option_usages WHERE file_id = ?");
     const deleteSymbolsForFile = db.prepare("DELETE FROM symbols WHERE file_id = ?");
-    const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ?");
+    const deleteRelationsForFile = db.prepare("DELETE FROM bitrix_relations WHERE file = ? OR file = ?");
     const deleteFileById = db.prepare("DELETE FROM files WHERE id = ?");
 
     db.exec("BEGIN IMMEDIATE;");
@@ -1328,7 +1338,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             deleteIblockUsagesForFile.run(file.id);
             deleteHlblockUsagesForFile.run(file.id);
             deleteOptionUsagesForFile.run(file.id);
-            deleteRelationsForFile.run(file.path);
+            deleteRelationsForFile.run(file.path, file.relative_path);
             deleteFileById.run(file.id);
             existingByPath.delete(file.path);
           }
@@ -1352,7 +1362,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           deleteHlblockUsagesForFile.run(existing.id);
           deleteOptionUsagesForFile.run(existing.id);
           deleteSymbolsForFile.run(existing.id);
-          deleteRelationsForFile.run(file.path);
+          deleteRelationsForFile.run(file.path, file.relativePath);
         }
 
         const fileRow = upsertFile.get(file.kind, manifest.root, file.path, file.relativePath, file.size, file.mtimeMs, file.language, manifest.generatedAt) as { id: number };
@@ -1437,7 +1447,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
                 relation.targetType,
                 relation.targetName,
                 relation.relationType,
-                relation.file,
+                relationFileForStorage(relation.file, file),
                 relation.line,
                 nullable(relation.module),
                 nullable(relation.kind),
@@ -1454,7 +1464,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
                 relation.targetType,
                 relation.targetName,
                 relation.relationType,
-                relation.file,
+                relationFileForStorage(relation.file, file),
                 relation.line,
                 nullable(relation.module),
                 nullable(relation.kind),
@@ -1465,7 +1475,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
           }
           if (symbol.type === "component") {
             for (const relation of componentRelationsForSymbol(symbol, file)) {
-              insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+              insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
             }
           }
           if (symbol.type === "agent") {
@@ -1476,7 +1486,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
                 relation.targetType,
                 relation.targetName,
                 relation.relationType,
-                relation.file,
+                relationFileForStorage(relation.file, file),
                 relation.line,
                 nullable(relation.module),
                 nullable(relation.kind),
@@ -1486,7 +1496,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             }
           }
           for (const relation of inheritanceRelationsForSymbol(symbol, file)) {
-            insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+            insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
           }
         }
         for (const usage of file.moduleUsages ?? []) {
@@ -1521,55 +1531,55 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             nullable(entity.signature)
           );
           const entityName = entity.fullyQualifiedName || entity.className;
-          insertRelation.run("file", file.relativePath, "orm_entity", entityName, "defines_orm_entity", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), JSON.stringify({ tableName: entity.tableName }));
+          insertRelation.run("file", file.relativePath, "orm_entity", entityName, "defines_orm_entity", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), JSON.stringify({ tableName: entity.tableName }));
           if (entity.parentClass) {
-            insertRelation.run("class", entityName, "parent_class", entity.parentClass, "extends", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
+            insertRelation.run("class", entityName, "parent_class", entity.parentClass, "extends", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
           }
           if (entity.tableName) {
-            insertRelation.run("orm_entity", entityName, "table", entity.tableName, "maps_table", entity.file, entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
+            insertRelation.run("orm_entity", entityName, "table", entity.tableName, "maps_table", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
           }
           for (const reference of entity.references) {
             if (!reference.referenceClass) continue;
-            insertRelation.run("orm_entity", entityName, "orm_entity", reference.referenceClass, "references_orm_entity", entity.file, reference.line, nullable(entity.module), nullable(file.kind), nullable(reference.signature), JSON.stringify({ field: reference.name, type: reference.type }));
+            insertRelation.run("orm_entity", entityName, "orm_entity", reference.referenceClass, "references_orm_entity", relationFileForStorage(entity.file, file), reference.line, nullable(entity.module), nullable(file.kind), nullable(reference.signature), JSON.stringify({ field: reference.name, type: reference.type }));
           }
         }
         for (const usage of file.ormUsages ?? []) {
           insertOrmUsage.run(fileId, file.kind, manifest.root, usage.entity, usage.method, usage.usageKind, nullable(usage.module), usage.file, nullable(usage.relativeFile ?? file.relativePath), usage.line, nullable(usage.signature));
-          insertRelation.run("file", file.relativePath, "orm_entity", usage.entity, "uses_orm_entity", usage.file, usage.line, nullable(usage.module), nullable(file.kind), nullable(usage.signature), JSON.stringify({ method: usage.method, usageKind: usage.usageKind }));
+          insertRelation.run("file", file.relativePath, "orm_entity", usage.entity, "uses_orm_entity", relationFileForStorage(usage.file, file), usage.line, nullable(usage.module), nullable(file.kind), nullable(usage.signature), JSON.stringify({ method: usage.method, usageKind: usage.usageKind }));
         }
         for (const usage of file.iblockUsages ?? []) {
           const usageKind = usage.kind ?? file.kind;
           const relativeFile = usage.relativeFile ?? file.relativePath;
           insertIblockUsage.run(fileId, usageKind, manifest.root, usage.iblockId, usage.api, usage.file, nullable(relativeFile), usage.line, usage.signature, nullable(usage.contextType), nullable(usage.contextName), nullable(usage.component));
-          insertRelation.run("file", relativeFile, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          insertRelation.run("file", relativeFile, "iblock", usage.iblockId, "uses_iblock", relationFileForStorage(usage.file, file), usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           if (usage.contextType && usage.contextName) {
-            insertRelation.run(usage.contextType, usage.contextName, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+            insertRelation.run(usage.contextType, usage.contextName, "iblock", usage.iblockId, "uses_iblock", relationFileForStorage(usage.file, file), usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           }
           if (usage.component) {
-            insertRelation.run("component", usage.component, "iblock", usage.iblockId, "uses_iblock", usage.file, usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+            insertRelation.run("component", usage.component, "iblock", usage.iblockId, "uses_iblock", relationFileForStorage(usage.file, file), usage.line, "iblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           }
         }
         for (const usage of file.hlblockUsages ?? []) {
           const usageKind = usage.kind ?? file.kind;
           const relativeFile = usage.relativeFile ?? file.relativePath;
           insertHlblockUsage.run(fileId, usageKind, manifest.root, usage.hlblockId, usage.api, usage.file, nullable(relativeFile), usage.line, usage.signature, nullable(usage.contextType), nullable(usage.contextName));
-          insertRelation.run("file", relativeFile, "hlblock", usage.hlblockId, "uses_hlblock", usage.file, usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+          insertRelation.run("file", relativeFile, "hlblock", usage.hlblockId, "uses_hlblock", relationFileForStorage(usage.file, file), usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           if (usage.contextType && usage.contextName) {
-            insertRelation.run(usage.contextType, usage.contextName, "hlblock", usage.hlblockId, "uses_hlblock", usage.file, usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
+            insertRelation.run(usage.contextType, usage.contextName, "hlblock", usage.hlblockId, "uses_hlblock", relationFileForStorage(usage.file, file), usage.line, "highloadblock", nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api }));
           }
         }
         for (const usage of file.optionUsages ?? []) {
           const usageKind = usage.kind ?? file.kind;
           const relativeFile = usage.relativeFile ?? file.relativePath;
           insertOptionUsage.run(fileId, usageKind, manifest.root, usage.module, usage.name, usage.operation, usage.api, usage.file, nullable(relativeFile), usage.line, usage.signature, nullable(usage.contextType), nullable(usage.contextName));
-          insertRelation.run("file", relativeFile, "option", `${usage.module}:${usage.name}`, "uses_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
-          insertRelation.run("module", usage.module, "option", `${usage.module}:${usage.name}`, "defines_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
+          insertRelation.run("file", relativeFile, "option", `${usage.module}:${usage.name}`, "uses_option", relationFileForStorage(usage.file, file), usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
+          insertRelation.run("module", usage.module, "option", `${usage.module}:${usage.name}`, "defines_option", relationFileForStorage(usage.file, file), usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
           if (usage.contextType && usage.contextName) {
-            insertRelation.run(usage.contextType, usage.contextName, "option", `${usage.module}:${usage.name}`, "uses_option", usage.file, usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
+            insertRelation.run(usage.contextType, usage.contextName, "option", `${usage.module}:${usage.name}`, "uses_option", relationFileForStorage(usage.file, file), usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
           }
         }
         for (const relation of componentRelationsForFile(file)) {
-          insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+          insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
         }
         for (const relation of moduleUsageRelationsForFile(file)) {
           insertRelation.run(
@@ -1578,7 +1588,7 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
             relation.targetType,
             relation.targetName,
             relation.relationType,
-            relation.file,
+            relationFileForStorage(relation.file, file),
             relation.line,
             nullable(relation.module),
             nullable(relation.kind),
@@ -1680,7 +1690,7 @@ export async function writeAutoloadRecords(dbFile: string, records: AutoloadReco
         insertRecord.run(record.type, nullable(record.namespace), JSON.stringify(record.paths ?? []), nullable(record.file), nullable(record.package), nullable(record.version), record.sourceFile, record.root, record.dev ? 1 : 0, record.metadata === undefined ? null : JSON.stringify(record.metadata));
       }
       for (const relation of relations) {
-        insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relation.file, relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
+        insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, normalizeSlashes(relation.file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
       }
       setMeta.run("index:autoload", JSON.stringify({ records: records.length }), now);
       db.exec("COMMIT;");
@@ -2904,7 +2914,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
              s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
-      WHERE f.relative_path IN (${placeholders}) OR s.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(s.file, char(92), '/') IN (${placeholders})
       ORDER BY f.relative_path, s.line, s.id
     `).all(...normalized, ...normalized) as unknown as SymbolRow[];
 
@@ -2912,7 +2922,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT m.id, m.file_id, m.kind, m.root, m.module, m.call, m.file, m.relative_file, m.line, m.signature
       FROM module_usages m
       JOIN files f ON f.id = m.file_id
-      WHERE f.relative_path IN (${placeholders}) OR m.relative_file IN (${placeholders}) OR m.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(m.relative_file, char(92), '/') IN (${placeholders}) OR replace(m.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(m.relative_file, m.file), m.line, m.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as ModuleUsageRow[];
 
@@ -2920,7 +2930,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT o.id, o.kind, o.root, o.class_name, o.fully_qualified_name, o.namespace, o.parent_class, o.module, o.table_name, o.file, o.relative_file, o.line, o.fields_json, o.references_json, o.signature
       FROM orm_entities o
       JOIN files f ON f.id = o.file_id
-      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(o.relative_file, char(92), '/') IN (${placeholders}) OR replace(o.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as OrmEntityRow[];
 
@@ -2928,7 +2938,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT o.id, o.kind, o.root, o.entity, o.method, o.usage_kind, o.module, o.file, o.relative_file, o.line, o.signature
       FROM orm_usages o
       JOIN files f ON f.id = o.file_id
-      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(o.relative_file, char(92), '/') IN (${placeholders}) OR replace(o.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as OrmUsageRow[];
 
@@ -2936,7 +2946,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT i.id, i.file_id, i.kind, i.root, i.iblock_id, i.api, i.file, i.relative_file, i.line, i.signature, i.context_type, i.context_name, i.component
       FROM iblock_usages i
       JOIN files f ON f.id = i.file_id
-      WHERE f.relative_path IN (${placeholders}) OR i.relative_file IN (${placeholders}) OR i.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(i.relative_file, char(92), '/') IN (${placeholders}) OR replace(i.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(i.relative_file, i.file), i.line, i.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as IblockUsageRow[];
 
@@ -2944,7 +2954,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT h.id, h.file_id, h.kind, h.root, h.hlblock_id, h.api, h.file, h.relative_file, h.line, h.signature, h.context_type, h.context_name
       FROM hlblock_usages h
       JOIN files f ON f.id = h.file_id
-      WHERE f.relative_path IN (${placeholders}) OR h.relative_file IN (${placeholders}) OR h.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(h.relative_file, char(92), '/') IN (${placeholders}) OR replace(h.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(h.relative_file, h.file), h.line, h.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as HlblockUsageRow[];
 
@@ -2952,7 +2962,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       SELECT o.id, o.file_id, o.kind, o.root, o.module, o.name, o.operation, o.api, o.file, o.relative_file, o.line, o.signature, o.context_type, o.context_name
       FROM option_usages o
       JOIN files f ON f.id = o.file_id
-      WHERE f.relative_path IN (${placeholders}) OR o.relative_file IN (${placeholders}) OR o.file IN (${placeholders})
+      WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(o.relative_file, char(92), '/') IN (${placeholders}) OR replace(o.file, char(92), '/') IN (${placeholders})
       ORDER BY coalesce(o.relative_file, o.file), o.line, o.id
     `).all(...normalized, ...normalized, ...normalized) as unknown as OptionUsageRow[];
 
@@ -2961,7 +2971,7 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       relationRows = db.prepare(`
         SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
         FROM bitrix_relations
-        WHERE file IN (${placeholders})
+        WHERE replace(file, char(92), '/') IN (${placeholders})
         ORDER BY file, line, id
       `).all(...normalized) as unknown as BitrixRelationRow[];
     }

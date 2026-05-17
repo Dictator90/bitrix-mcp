@@ -108,7 +108,7 @@ function parseJsonTool<T>(response: ToolResponse): T {
   return JSON.parse(response.content[0]?.text ?? "null") as T;
 }
 
-test("MCP tools index and search a standard Bitrix checkout deployed from autrobin/bitrix.core", async () => {
+test("MCP tools index and search a standard Bitrix checkout deployed from autrobin/bitrix.core", { skip: process.platform === "win32" ? "update.sh requires a Unix shell; do not require Git Bash for Windows test runs" : false }, async () => {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-core-repo-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-core-data-"));
   const repoDir = await cloneBitrixCoreRepository(workDir);

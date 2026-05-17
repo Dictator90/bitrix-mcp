@@ -12,3 +12,4 @@
 - For Bitrix dependency graph work, treat `bitrix_relations` as canonical graph edges and keep traversals bounded/cycle-safe.
 
 - Before large Bitrix tasks, use `bitrix_index_status` and `bitrix_project_overview` to understand index freshness, Composer/autoload mappings, discovered entities, and warnings; use `bitrix_detect_changes` for review tasks and graph tools for dependency analysis.
+- Keep user-visible JSON and indexed relative paths slash-normalized (`/`) for cross-platform stability; do not change outputs back to Windows backslashes.
