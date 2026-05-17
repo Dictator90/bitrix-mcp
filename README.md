@@ -610,3 +610,35 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Phase 17 benchmark reporting
+
+Run benchmark reporting from this repository or from an installed package:
+
+```bash
+npm run benchmark
+# or, after build/install
+bitrix-mcp benchmark
+```
+
+Reports are written to `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`. The benchmark measures incremental `index-all`, `index-project`, `index-template`, optional `index-bitrix`, docs search, LiveAPI search, event search, relation search, graph traversal, impact-radius, detect-changes, SQLite DB size, indexed files, symbols, events, relations, and docs chunks. It skips missing Bitrix roots, missing docs, and unavailable optional indexes with warnings. It does not force a full reindex unless `--force` is passed.
+
+## Documentation map
+
+- [MCP tools](./docs/tools.md) — implemented tools only, with parameters, examples, prompts, usage guidance, and limitations.
+- [Indexing](./docs/indexing.md) — indexing scopes and benchmark reporting.
+- [Bitrix events](./docs/bitrix-events.md) — event-search workflow.
+- [ORM](./docs/orm.md) — D7 entity and usage workflow.
+- [Components](./docs/components.md) — component/template workflow.
+- [Graph](./docs/graph.md) — `bitrix_relations`, neighbors, traversal, and impact radius.
+- [Detect changes](./docs/detect-changes.md) — review workflow.
+- [Security](./docs/security.md) — local data, path restrictions, and network notes.
+- [Examples](./docs/examples.md) — copy-ready prompts.
+
+Recommended AI workflow:
+
+1. General project work: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` as needed → `bitrix_read_file_context` or `bitrix_read_symbol_context`.
+2. Review work: `bitrix_detect_changes` → `bitrix_impact_radius` → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → context tools.
+3. Bitrix events: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
+4. ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
+5. Components: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.
