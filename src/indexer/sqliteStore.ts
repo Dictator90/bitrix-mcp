@@ -342,6 +342,17 @@ function normalizeSlashes(value: string): string {
   return value.replace(/\\/gu, "/");
 }
 
+function normalizedFileLookupCandidates(file: string): string[] {
+  const normalized = normalizeSlashes(file.trim());
+  const withoutCurrentDir = normalized.replace(/^\.\//u, "");
+  return Array.from(new Set([normalized, withoutCurrentDir].filter(Boolean)));
+}
+
+function fileLookupClause(columns: string[], valueCount: number): string {
+  const placeholders = Array.from({ length: valueCount }, () => "?").join(", ");
+  return `(${columns.map((column) => `replace(${column}, char(92), '/') IN (${placeholders})`).join(" OR ")})`;
+}
+
 function relationFileForStorage(relationFile: string, file: IndexFile): string {
   const normalizedRelationFile = normalizeSlashes(relationFile);
   const normalizedAbsolutePath = normalizeSlashes(file.path);
@@ -1601,14 +1612,14 @@ export async function writeIndexToSqlite(dbFile: string, manifest: IndexManifest
       db.prepare("DELETE FROM bitrix_relations WHERE kind = ? AND relation_type = 'handled_by_event_handler'").run(manifest.kind);
       const mailEventRows = db.prepare(`
           SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
           FROM symbols s
           JOIN files f ON f.id = s.file_id
           WHERE s.kind = ? AND s.type = 'mail_event'
         `).all(manifest.kind) as unknown as SymbolRow[];
       const mailHandlerRows = db.prepare(`
           SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+                 s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
           FROM symbols s
           JOIN files f ON f.id = s.file_id
           WHERE s.kind = ? AND s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
@@ -1803,8 +1814,9 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
       params.push(query.api);
     }
     if (query.file !== undefined) {
-      filters.push("(s.file = ? OR f.relative_path = ?)");
-      params.push(query.file, query.file);
+      const fileCandidates = normalizedFileLookupCandidates(query.file);
+      filters.push(fileLookupClause(["s.file", "f.relative_path"], fileCandidates.length));
+      params.push(...fileCandidates, ...fileCandidates);
     }
     const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
     if (kinds.length > 0) {
@@ -1816,7 +1828,7 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}
@@ -1828,7 +1840,7 @@ export async function searchMailEvents(dbFile: string, query: MailEventSearchQue
     if (query.includeHandlers) {
       const handlers = db.prepare(`
         SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-               s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+               s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
         FROM symbols s
         JOIN files f ON f.id = s.file_id
         WHERE s.type = 'event' AND s.module = 'main' AND s.event_name IN ('OnBeforeEventSend', 'OnBeforeEventAdd')
@@ -1868,8 +1880,9 @@ export async function searchSymbolsForContext(dbFile: string, query: SymbolConte
       params.push(query.type);
     }
     if (query.file !== undefined) {
-      filters.push("(s.file = ? OR f.relative_path = ?)");
-      params.push(query.file, query.file);
+      const fileCandidates = normalizedFileLookupCandidates(query.file);
+      filters.push(fileLookupClause(["s.file", "f.relative_path"], fileCandidates.length));
+      params.push(...fileCandidates, ...fileCandidates);
     }
     const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
     if (kinds.length > 0) {
@@ -1932,7 +1945,7 @@ export async function searchAgents(dbFile: string, query: AgentSearchQuery): Pro
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}
@@ -2108,7 +2121,7 @@ export async function searchComponents(dbFile: string, query: ComponentSearchQue
     params.push(limit);
     const rows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s JOIN files f ON f.id = s.file_id
       WHERE ${filters.join(" AND ")}
       ORDER BY s.id DESC
@@ -2907,11 +2920,25 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
   try {
-    const normalized = files.map((file) => file.replace(/\\/g, "/"));
+    const inputCandidates = Array.from(new Set(files.flatMap((file) => normalizedFileLookupCandidates(file))));
+    if (inputCandidates.length === 0) {
+      return emptyIndexedRecordsForFiles();
+    }
+
+    const inputPlaceholders = inputCandidates.map(() => "?").join(", ");
+    const matchedFiles = db.prepare(`
+      SELECT path, relative_path
+      FROM files
+      WHERE replace(path, char(92), '/') IN (${inputPlaceholders}) OR replace(relative_path, char(92), '/') IN (${inputPlaceholders})
+    `).all(...inputCandidates, ...inputCandidates) as Array<{ path: string; relative_path: string }>;
+    const normalized = Array.from(new Set([
+      ...inputCandidates,
+      ...matchedFiles.flatMap((file) => [normalizeSlashes(file.path), normalizeSlashes(file.relative_path)])
+    ]));
     const placeholders = normalized.map(() => "?").join(", ");
     const symbolRows = db.prepare(`
       SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
-             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.signature, s.description, s.component_template, s.params_json
+             s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
       WHERE replace(f.relative_path, char(92), '/') IN (${placeholders}) OR replace(s.file, char(92), '/') IN (${placeholders})

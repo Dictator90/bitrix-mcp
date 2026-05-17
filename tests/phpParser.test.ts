@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import { parsePhpModuleUsages, parsePhpSymbols, parsePhpSymbolsWithDiagnostics } from "../src/liveapi/phpParser.js";
 
 const php = `<?php
@@ -535,4 +536,29 @@ abstract class Base
   assert.equal(mustRun?.visibility, "protected");
   const done = symbols.find((symbol) => symbol.type === "method" && symbol.name === "done");
   assert.equal(done?.final, true);
+});
+
+test("parsePhpSymbolsWithDiagnostics indexes fixture class and method bounds", async () => {
+  const source = await fs.readFile("tests/fixtures/project/index.php", "utf8");
+  const result = parsePhpSymbolsWithDiagnostics(source, "tests/fixtures/project/index.php");
+
+  const classSymbol = result.symbols.find((symbol) => symbol.type === "class" && symbol.name === "DemoComponent");
+  assert.ok(classSymbol);
+  assert.equal(classSymbol.fullyQualifiedName, "DemoComponent");
+  assert.equal(classSymbol.className, "DemoComponent");
+  assert.equal(classSymbol.line, 2);
+  assert.equal(classSymbol.lineEnd, 5);
+  assert.equal(classSymbol.signature, "class DemoComponent");
+
+  const methodSymbol = result.symbols.find((symbol) => symbol.type === "method" && symbol.name === "executeComponent");
+  assert.ok(methodSymbol);
+  assert.equal(methodSymbol.className, "DemoComponent");
+  assert.equal(methodSymbol.fullyQualifiedName, "DemoComponent::executeComponent");
+  assert.equal(methodSymbol.line, 4);
+  assert.equal(methodSymbol.lineEnd, 4);
+  assert.equal(methodSymbol.visibility, "public");
+  assert.equal(methodSymbol.returnType, "void");
+  assert.equal(methodSymbol.signature, "public function executeComponent(): void");
+
+  assert.ok(result.symbols.some((symbol) => symbol.type === "function" && symbol.name === "demo_helper"));
 });
