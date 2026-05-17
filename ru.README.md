@@ -20,7 +20,7 @@ Bitrix MCP полезен, если вы хотите подключить Curso
 ## Системные требования
 
 - ОС: Linux, macOS или Windows / Windows PowerShell.
-- Node.js **22.12+ recommended** (minimum **22.5+**) because Bitrix MCP uses `node:sqlite`.
+- Node.js **22.12+**, потому что Bitrix MCP использует `node:sqlite`.
 - npm **10+**.
 - Доступ к диску с проектом Битрикс, который нужно индексировать.
 - Доступ в интернет рекомендуется при первой индексации документации: официальный репозиторий документации Bitrix Framework клонируется или обновляется по умолчанию.
@@ -39,6 +39,29 @@ Bitrix MCP полезен, если вы хотите подключить Curso
 
 Зависимости для опционального семантического поиска находятся в `embeddings/requirements.txt` и устанавливаются только если вы запускаете Python-сервис embeddings.
 
+## Установка из npm
+
+Установите пакет глобально:
+
+```bash
+npm install -g @mb4it/bitrix-mcp
+```
+
+Или запустите без глобальной установки:
+
+```bash
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
+```
+
+Команда после установки остается `bitrix-mcp`:
+
+```bash
+bitrix-mcp --help
+bitrix-mcp init --agent cursor --no-serve
+bitrix-mcp index-all
+bitrix-mcp serve
+```
+
 ## Быстрый старт
 
 Из корня проекта Битрикс:
@@ -52,7 +75,7 @@ npm run build
 cd /path/to/bitrix/project
 
 # 3. Настройте MCP-клиент, создайте индексы .bitrix-mcp и запустите сервер
-npx bitrix-mcp init
+npx @mb4it/bitrix-mcp init
 ```
 
 Во время `init` выберите одного или несколько AI-агентов из списка. Bitrix MCP создаст или обновит конфигурацию MCP-клиента, добавит reusable-инструкции/rules, построит первичные индексы и запустит MCP-сервер через stdio.
@@ -67,53 +90,53 @@ npx bitrix-mcp init
 
 ```bash
 # Индексировать всё: проект, шаблоны, модули Битрикс, install-ресурсы и документацию
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Показать счетчики индекса и диагностику окружения
-npx bitrix-mcp status
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp doctor
 
 # Запустить MCP-сервер, если индексы уже созданы
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 ```
 
 ## Использование CLI
 
 ```bash
 # Настроить агента, создать .bitrix-mcp индексы и запустить stdio-сервер
-npx bitrix-mcp init
+npx @mb4it/bitrix-mcp init
 
 # Запустить MCP-сервер через stdio для Cursor, PhpStorm, Claude Desktop, Kilo и т.д.
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 
 # Индексировать всё: проект, шаблоны, модули Битрикс, install-ресурсы и документацию
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Индексировать только кодовые области без документации
-npx bitrix-mcp index-code
+npx @mb4it/bitrix-mcp index-code
 
 # Индексировать текущий проект
-npx bitrix-mcp index-project /path/to/project
+npx @mb4it/bitrix-mcp index-project /path/to/project
 
 # Отдельно индексировать шаблоны/компоненты/скрипты/стили
-npx bitrix-mcp index-template /path/to/project
+npx @mb4it/bitrix-mcp index-template /path/to/project
 
 # Индексировать PHP-исходники установленного Bitrix Framework для LiveAPI
 cd /path/to/bitrix/project
-npx bitrix-mcp index-bitrix
+npx @mb4it/bitrix-mcp index-bitrix
 
 # Индексировать install-ресурсы модулей Битрикс
-npx bitrix-mcp index-install /path/to/project
+npx @mb4it/bitrix-mcp index-install /path/to/project
 
 # Зарегистрировать, обновить и проиндексировать источники документации
-npx bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
-npx bitrix-mcp docs-add-path /path/to/local/docs
-npx bitrix-mcp docs-update
-npx bitrix-mcp index-docs
+npx @mb4it/bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
+npx @mb4it/bitrix-mcp docs-add-path /path/to/local/docs
+npx @mb4it/bitrix-mcp docs-update
+npx @mb4it/bitrix-mcp index-docs
 
 # Показать счетчики индекса или выполнить диагностику окружения
-npx bitrix-mcp status
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp doctor
 ```
 
 По умолчанию индексы создаются в `.bitrix-mcp/`. При индексации всегда применяются встроенные исключения для тяжелых и сгенерированных директорий: `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`. Также учитываются правила из `.gitignore`, если файл есть в проекте.
@@ -153,7 +176,7 @@ Bitrix MCP поддерживает два режима:
 
 ## `bitrix-mcp init`
 
-Запускайте `init` из корня проекта Битрикс после глобальной установки `bitrix-mcp` или если команда доступна в `PATH`:
+Запускайте `init` из корня проекта Битрикс после глобальной установки `@mb4it/bitrix-mcp` или если команда `bitrix-mcp` доступна в `PATH`:
 
 ```bash
 cd /path/to/bitrix/project

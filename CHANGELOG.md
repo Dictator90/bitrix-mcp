@@ -2,7 +2,34 @@
 
 ## Unreleased
 
-- Corrected the Node.js runtime requirement to Node.js 22.12+ recommended / 22.5+ minimum for `node:sqlite` compatibility across package metadata and docs.
+## 0.2.0
+
+Initial public npm release under `@mb4it/bitrix-mcp`.
+
+### Added
+
+- Local MCP server for Bitrix Framework / 1C-Bitrix projects.
+- Project, template, Bitrix module, install asset, and documentation indexing.
+- LiveAPI search for PHP symbols and Bitrix APIs.
+- Bitrix event handler search.
+- Module usage search for `Loader::includeModule`, `CModule::IncludeModule`, `IsModuleInstalled`, and `ModuleManager::isModuleInstalled`.
+- Agent, mail event, component, ORM, IBlock, Highloadblock, and option indexing/search.
+- `bitrix_relations` storage and Bitrix-aware dependency graph.
+- Graph neighbors, graph traversal, impact radius, and detect-changes workflows.
+- Source context tools: `bitrix_read_file_context` and `bitrix_read_symbol_context`.
+- Documentation search, docs-for-symbol, and API usage explanation.
+- Optional semantic documentation search via Python embeddings service.
+- Benchmark reporting.
+- Release documentation and npm publication safety metadata for the scoped public package.
+- Build output layout for the published package now emits `dist/cli.js` and runtime files without compiled tests.
+
+### Notes
+
+- Package name is `@mb4it/bitrix-mcp`.
+- Requires Node.js 22.12+ because the package uses `node:sqlite`.
+- CLI command remains `bitrix-mcp`.
+
+- Corrected the Node.js runtime requirement to Node.js 22.12+ for `node:sqlite` compatibility across package metadata and docs.
 - Hardened `bitrix_detect_changes` to reuse graph impact radius, include components, ORM entities/usages, IBlock usages, Highloadblock usages, and options, merge graph risk reasons deterministically, and emit impact-aware CLI/MCP output.
 - Updated README/tool documentation, AGENTS.md guidance, and tests for the expanded detect-changes output, CLI impact summary, and runtime compatibility.
 
