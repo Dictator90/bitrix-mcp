@@ -4,6 +4,10 @@
 
 ### Fixed
 
+<<<<<<< ours
+- Restored `tests/fixtures/project/index.php` class declaration to valid `DemoComponent`, preventing PHP AST fallback and recovering symbol/index/context test coverage.
+=======
+>>>>>>> theirs
 - Hardened symbol-context and detect-changes indexed record lookups to normalize `./`, Windows-backslash, relative, and absolute file filters consistently.
 - Added regression coverage for fixture PHP class/method AST line bounds, SQLite class search, method context lookup, and indexed-record path matching.
 - Stabilized Windows test runs by using slash-normalized relative path expectations and file URL `--import` loader paths for CLI test launches.

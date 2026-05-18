@@ -63,6 +63,16 @@ bitrix-mcp index-all
 bitrix-mcp serve
 ```
 
+## MCP result authority
+
+Bitrix MCP provides deep, specialized indexing of the Bitrix Framework and your project code. When using an AI assistant with Bitrix MCP:
+
+- **Primary Source of Truth**: Treat MCP tool results as authoritative for project symbols, framework APIs, event handlers, ORM entities, and documentation.
+- **Manual Search as Fallback**: AI agents are instructed to search files manually or use \`grep\` only when MCP tools return no results, indicate a stale index, or when you explicitly ask for a manual check.
+- **Authority Rule**: Successful, non-empty MCP results should not be contradicted by unindexed manual assumptions.
+
+This behavior reduces token waste and prevents the assistant from hallucinating based on incomplete manual file scans.
+
 ## Quick start
 
 From the root of your Bitrix project:

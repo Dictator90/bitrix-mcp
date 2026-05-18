@@ -73,45 +73,71 @@ description: Use when working on Bitrix Framework projects with the bitrix-mcp M
 
 # Bitrix MCP
 
-Use the configured \`bitrix-mcp\` MCP server as the primary reference source for Bitrix Framework projects.
+Use the configured \`bitrix-mcp\` MCP server as the primary authoritative reference source for Bitrix Framework projects.
+
+## Authority Rule
+
+Treat Bitrix MCP tool results as the primary source of truth for:
+- project symbols and Bitrix framework symbols;
+- event handlers and module usages;
+- agents, mail events, and ORM entities;
+- components, templates, and IBlock/Highloadblock/options usage;
+- relations, graph impact, and local indexed documentation.
+
+If a Bitrix MCP tool returns a successful, non-empty result, use it as the primary evidence. Do not manually scan project files for the same information unless:
+1. the user explicitly asked to search or read files manually;
+2. the MCP result is empty;
+3. the MCP result indicates that a relevant index is missing or stale;
+4. the result is ambiguous and requires additional context;
+5. the requested information is outside Bitrix MCP coverage.
 
 ## Workflow
 
-1. Call \`bitrix_index_status\` first to understand whether indexes exist and look current.
-2. Call \`bitrix_project_overview\` before large tasks to inspect autoloading, available indexes, discovered Bitrix entities, and warnings.
-3. Search project symbols with \`bitrix_liveapi_search\` before editing unfamiliar PHP, JS, template, component, module, or event-handler code.
-4. Search documentation with \`bitrix_docs_search\` for Bitrix APIs, framework behavior, and examples. Use \`bitrix_semantic_docs_search\` only when it is available and semantic ranking is useful.
-5. Search event handlers with \`bitrix_event_search\` when changing module behavior, component lifecycle code, mail/events, sale/catalog flows, or integration hooks.
-6. Use \`bitrix_detect_changes\` for review tasks, and \`bitrix_graph_neighbors\` / \`bitrix_graph_traverse\` for dependency analysis.
-7. Check \`bitrix_index_status\` when results look stale. Run \`bitrix_index_project\`, \`bitrix_index_template\`, \`bitrix_index_docs\`, or \`bitrix_index_all\` after relevant files or docs have changed.
-8. Prefer project and local documentation evidence over memory. Cite paths, symbols, or documentation resources when explaining Bitrix-specific changes.
+1. **Orientation**: Call \`bitrix_index_status\` and \`bitrix_project_overview\` first to understand the project structure, autoloading, and index health.
+2. **Review/Impact**: Use \`bitrix_detect_changes\` for review tasks. Use \`bitrix_impact_radius\`, \`bitrix_graph_neighbors\`, or \`bitrix_graph_traverse\` for dependency analysis and risk assessment.
+3. **Search**: Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, or \`bitrix_docs_search\` to find symbols, handlers, or documentation.
+4. **Inspection**: Use \`bitrix_read_symbol_context\` or \`bitrix_read_file_context\` after a search returns a file and line number.
+5. **Direct search**: Use manual file search/grep only as a fallback when MCP tools are insufficient or the index is stale.
+
+## Stale Indexes
+
+If MCP returns no result for something that should exist:
+1. Check \`bitrix_index_status\`.
+2. Ask to run or run the relevant indexing tool (\`bitrix_index_project\`, \`bitrix_index_template\`, \`bitrix_index_docs\`, or \`bitrix_index_all\`).
+3. Retry the MCP query before falling back to manual search.
 
 ## Safety
 
 - Do not edit Bitrix core under \`bitrix/\` unless the user explicitly requests it.
 - Prefer extending code under \`local/\`, project templates, or project modules.
-- Keep generated indexes and cache files out of application changes unless the user asks to update them.
 `;
 
 const BITRIX_MCP_RULES = `# Bitrix MCP rules
 
-- Use the \`bitrix-mcp\` MCP server before making Bitrix-specific assumptions.
-- Call \`bitrix_index_status\` first, then \`bitrix_project_overview\` before large tasks.
-- Search LiveAPI/project indexes with \`bitrix_liveapi_search\` before editing unfamiliar symbols, components, templates, modules, or handlers.
-- Search Bitrix documentation with \`bitrix_docs_search\`; use \`bitrix_semantic_docs_search\` only when semantic mode is enabled.
-- Use \`bitrix_event_search\` for event-driven behavior and module hooks.
-- Use \`bitrix_detect_changes\` for reviews and \`bitrix_graph_neighbors\` / \`bitrix_graph_traverse\` for dependency analysis.
-- If MCP results look stale, check \`bitrix_index_status\` and reindex with the narrowest relevant tool.
-- Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`local/\`, project modules, and templates.
+## Authority Rule
+Treat \`bitrix-mcp\` tool results as the primary source of truth for Bitrix Framework and project indexed data. Do not manually scan files if MCP returned a successful result unless it is empty, stale, or manual search was explicitly requested.
+
+## Recommended Workflow
+1. Call \`bitrix_index_status\` and \`bitrix_project_overview\` first.
+2. Use \`bitrix_detect_changes\` and impact tools for changes/reviews.
+3. Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, and \`bitrix_docs_search\` for discovery.
+4. Use \`bitrix_read_symbol_context\` or \`bitrix_read_file_context\` for source inspection.
+5. Manual file search is a fallback, not the default.
+
+## Stale Indexes
+If MCP returns no results for expected data, check \`bitrix_index_status\`, run the relevant reindexing tool (e.g., \`bitrix_index_all\`), and retry the query.
+
+## Safety
+Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`local/\`, project modules, and templates.
 `;
 
 const GUIDANCE_SECTION_START = "<!-- bitrix-mcp:init-guidance:start -->";
 const GUIDANCE_SECTION_END = "<!-- bitrix-mcp:init-guidance:end -->";
 
-async function writeTextFile(filePath: string, value: string): Promise<AgentGuidanceResult> {
+async function writeTextFile(filePath: string, value: string, label = "Bitrix MCP guidance"): Promise<AgentGuidanceResult> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, value.endsWith("\n") ? value : `${value}\n`, "utf8");
-  return { label: "Bitrix MCP guidance", path: filePath };
+  return { label, path: filePath };
 }
 
 async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
@@ -137,12 +163,12 @@ function upsertSection(source: string, section: string): string {
     : `${source.trimEnd()}${source.trim() ? "\n\n" : ""}${normalizedSection}\n`;
 }
 
-async function upsertMarkedSection(filePath: string, section: string, newFileTemplate?: string): Promise<AgentGuidanceResult> {
+async function upsertMarkedSection(filePath: string, section: string, label: string, newFileTemplate?: string): Promise<AgentGuidanceResult> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const source = await readTextFileIfExists(filePath);
   const next = source === undefined ? newFileTemplate ?? `${markedSection(section)}\n` : upsertSection(source, section);
   await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
-  return { label: "Bitrix MCP guidance", path: filePath };
+  return { label, path: filePath };
 }
 
 function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: string } {
@@ -161,7 +187,7 @@ function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: 
   return { frontmatter: source.slice(0, frontmatterEnd), body: source.slice(frontmatterEnd) };
 }
 
-async function upsertCursorRule(filePath: string, section: string): Promise<AgentGuidanceResult> {
+async function upsertCursorRule(filePath: string, section: string, label: string): Promise<AgentGuidanceResult> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const source = await readTextFileIfExists(filePath);
   const next = source === undefined ? cursorRuleContent() : (() => {
@@ -171,11 +197,11 @@ async function upsertCursorRule(filePath: string, section: string): Promise<Agen
   })();
 
   await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
-  return { label: "Bitrix MCP guidance", path: filePath };
+  return { label, path: filePath };
 }
 
 async function writeProjectSkill(context: InitContext): Promise<AgentGuidanceResult> {
-  return writeTextFile(path.join(context.dataDir, "skills", "bitrix-mcp", "SKILL.md"), BITRIX_MCP_SKILL);
+  return writeTextFile(path.join(context.dataDir, "skills", "bitrix-mcp", "SKILL.md"), BITRIX_MCP_SKILL, "canonical skill");
 }
 
 function markdownRuleContent(): string {
@@ -194,51 +220,54 @@ function cursorRuleContent(): string {
   ].join("\n");
 }
 
-type AgentRule = { path: string; mode: "managed" | "cursor"; content: string; newFileTemplate?: string };
+type AgentRule = { path: string; mode: "managed" | "cursor"; content: string; label: string; newFileTemplate?: string };
 
 function agentRulePath(agent: Agent, context: InitContext): AgentRule {
+  const agentLabel = AGENT_CHOICES.find((choice) => choice.id === agent)?.label ?? agent;
+  const label = `${agentLabel} guidance`;
+
   if (agent === "cursor") {
-    return { path: path.join(context.projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), mode: "cursor", content: BITRIX_MCP_RULES };
+    return { path: path.join(context.projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), mode: "cursor", content: BITRIX_MCP_RULES, label: "Cursor rules" };
   }
   if (agent === "claude-code" || agent === "claude-desktop") {
-    return { path: path.join(context.projectRoot, "CLAUDE.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, "CLAUDE.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "vscode") {
-    return { path: path.join(context.projectRoot, ".github", "copilot-instructions.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".github", "copilot-instructions.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "windsurf") {
-    return { path: path.join(context.projectRoot, ".windsurf", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".windsurf", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "cline") {
-    return { path: path.join(context.projectRoot, ".clinerules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".clinerules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "roo-code") {
-    return { path: path.join(context.projectRoot, ".roo", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".roo", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "continue") {
-    return { path: path.join(context.projectRoot, ".continue", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".continue", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "gemini-cli") {
-    return { path: path.join(context.projectRoot, "GEMINI.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, "GEMINI.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "codex") {
-    return { path: path.join(context.projectRoot, "AGENTS.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, "AGENTS.md"), mode: "managed", content: BITRIX_MCP_RULES, label: "Codex guidance", newFileTemplate: markdownRuleContent() };
   }
   if (agent === "kilo-code") {
-    return { path: path.join(context.projectRoot, ".kilocode", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".kilocode", "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "jetbrains") {
-    return { path: path.join(context.projectRoot, ".junie", "guidelines.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+    return { path: path.join(context.projectRoot, ".junie", "guidelines.md"), mode: "managed", content: BITRIX_MCP_RULES, label: "JetBrains guidance", newFileTemplate: markdownRuleContent() };
   }
-  return { path: path.join(context.dataDir, "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, newFileTemplate: markdownRuleContent() };
+  return { path: path.join(context.dataDir, "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
 }
 
 export async function writeAgentGuidance(agent: Agent, context: InitContext): Promise<AgentGuidanceResult[]> {
   const skill = await writeProjectSkill(context);
   const rule = agentRulePath(agent, context);
   const ruleResult = rule.mode === "cursor"
-    ? await upsertCursorRule(rule.path, rule.content)
-    : await upsertMarkedSection(rule.path, rule.content, rule.newFileTemplate);
+    ? await upsertCursorRule(rule.path, rule.content, rule.label)
+    : await upsertMarkedSection(rule.path, rule.content, rule.label, rule.newFileTemplate);
   return [skill, ruleResult];
 }
 
@@ -633,9 +662,15 @@ function printConfigureResults(configResults: WrittenConfig[], guidanceResults: 
       output.write(`${configResult.label}:\n${configResult.note}\n`);
     }
   }
-  const uniqueGuidancePaths = [...new Set(guidanceResults.map((result) => result.path))];
-  for (const guidancePath of uniqueGuidancePaths) {
-    output.write(`Bitrix MCP guidance updated: ${guidancePath}\n`);
+
+  output.write("Bitrix MCP guidance installed:\n");
+  const uniqueGuidance = new Map<string, string>();
+  for (const result of guidanceResults) {
+    // Preserve the most descriptive label if paths collide (e.g. agent guidance over canonical)
+    uniqueGuidance.set(result.path, result.label);
+  }
+  for (const [filePath, label] of uniqueGuidance.entries()) {
+    output.write(`- ${label}: ${filePath}\n`);
   }
 }
 

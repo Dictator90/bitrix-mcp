@@ -12,6 +12,10 @@ Recommended AI workflow:
 
 Implemented tool groups: index/status, project overview, LiveAPI search, event search, module usage search, agents, mail events, components, ORM, IBlock/Highloadblock/options, relations, graph neighbors/traverse, impact radius, detect changes, autoload, docs search, docs for symbol / API usage explanation, file/symbol context, inheritance search, and CLI benchmarks.
 
+## Tool results authority
+
+Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framework and project indexed data. Manual file search should be used as a fallback only when MCP tools return empty or stale results.
+
 ## Tool reference
 
 ### `bitrix_index_status`
