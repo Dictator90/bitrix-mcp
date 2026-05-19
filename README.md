@@ -113,6 +113,25 @@ npx @mb4it/bitrix-mcp doctor
 npx @mb4it/bitrix-mcp serve
 ```
 
+## Common workflows
+
+| Goal | Command | What it changes | When to use |
+| --- | --- | --- | --- |
+| Configure one MCP client and build initial indexes without occupying stdio | `npx bitrix-mcp init --agent cursor --no-serve` | Updates the selected client MCP config and guidance/rule files, creates `.bitrix-mcp/`, indexes missing project/template/Bitrix code scopes, and indexes docs. | Recommended first setup for scripts, CI-like shells, or any terminal where you do not want `init` to stay attached as an MCP server. |
+| Configure only client files and guidance | `npx bitrix-mcp configure --agent cursor` | Updates MCP config and guidance/rule files only; does not build indexes and does not start the server. | Use when indexes already exist or another process will run indexing separately. |
+| Refresh every index with official docs | `npx bitrix-mcp index-all` | Rebuilds/updates project, template, Bitrix module, install asset, and documentation indexes in `.bitrix-mcp/`; official docs are auto-registered/updated by default. | Use after larger codebase changes, dependency/module updates, or when docs search should include the official Bitrix Framework docs repository. |
+| Fast path without official docs | `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all` | Rebuilds/updates all code indexes and indexes only local/explicit documentation sources; skips cloning or pulling the official docs repository. | Use in offline environments, first-run demos, CI jobs without network access, or whenever local docs are enough. |
+| Refresh code only | `npx bitrix-mcp index-code` | Rebuilds/updates project, template, Bitrix module, and install asset indexes; leaves documentation unchanged. | Use after PHP/template/module changes when documentation was not changed. |
+| Verify configuration and health | `npx bitrix-mcp doctor --verbose` | Does not modify project files; creates/opens the SQLite DB if needed and prints health checks plus resolved runtime config. | Use when an MCP client cannot find indexes/docs, when paths look wrong, or after changing environment variables. |
+
+The fast no-official-docs path is intentionally a single-command override:
+
+```bash
+BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all
+```
+
+Use the same environment variable with `npx` if the package is not installed globally: `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 npx bitrix-mcp index-all`.
+
 ## CLI usage
 
 ```bash
@@ -592,6 +611,19 @@ For a combined health check and configuration dump, run `bitrix-mcp doctor --ver
 bitrix-mcp doctor --verbose
 bitrix-mcp doctor --json
 ```
+
+Common `doctor` warnings and fixes:
+
+| Warning | What it usually means | What to do |
+| --- | --- | --- |
+| `WARNING bitrixRoot: Bitrix root was not detected` | The current workspace does not contain `./bitrix`, and `BITRIX_ROOT` is not set. Code indexing still works for project/templates, but LiveAPI core indexing is skipped. | Run commands from the Bitrix project root, pass a root to `index-bitrix`, or export `BITRIX_ROOT=/path/to/bitrix/project`. |
+| `WARNING bitrixRoot: BITRIX_ROOT is set ... but .../bitrix is missing` | `BITRIX_ROOT` points to the wrong directory or to a checkout without the `bitrix/` directory. | Fix `BITRIX_ROOT` and rerun `bitrix-mcp doctor`; then rerun `bitrix-mcp index-bitrix` or `bitrix-mcp index-code`. |
+| `WARNING docsSources: No documentation paths or registered documentation sources found` | No local docs path is configured and no docs source was registered in `.bitrix-mcp/`. | Add Markdown/text files under `docs/`, run `bitrix-mcp docs-add-path /path/to/docs`, or allow official docs with `BITRIX_MCP_OFFICIAL_DOCS_ENABLED=1 bitrix-mcp index-docs`. |
+| `WARNING docsSources: Missing documentation source directories` | A configured docs path or Git checkout directory no longer exists. | Restore the directory, update `BITRIX_MCP_DOCS_PATHS`, remove/re-add the docs source, or run `bitrix-mcp docs-update` for Git sources. |
+| `WARNING bitrixmcpignore: .bitrixmcpignore is not present` | This is only a reminder that Bitrix MCP will use built-in ignores and `.gitignore` rules. | Optional: create `.bitrixmcpignore` if you need to exclude private/generated files from Bitrix MCP indexes. |
+| `WARNING phpParse: ... used regex fallback` | Some PHP files could not be parsed by the AST parser, so Bitrix MCP indexed them with a regex fallback. | Reindex with `BITRIX_MCP_DEBUG_PARSE=1 bitrix-mcp index-code` to print file paths, then fix invalid PHP if needed. Existing fallback results are usually still searchable. |
+| `WARNING embeddingsService: ... unavailable` | Semantic search is enabled, but the Python embeddings service is not reachable. | Start the service from `embeddings/`, check `BITRIX_MCP_EMBEDDINGS_URL`, or unset `BITRIX_MCP_SEMANTIC_ENABLED` if you only need SQLite FTS docs search. |
+| `WARNING embeddingsService: ... document count differs` | SQLite docs were reindexed after embeddings were last populated. | Run `bitrix-mcp index-embeddings` after `bitrix-mcp index-docs`, or run `bitrix-mcp index-docs --embeddings` while the service is running. |
 
 You can also POST chunks to `/index` manually:
 
