@@ -1,15 +1,27 @@
 {
-  "name": "bitrix-mcp",
-  "version": "0.1.0",
+  "name": "@mb4it/bitrix-mcp",
+  "version": "0.2.1",
   "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
   "type": "module",
   "bin": {
     "bitrix-mcp": "dist/cli.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dictator90/bitrix-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dictator90/bitrix-mcp/issues"
+  },
+  "homepage": "https://github.com/Dictator90/bitrix-mcp#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "test": "node --test --import tsx tests/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "start": "node dist/cli.js serve",
     "benchmark": "tsx scripts/benchmark.ts"
   },
@@ -26,14 +38,16 @@
     "typescript": "^5.8.3"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.12.0"
   },
   "files": [
     "dist",
     "docs",
     "embeddings",
     "README.md",
-    "ru.README.md"
+    "ru.README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "keywords": [
     "bitrix",

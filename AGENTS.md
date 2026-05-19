@@ -1,0 +1,15 @@
+# Agent Instructions
+
+- Record every user-visible change in `CHANGELOG.md`; create the file if it does not exist.
+- Follow PSR-12 for PHP code.
+- Follow BEM for markup/CSS and avoid inline `style` attributes unless unavoidable.
+- For Bitrix module/package development, verify Bitrix APIs against documentation or source packages instead of inventing behavior.
+- Prefer `rg`/targeted file reads over recursive `ls` or `grep`.
+- Run relevant type checks, tests, and builds before finalizing changes when practical.
+- Use Node.js 22.12+ when running this project; it depends on `node:sqlite`/`DatabaseSync` and does not support Node.js 20.
+- For benchmark work, keep reports in `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`, skip missing optional indexes gracefully, and do not force full reindexing unless `--force` is explicitly requested.
+
+- For Bitrix dependency graph work, treat `bitrix_relations` as canonical graph edges and keep traversals bounded/cycle-safe.
+
+- Before large Bitrix tasks, use `bitrix_index_status` and `bitrix_project_overview` to understand index freshness, Composer/autoload mappings, discovered entities, and warnings; use `bitrix_detect_changes` for review tasks and graph tools for dependency analysis.
+- Keep user-visible JSON and indexed relative paths slash-normalized (`/`) for cross-platform stability; do not change outputs back to Windows backslashes.

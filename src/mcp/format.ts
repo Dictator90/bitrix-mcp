@@ -1,4 +1,4 @@
-import type { EventRecord, SearchResult, SymbolRecord } from "../types.js";
+import type { AutoloadRecord, BitrixRelationRecord, EventRecord, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OptionUsageRecord, OrmEntityRecord, OrmUsageRecord, SearchResult, SymbolRecord } from "../types.js";
 import type { DocSearchResult } from "../liveapi/search.js";
 import type { SemanticSearchHit } from "../search/embeddingsClient.js";
 
@@ -102,7 +102,7 @@ export function formatLiveApiSearchResults(results: SearchResult<SymbolRecord>[]
     kind: result.item.kind,
     name: result.item.name,
     module: result.item.module,
-    file: result.item.file,
+    file: result.item.relativeFile ?? result.item.file,
     line: result.item.line,
     signature: normalized.includeSignature ? truncateText(result.item.signature, normalized.maxSignatureChars) : undefined
   }));
@@ -120,7 +120,7 @@ export function formatEventSearchResults(results: SearchResult<EventRecord>[] | 
     kind: result.item.kind,
     name: result.item.eventName,
     module: result.item.module,
-    file: result.item.file,
+    file: result.item.relativeFile ?? result.item.file,
     line: result.item.line,
     signature: normalized.includeSignature ? truncateText(result.item.signature, normalized.maxSignatureChars) : undefined
   }));
@@ -160,5 +160,256 @@ export function formatSemanticDocSearchResults(results: SemanticSearchHit[], opt
     title: typeof result.metadata.title === "string" ? result.metadata.title : undefined,
     path: typeof result.metadata.path === "string" ? result.metadata.path : undefined,
     excerpt: excerptText(result.text, normalized.query, normalized.maxTextChars)
+  }));
+}
+
+
+export interface AgentSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatAgentSearchResults(results: SymbolRecord[] | undefined, options: AgentSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((agent) => compactObject({
+    name: agent.name,
+    module: agent.module,
+    periodic: agent.periodic,
+    interval: agent.interval,
+    kind: agent.kind,
+    file: agent.relativeFile ?? agent.file,
+    line: agent.line,
+    signature: agent.signature
+  }));
+}
+
+
+export interface MailEventSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatMailEventSearchResults(results: SymbolRecord[] | undefined, options: MailEventSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((mailEvent) => compactObject({
+    eventName: mailEvent.eventName,
+    api: mailEvent.api,
+    siteId: mailEvent.siteId,
+    kind: mailEvent.kind,
+    file: mailEvent.relativeFile ?? mailEvent.file,
+    line: mailEvent.line,
+    signature: mailEvent.signature,
+    handlers: (mailEvent as SymbolRecord & { handlers?: SymbolRecord[] }).handlers?.map((handler) => compactObject({
+      eventName: handler.eventName,
+      handlerClass: handler.handlerClass,
+      handlerMethod: handler.handlerMethod,
+      handlerFunction: handler.handlerFunction,
+      kind: handler.kind,
+      file: handler.relativeFile ?? handler.file,
+      line: handler.line,
+      signature: handler.signature
+    }))
+  }));
+}
+
+export interface ModuleUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export interface IblockUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export interface HlblockUsageSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export interface OptionSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatIblockUsageSearchResults(results: IblockUsageRecord[] | undefined, options: IblockUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    iblockId: usage.iblockId,
+    api: usage.api,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    contextType: usage.contextType,
+    contextName: usage.contextName,
+    signature: usage.signature
+  }));
+}
+
+
+export function formatHlblockUsageSearchResults(results: HlblockUsageRecord[] | undefined, options: HlblockUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    hlblockId: usage.hlblockId,
+    api: usage.api,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    contextType: usage.contextType,
+    contextName: usage.contextName,
+    signature: usage.signature
+  }));
+}
+
+
+
+export function formatOptionSearchResults(results: OptionUsageRecord[] | undefined, options: OptionSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    type: usage.type,
+    module: usage.module,
+    name: usage.name,
+    operation: usage.operation,
+    api: usage.api,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    contextType: usage.contextType,
+    contextName: usage.contextName,
+    signature: usage.signature
+  }));
+}
+
+export function formatModuleUsageSearchResults(results: ModuleUsageRecord[] | undefined, options: ModuleUsageSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((usage) => compactObject({
+    module: usage.module,
+    call: usage.call,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    signature: usage.signature
+  }));
+}
+
+export interface RelationSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatBitrixRelationSearchResults(results: BitrixRelationRecord[] | undefined, options: RelationSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") {
+    return results;
+  }
+
+  return results?.map((relation) => compactObject({
+    source: `${relation.sourceType}:${relation.sourceName}`,
+    target: `${relation.targetType}:${relation.targetName}`,
+    relationType: relation.relationType,
+    module: relation.module,
+    kind: relation.kind,
+    file: relation.file,
+    line: relation.line,
+    signature: relation.signature
+  }));
+}
+
+export interface OrmSearchFormatOptions {
+  format?: "compact" | "full";
+}
+
+export function formatOrmEntityResults(results: OrmEntityRecord[] | undefined, options: OrmSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((entity) => compactObject({
+    className: entity.className,
+    tableName: entity.tableName,
+    module: entity.module,
+    kind: entity.kind,
+    file: entity.relativeFile ?? entity.file,
+    line: entity.line,
+    fields: entity.fields.map((field) => compactObject({ name: field.name, type: field.type, referenceClass: field.referenceClass, options: field.options })),
+    references: entity.references.map((field) => compactObject({ name: field.name, type: field.type, referenceClass: field.referenceClass }))
+  }));
+}
+
+export function formatOrmUsageResults(results: OrmUsageRecord[] | undefined, options: OrmSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((usage) => compactObject({
+    entity: usage.entity,
+    method: usage.method,
+    usageKind: usage.usageKind,
+    module: usage.module,
+    kind: usage.kind,
+    file: usage.relativeFile ?? usage.file,
+    line: usage.line,
+    signature: usage.signature
+  }));
+}
+
+
+export interface ComponentSearchFormatOptions { format?: "compact" | "full"; }
+
+export function formatComponentSearchResults(results: SymbolRecord[] | undefined, options: ComponentSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((component) => compactObject({
+    component: component.name,
+    template: component.template,
+    params: component.params,
+    kind: component.kind,
+    file: component.relativeFile ?? component.file,
+    line: component.line,
+    signature: component.signature
+  }));
+}
+
+export function formatComponentContextResult(result: unknown, options: ComponentSearchFormatOptions = {}): unknown {
+  if (options.format === "full" || typeof result !== "object" || result === null) return result;
+  const context = result as {
+    component?: string;
+    template?: string;
+    calls?: SymbolRecord[];
+    templateFiles?: Array<{ relativePath?: string; path: string; kind: string }>;
+    assets?: Array<{ relativePath?: string; path: string; kind: string }>;
+    parameters?: unknown[];
+    relations?: BitrixRelationRecord[];
+    possibleTemplatePaths?: string[];
+  };
+  return compactObject({
+    component: context.component,
+    template: context.template,
+    calls: context.calls?.map((call) => compactObject({ file: call.relativeFile ?? call.file, line: call.line, params: call.params, signature: call.signature })),
+    templateFiles: context.templateFiles?.map((file) => compactObject({ file: file.relativePath ?? file.path, kind: file.kind })),
+    assets: context.assets?.map((file) => compactObject({ file: file.relativePath ?? file.path, kind: file.kind })),
+    parameters: context.parameters,
+    relations: context.relations?.map((relation) => compactObject({ source: `${relation.sourceType}:${relation.sourceName}`, target: `${relation.targetType}:${relation.targetName}`, relationType: relation.relationType, file: relation.file, line: relation.line })),
+    possibleTemplatePaths: context.possibleTemplatePaths
+  });
+}
+
+
+export interface AutoloadSearchFormatOptions { format?: "compact" | "full"; }
+
+export function formatAutoloadSearchResults(results: AutoloadRecord[] | undefined, options: AutoloadSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((record) => compactObject({
+    type: record.type,
+    namespace: record.namespace,
+    paths: record.paths && record.paths.length > 0 ? record.paths : undefined,
+    file: record.file,
+    package: record.package,
+    version: record.version,
+    dev: record.dev || undefined,
+    sourceFile: record.sourceFile
   }));
 }

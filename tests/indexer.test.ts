@@ -9,13 +9,225 @@ import { promisify } from "node:util";
 import { buildIndex, readIndex } from "../src/indexer/indexer.js";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { getIndexStatus, readIndexWarnings } from "../src/indexer/sqliteStore.js";
-import { addPathDocSource, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
+import { clearBitrixRelationsByFile, clearBitrixRelationsByKind, ensureSqliteStore, getIndexStatus, readIndexWarnings, getOrmEntityMap, getComponentContext, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, searchDocSymbolRefs, searchSymbolsForContext, readIndexedRecordsForFiles, writeBitrixRelations, writeDocsToSqlite } from "../src/indexer/sqliteStore.js";
+import { addPathDocSource, extractDocSymbolRefs, indexDocResourcesToSqlite, listDocResources, prepareEmbeddingDocumentsFromSqlite } from "../src/resources/docs.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents } from "../src/liveapi/search.js";
 import { formatDoctor, runDoctor } from "../src/indexer/actions.js";
+import { possibleComponentTemplateRelativePaths } from "../src/indexer/template.js";
 
 const fixtureRoot = path.resolve("tests/fixtures/project");
 const execFileAsync = promisify(execFile);
+
+function slashPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+
+test("extracts Bitrix API symbols from documentation text", () => {
+  const symbols = extractDocSymbolRefs(`
+# CIBlockElement::GetList
+Use CIBlockElement::GetList with CIBlockSection::GetList.
+Call Loader::includeModule('iblock') before Option::get.
+Register AddEventHandler for OnBeforeEventSend or OnSaleOrderSaved.
+ORM examples include DataManager, ReferenceField, ExpressionField, and HighloadBlockTable.
+  `);
+
+  assert.ok(symbols.includes("CIBlockElement::GetList"));
+  assert.ok(symbols.includes("CIBlockSection::GetList"));
+  assert.ok(symbols.includes("Loader::includeModule"));
+  assert.ok(symbols.includes("Option::get"));
+  assert.ok(symbols.includes("AddEventHandler"));
+  assert.ok(symbols.includes("OnBeforeEventSend"));
+  assert.ok(symbols.includes("OnSaleOrderSaved"));
+  assert.ok(symbols.includes("DataManager"));
+  assert.ok(symbols.includes("ReferenceField"));
+  assert.ok(symbols.includes("ExpressionField"));
+  assert.ok(symbols.includes("HighloadBlockTable"));
+});
+
+test("doc_symbol_refs SQLite storage inserts and searches by symbol", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-doc-symbol-refs-"));
+  const dbFile = sqlitePath(dataDir);
+
+  await writeDocsToSqlite(dbFile, [{
+    uri: "bitrix-docs://framework/iblock/getlist",
+    title: "CIBlockElement::GetList",
+    path: "/docs/iblock/getlist.md",
+    mimeType: "text/markdown",
+    size: 120,
+    mtimeMs: 1,
+    chunkIndex: 0,
+    text: "CIBlockElement::GetList returns iblock elements. Check filter and selected fields.",
+    symbolRefs: ["CIBlockElement::GetList"]
+  }]);
+
+  const results = await searchDocSymbolRefs(dbFile, "CIBlockElement::GetList", 5);
+  assert.equal(results?.length, 1);
+  assert.equal(results?.[0]?.title, "CIBlockElement::GetList");
+  assert.equal(results?.[0]?.docUri, "bitrix-docs://framework/iblock/getlist");
+  assert.match(results?.[0]?.excerpt ?? "", /filter and selected fields/);
+
+  const missing = await searchDocSymbolRefs(dbFile, "CEvent::Send", 5);
+  assert.deepEqual(missing, []);
+});
+
+
+test("indexes Bitrix option reads and writes with relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-options-"));
+  const optionFile = path.join(root, "options.php");
+  await fs.mkdir(path.dirname(optionFile), { recursive: true });
+  await fs.writeFile(optionFile, String.raw`<?php
+use Bitrix\Main\Config\Option;
+
+function vendor_option_reader(): void
+{
+    Option::get('vendor.module', 'some_option');
+    Option::set('vendor.module', 'set_option', 'Y');
+    \Bitrix\Main\Config\Option::get('vendor.module', 'fq_option');
+    COption::GetOptionString('vendor.module', 'legacy_string');
+    COption::SetOptionString('vendor.module', 'legacy_set', 'N');
+    COption::GetOptionInt('vendor.module', 'legacy_int');
+    COption::SetOptionInt('vendor.module', 'legacy_set_int', 1);
+    Option::get('vendor.module', $dynamicName);
+}
+`);
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-options-db-"));
+  const dbFile = sqlitePath(dataDir);
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project.json") });
+
+  const all = await searchOptionUsages(dbFile, { module: "vendor.module", limit: 20 });
+  assert.equal(all?.length, 7);
+  assert.ok(all?.some((usage) => usage.name === "some_option" && usage.operation === "get" && usage.api === "Option::get"));
+  assert.ok(all?.some((usage) => usage.name === "set_option" && usage.operation === "set" && usage.api === "Option::set"));
+  assert.ok(all?.some((usage) => usage.name === "fq_option" && usage.api === "Bitrix\\Main\\Config\\Option::get"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_string" && usage.api === "COption::GetOptionString"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_set" && usage.api === "COption::SetOptionString"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_int" && usage.api === "COption::GetOptionInt"));
+  assert.ok(all?.some((usage) => usage.name === "legacy_set_int" && usage.api === "COption::SetOptionInt"));
+
+  const dynamic = await searchOptionUsages(dbFile, { query: "dynamicName", limit: 20 });
+  assert.equal(dynamic?.length, 0);
+
+  const setOnly = await searchOptionUsages(dbFile, { operation: "set", limit: 20 });
+  assert.equal(setOnly?.length, 3);
+
+  const relations = await searchBitrixRelations(dbFile, { targetType: "option", targetName: "vendor.module:some_option", limit: 10 });
+  assert.ok(relations?.some((relation) => relation.sourceType === "file" && relation.relationType === "uses_option"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "module" && relation.relationType === "defines_option"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "function" && relation.sourceName.endsWith("vendor_option_reader") && relation.relationType === "uses_option"));
+});
+
+test("Bitrix relations SQLite storage creates table and indexes", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-schema-"));
+  const dbFile = sqlitePath(dataDir);
+
+  await ensureSqliteStore(dbFile);
+
+  const db = new DatabaseSync(dbFile);
+  try {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'bitrix_relations'").get();
+    assert.ok(table);
+    const indexes = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'bitrix_relations'").all() as Array<{ name: string }>).map((row) => row.name));
+    assert.ok(indexes.has("idx_bitrix_relations_relation_type"));
+    assert.ok(indexes.has("idx_bitrix_relations_source"));
+    assert.ok(indexes.has("idx_bitrix_relations_target"));
+    assert.ok(indexes.has("idx_bitrix_relations_file"));
+    assert.ok(indexes.has("idx_bitrix_relations_kind"));
+    assert.ok(indexes.has("idx_bitrix_relations_module"));
+  } finally {
+    db.close();
+  }
+});
+
+test("Bitrix relations SQLite storage inserts and searches relations", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-search-"));
+  const dbFile = sqlitePath(dataDir);
+  const fileA = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "agent.php");
+  const fileB = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "event.php");
+
+  await writeBitrixRelations(dbFile, [
+    {
+      sourceType: "agent",
+      sourceName: "Vendor\\Module\\Agent::run",
+      targetType: "class",
+      targetName: "Vendor\\Module\\Service",
+      relationType: "calls",
+      file: fileA,
+      line: 12,
+      module: "vendor.module",
+      kind: "agent",
+      signature: "Agent::run();",
+      metadata: { interval: 60 }
+    },
+    {
+      sourceType: "event",
+      sourceName: "main:OnBeforeProlog",
+      targetType: "method",
+      targetName: "Vendor\\Module\\Handler::onBeforeProlog",
+      relationType: "handles",
+      file: fileB,
+      line: 24,
+      module: "main",
+      kind: "event"
+    },
+    {
+      sourceType: "component",
+      sourceName: "bitrix:news.list",
+      targetType: "module",
+      targetName: "iblock",
+      relationType: "requires",
+      file: fileB,
+      line: 42,
+      module: "iblock",
+      kind: "component"
+    }
+  ]);
+
+  const allRelations = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(allRelations?.length, 3);
+
+  const sourceResults = await searchBitrixRelations(dbFile, { sourceType: "agent", sourceName: "Vendor\\Module\\Agent::run" });
+  assert.equal(sourceResults?.length, 1);
+  assert.equal(sourceResults?.[0]?.targetName, "Vendor\\Module\\Service");
+  assert.deepEqual(sourceResults?.[0]?.metadata, { interval: 60 });
+
+  const targetResults = await searchBitrixRelations(dbFile, { targetType: "method", targetName: "Vendor\\Module\\Handler::onBeforeProlog" });
+  assert.equal(targetResults?.length, 1);
+  assert.equal(targetResults?.[0]?.sourceName, "main:OnBeforeProlog");
+
+  const relationTypeResults = await searchBitrixRelations(dbFile, { relationType: "requires" });
+  assert.equal(relationTypeResults?.length, 1);
+  assert.equal(relationTypeResults?.[0]?.sourceName, "bitrix:news.list");
+});
+
+test("Bitrix relations SQLite storage clears by kind and file", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-relations-clear-"));
+  const dbFile = sqlitePath(dataDir);
+  const fileA = path.join(fixtureRoot, "a.php");
+  const fileB = path.join(fixtureRoot, "b.php");
+
+  await writeBitrixRelations(dbFile, [
+    { sourceType: "event", sourceName: "main:OnPageStart", targetType: "function", targetName: "pageStart", relationType: "handles", file: fileA, line: 10, module: "main", kind: "event" },
+    { sourceType: "event", sourceName: "main:OnBeforeProlog", targetType: "method", targetName: "Handler::run", relationType: "handles", file: fileB, line: 20, module: "main", kind: "event" },
+    { sourceType: "agent", sourceName: "Agent::run", targetType: "class", targetName: "Service", relationType: "calls", file: fileB, line: 30, module: "vendor.module", kind: "agent" }
+  ]);
+
+  assert.equal(await clearBitrixRelationsByKind(dbFile, "event"), 2);
+  let remaining = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(remaining?.length, 1);
+  assert.equal(remaining?.[0]?.kind, "agent");
+
+  await writeBitrixRelations(dbFile, [
+    { sourceType: "component", sourceName: "bitrix:news", targetType: "module", targetName: "iblock", relationType: "requires", file: fileA, line: 40, module: "iblock", kind: "component" },
+    { sourceType: "orm", sourceName: "Vendor\\Table", targetType: "table", targetName: "b_vendor", relationType: "maps", file: fileB, line: 50, module: "vendor.module", kind: "orm" }
+  ]);
+
+  assert.equal(await clearBitrixRelationsByFile(dbFile, fileB), 2);
+  remaining = await searchBitrixRelations(dbFile, { limit: 10 });
+  assert.equal(remaining?.length, 1);
+  assert.equal(remaining?.[0]?.file, fileA);
+});
 
 async function createGitDocsRepository(): Promise<string> {
   const repo = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-docs-git-"));
@@ -33,6 +245,36 @@ async function createGitDocsRepository(): Promise<string> {
   return repo;
 }
 
+
+
+
+test("buildIndex indexes Bitrix agents and writes relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-agents-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-agents-data-"));
+  const installFile = path.join(root, "local", "modules", "vendor.module", "install", "index.php");
+  await fs.mkdir(path.dirname(installFile), { recursive: true });
+  await fs.writeFile(installFile, String.raw`<?php
+CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400);
+CAgent::AddAgent("vendor_agent_run();", "vendor.module", "Y", 60);
+`, "utf8");
+
+  await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+  const agents = await searchAgents(dbFile, { module: "vendor.module", kind: "install", limit: 10 });
+
+  const staticAgent = agents?.find((agent) => agent.name === "\\Vendor\\Module\\Agent::run");
+  assert.equal(staticAgent?.periodic, "N");
+  assert.equal(staticAgent?.interval, 86400);
+  assert.equal(staticAgent?.relativeFile, slashPath("local/modules/vendor.module/install/index.php"));
+
+  const relations = await searchBitrixRelations(dbFile, { targetType: "agent", targetName: "\\Vendor\\Module\\Agent::run", limit: 10 });
+  assert.ok(relations?.some((relation) => relation.sourceType === "module" && relation.sourceName === "vendor.module" && relation.relationType === "registers_agent"));
+  assert.ok(relations?.some((relation) => relation.sourceType === "file" && relation.relationType === "registers_agent"));
+
+  const methodRelations = await searchBitrixRelations(dbFile, { sourceType: "agent", sourceName: "\\Vendor\\Module\\Agent::run", targetType: "method", limit: 10 });
+  assert.equal(methodRelations?.[0]?.relationType, "calls_method");
+  assert.equal(methodRelations?.[0]?.targetName, "\\Vendor\\Module\\Agent::run");
+});
 
 test("buildIndex records PHP parse fallback diagnostics", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-broken-php-"));
@@ -98,6 +340,13 @@ test("SQLite FTS searches classes, methods, events, and docs", async () => {
 
   const classResults = await searchLiveApi(sqlitePath(dataDir), { query: "DemoComponent", type: "class", limit: 5 });
   assert.equal(classResults?.[0]?.item.name, "DemoComponent");
+  assert.equal(classResults?.[0]?.item.line, 2);
+  assert.equal(classResults?.[0]?.item.lineEnd, 5);
+
+  const contextSymbols = await searchSymbolsForContext(sqlitePath(dataDir), { name: "executeComponent", type: "method", file: "./index.php", limit: 5 });
+  assert.equal(contextSymbols?.[0]?.name, "executeComponent");
+  assert.equal(contextSymbols?.[0]?.line, 4);
+  assert.equal(contextSymbols?.[0]?.lineEnd, 4);
 
   const methodResults = await searchLiveApi(sqlitePath(dataDir), { query: "execute", type: "method", limit: 5 });
   assert.equal(methodResults?.[0]?.item.name, "executeComponent");
@@ -165,7 +414,7 @@ test("documentation markdown chunks preserve section heading metadata", async ()
   const results = await searchSqliteDocs(sqlitePath(dataDir), { query: "unique-heading-preservation-token", limit: 5 });
   assert.equal(results?.[0]?.item.headingPath, "Framework Guide > Caching > Managed Cache Details");
   assert.equal(results?.[0]?.item.sectionAnchor, "managed-cache-details");
-  assert.equal(results?.[0]?.item.relativePath, path.join("framework", "markdown-headings.md"));
+  assert.equal(results?.[0]?.item.relativePath, slashPath("framework/markdown-headings.md"));
 
   const db = new DatabaseSync(sqlitePath(dataDir));
   try {
@@ -179,7 +428,7 @@ test("documentation markdown chunks preserve section heading metadata", async ()
     assert.equal(row?.heading_path, "Framework Guide > Caching > Managed Cache Details");
     assert.equal(row?.section_anchor, "managed-cache-details");
     assert.match(row?.source_uri ?? "", /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md$/);
-    assert.equal(row?.relative_path, path.join("framework", "markdown-headings.md"));
+    assert.equal(row?.relative_path, slashPath("framework/markdown-headings.md"));
   } finally {
     db.close();
   }
@@ -199,7 +448,7 @@ test("documentation chunks are prepared as embeddings documents", async () => {
   assert.match(headingDocument.id, /^bitrix-docs:\/\/path-\d+\/framework\/markdown-headings\.md#chunk-\d+$/);
   assert.equal(headingDocument.metadata?.headingPath, "Framework Guide > Caching > Managed Cache Details");
   assert.equal(headingDocument.metadata?.sectionAnchor, "managed-cache-details");
-  assert.equal(headingDocument.metadata?.relativePath, path.join("framework", "markdown-headings.md"));
+  assert.equal(headingDocument.metadata?.relativePath, slashPath("framework/markdown-headings.md"));
 });
 
 
@@ -590,6 +839,22 @@ test("incremental build removes deleted files from SQLite", async () => {
 });
 
 
+
+test("buildIndex skips generated/cache/upload/vendor and node_modules directories", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignored-dirs-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-ignored-dirs-data-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  await fs.writeFile(path.join(root, "keep.php"), "<?php function keep_generated_ignore(): void {}\n", "utf8");
+  for (const ignored of ["generated", "cache", "upload", "vendor", "node_modules"]) {
+    await fs.mkdir(path.join(root, ignored), { recursive: true });
+    await fs.writeFile(path.join(root, ignored, "ignored.php"), `<?php function ignored_${ignored.replace(/[^a-z]/g, "_")}(): void {}\n`, "utf8");
+  }
+
+  const manifest = await buildIndex({ root, kind: "project", outFile });
+
+  assert.deepEqual(manifest.files.map((file) => file.relativePath), ["keep.php"]);
+});
+
 test("readIndex falls back to legacy JSON files", async () => {
   const legacyFile = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-legacy-")), "project-index.json");
   const legacyManifest = {
@@ -603,4 +868,426 @@ test("readIndex falls back to legacy JSON files", async () => {
   await fs.writeFile(legacyFile, JSON.stringify(legacyManifest), "utf8");
 
   assert.deepEqual(await readIndex(legacyFile, "project"), legacyManifest);
+});
+
+test("buildIndex writes event handler relations into bitrix_relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-event-relations-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-event-relations-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+EventManager::getInstance()->addEventHandler(
+    'main',
+    'OnBeforeProlog',
+    ['Vendor\\Module\\Handler', 'onBeforeProlog']
+);
+AddEventHandler('sale', 'OnSaleOrderSaved', function () {});
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+
+  const eventToHandler = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "event",
+    sourceName: "main:OnBeforeProlog",
+    relationType: "handles_event",
+    limit: 5
+  });
+  assert.equal(eventToHandler?.[0]?.targetType, "method");
+  assert.equal(eventToHandler?.[0]?.targetName, "Vendor\\Module\\Handler::onBeforeProlog");
+  assert.equal(eventToHandler?.[0]?.module, "main");
+  assert.equal(eventToHandler?.[0]?.kind, "project");
+
+  const fileToEvent = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "file",
+    sourceName: slashPath("local/php_interface/init.php"),
+    targetType: "event",
+    targetName: "main:OnBeforeProlog",
+    relationType: "registers_event_handler",
+    limit: 5
+  });
+  assert.equal(fileToEvent?.[0]?.file, slashPath("local/php_interface/init.php"));
+  assert.match(fileToEvent?.[0]?.signature ?? "", /addEventHandler/);
+
+  const closureRelation = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "event",
+    sourceName: "sale:OnSaleOrderSaved",
+    relationType: "handles_event",
+    limit: 5
+  });
+  assert.equal(closureRelation?.[0]?.targetType, "function");
+  assert.equal(closureRelation?.[0]?.targetName, "closure");
+  assert.deepEqual(closureRelation?.[0]?.metadata, { anonymous: true });
+});
+
+
+test("buildIndex writes module usage records and file-to-module relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-module-usage-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-module-usage-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+Loader::includeModule('iblock');
+Loader::includeModule($dynamicModule);
+ModuleManager::isModuleInstalled('sale');
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+
+  const usages = await searchModuleUsages(sqlitePath(dataDir), { module: "iblock", limit: 5 });
+  assert.equal(usages?.length, 1);
+  assert.equal(usages?.[0]?.call, "Loader::includeModule");
+  assert.equal(usages?.[0]?.kind, "project");
+  assert.equal(usages?.[0]?.relativeFile, slashPath("local/php_interface/init.php"));
+  assert.match(usages?.[0]?.signature ?? "", /Loader::includeModule\('iblock'\)/);
+
+  const allUsages = await searchModuleUsages(sqlitePath(dataDir), { limit: 10 });
+  assert.deepEqual(allUsages?.map((usage) => usage.module).sort(), ["iblock", "sale"]);
+
+  const relations = await searchBitrixRelations(sqlitePath(dataDir), {
+    sourceType: "file",
+    sourceName: slashPath("local/php_interface/init.php"),
+    targetType: "module",
+    targetName: "iblock",
+    relationType: "includes_module",
+    limit: 5
+  });
+  assert.equal(relations?.[0]?.module, "iblock");
+  assert.equal(relations?.[0]?.kind, "project");
+  assert.deepEqual(relations?.[0]?.metadata, { call: "Loader::includeModule" });
+});
+
+test("buildIndex indexes Bitrix mail events and writes mail handler relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-mail-events-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-mail-events-data-"));
+  await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/php_interface/service.php"), String.raw`<?php
+CEvent::Send('SALE_NEW_ORDER', SITE_ID, $fields);
+CEvent::SendImmediate('SALE_STATUS_CHANGED', 's1', $fields);
+\CEvent::Send('SALE_CANCEL_ORDER', 's2', $fields);
+\Bitrix\Main\Mail\Event::send([
+    'EVENT_NAME' => 'SALE_DELIVERY',
+    'LID' => 's3',
+    'C_FIELDS' => ['ID' => 1],
+]);
+CEvent::Send($dynamicEvent, SITE_ID, $fields);
+`, "utf8");
+  await fs.writeFile(path.join(root, "local/php_interface/init.php"), String.raw`<?php
+AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
+\Bitrix\Main\EventManager::getInstance()->addEventHandler('main', 'OnBeforeEventAdd', 'beforeEventAdd');
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const mailEvents = await searchMailEvents(dbFile, { eventName: "SALE_NEW_ORDER", includeHandlers: true, limit: 10 });
+  assert.equal(mailEvents?.length, 1);
+  assert.equal(mailEvents?.[0]?.api, "CEvent::Send");
+  assert.equal(mailEvents?.[0]?.siteId, "SITE_ID");
+  assert.equal(mailEvents?.[0]?.relativeFile, slashPath("local/php_interface/service.php"));
+  assert.equal(mailEvents?.[0]?.handlers?.length, 2);
+  assert.ok(mailEvents?.[0]?.handlers?.some((handler) => handler.eventName === "OnBeforeEventSend" && handler.handlerClass === "MailHandlers"));
+
+  const immediateEvents = await searchMailEvents(dbFile, { api: "CEvent::SendImmediate", limit: 10 });
+  assert.equal(immediateEvents?.[0]?.eventName, "SALE_STATUS_CHANGED");
+
+  const d7Events = await searchMailEvents(dbFile, { query: "SALE_DELIVERY", limit: 10 });
+  assert.equal(d7Events?.[0]?.api, "Bitrix\\Main\\Mail\\Event::send");
+  assert.equal(d7Events?.[0]?.siteId, "s3");
+
+  const dynamicEvents = await searchMailEvents(dbFile, { query: "CEvent::Send", limit: 10 });
+  assert.ok(dynamicEvents?.some((event) => event.eventName === undefined && event.name === "CEvent::Send"));
+
+  const fileRelations = await searchBitrixRelations(dbFile, {
+    sourceType: "file",
+    sourceName: slashPath("local/php_interface/service.php"),
+    targetType: "mail_event",
+    targetName: "SALE_NEW_ORDER",
+    relationType: "sends_mail_event",
+    limit: 10
+  });
+  assert.equal(fileRelations?.[0]?.metadata?.api, "CEvent::Send");
+  assert.equal(fileRelations?.[0]?.metadata?.siteId, "SITE_ID");
+
+  const handlerRelations = await searchBitrixRelations(dbFile, {
+    sourceType: "mail_event",
+    sourceName: "SALE_NEW_ORDER",
+    targetType: "event_handler",
+    relationType: "handled_by_event_handler",
+    limit: 10
+  });
+  assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventSend")));
+  assert.ok(handlerRelations?.some((relation) => relation.targetName.includes("OnBeforeEventAdd")));
+});
+
+test("buildIndex stores D7 ORM entities, usages, and relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-orm-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-orm-data-"));
+  const productFile = path.join(root, "local", "modules", "vendor.module", "lib", "product.php");
+  const usageFile = path.join(root, "local", "modules", "vendor.module", "lib", "usage.php");
+  await fs.mkdir(path.dirname(productFile), { recursive: true });
+  await fs.writeFile(productFile, String.raw`<?php
+namespace Vendor\Module;
+use Bitrix\Main\ORM\Data\DataManager;
+class ProductTable extends DataManager
+{
+    public static function getTableName() { return 'vendor_product'; }
+    public static function getMap() {
+        return [
+            new IntegerField('ID', ['primary' => true, 'autocomplete' => true]),
+            new StringField('NAME', ['required' => true, 'default_value' => '']),
+            new TextField('DESCRIPTION'),
+            new BooleanField('ACTIVE'),
+            new DatetimeField('CREATED_AT'),
+            new DateField('DATE'),
+            new EnumField('TYPE', ['values' => ['simple', 'sku']]),
+            new ExpressionField('FULL_NAME', 'concat(%s, %s)', ['NAME', 'TYPE']),
+            new ReferenceField('USER', UserTable::class, ['=this.USER_ID' => 'ref.ID']),
+            new OneToMany('ITEMS', ItemTable::class, 'PRODUCT'),
+            new ManyToMany('SECTIONS', SectionTable::class),
+        ];
+    }
+}
+`, "utf8");
+  await fs.writeFile(usageFile, String.raw`<?php
+namespace Vendor\Module;
+ProductTable::query();
+ProductTable::getList([]);
+ProductTable::getById(1);
+ProductTable::add([]);
+ProductTable::update(1, []);
+ProductTable::delete(1);
+Section::compileEntityByIblock(7);
+`, "utf8");
+
+  await buildIndex({ root, kind: "bitrix", outFile: path.join(dataDir, "bitrix-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const entities = await searchOrmEntities(dbFile, { tableName: "vendor_product", limit: 5 });
+  assert.equal(entities?.length, 1);
+  assert.equal(entities?.[0]?.className, "Vendor\\Module\\ProductTable");
+  assert.equal(entities?.[0]?.fields.length, 11);
+  assert.equal(entities?.[0]?.fields.find((field) => field.name === "ID")?.options?.primary, true);
+  assert.equal(entities?.[0]?.fields.find((field) => field.name === "TYPE")?.options?.values instanceof Array, true);
+  assert.equal(entities?.[0]?.references.find((field) => field.name === "USER")?.referenceClass, "Vendor\\Module\\UserTable");
+
+  const maps = await getOrmEntityMap(dbFile, { className: "Vendor\\Module\\ProductTable" });
+  assert.equal(maps?.[0]?.tableName, "vendor_product");
+
+  const usages = await searchOrmUsages(dbFile, { entity: "Vendor\\Module\\ProductTable", limit: 10 });
+  assert.equal(usages?.filter((usage) => usage.usageKind === "datamanager").length, 6);
+  assert.ok(usages?.some((usage) => usage.method === "getList"));
+  const compileUsages = await searchOrmUsages(dbFile, { method: "compileEntityByIblock", limit: 10 });
+  assert.equal(compileUsages?.[0]?.usageKind, "compile_entity_by_iblock");
+
+  const tableRelations = await searchBitrixRelations(dbFile, { sourceType: "orm_entity", sourceName: "Vendor\\Module\\ProductTable", targetType: "table", targetName: "vendor_product", limit: 10 });
+  assert.equal(tableRelations?.[0]?.relationType, "maps_table");
+  const referenceRelations = await searchBitrixRelations(dbFile, { sourceType: "orm_entity", sourceName: "Vendor\\Module\\ProductTable", relationType: "references_orm_entity", limit: 10 });
+  assert.ok(referenceRelations?.some((relation) => relation.targetName === "Vendor\\Module\\UserTable"));
+  const usageRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "orm_entity", targetName: "Vendor\\Module\\ProductTable", relationType: "uses_orm_entity", limit: 10 });
+  assert.ok((usageRelations?.length ?? 0) >= 6);
+});
+
+
+test("buildIndex indexes IBlock API usages and writes IBlock relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-iblock-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-iblock-data-"));
+  const usageFile = path.join(root, "local", "php_interface", "iblock.php");
+  await fs.mkdir(path.dirname(usageFile), { recursive: true });
+  await fs.writeFile(usageFile, String.raw`<?php
+const NEWS_IBLOCK_ID = 8;
+define('CATALOG_IBLOCK_ID', 12);
+class CatalogUsage
+{
+    public function load($iblockId) {
+        CIBlockElement::GetList([], ["IBLOCK_ID" => 12, "ACTIVE" => "Y"]);
+        CIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);
+        CIBlockSection::GetList([], ['IBLOCK_ID' => NEWS_IBLOCK_ID]);
+        CIBlockElement::SetPropertyValuesEx(1, $iblockId, ['COLOR' => 'red']);
+        \Bitrix\Iblock\ElementTable::getList(['filter' => ['IBLOCK_ID' => $iblockId]]);
+    }
+}
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const numericUsages = await searchIblockUsages(dbFile, { iblockId: "12", api: "CIBlockElement::GetList", limit: 10 });
+  assert.equal(numericUsages?.length, 1);
+  assert.equal(numericUsages?.[0]?.kind, "project");
+  assert.equal(numericUsages?.[0]?.relativeFile, slashPath("local/php_interface/iblock.php"));
+
+  const constantUsages = await searchIblockUsages(dbFile, { iblockId: "CATALOG_IBLOCK_ID", limit: 10 });
+  assert.equal(constantUsages?.[0]?.api, "CIBlockElement::GetList");
+
+  const sectionUsages = await searchIblockUsages(dbFile, { api: "CIBlockSection::GetList", limit: 10 });
+  assert.equal(sectionUsages?.[0]?.iblockId, "NEWS_IBLOCK_ID");
+
+  const propertyUsages = await searchIblockUsages(dbFile, { api: "CIBlockElement::SetPropertyValuesEx", limit: 10 });
+  assert.equal(propertyUsages?.[0]?.iblockId, "unknown");
+
+  const d7Usages = await searchIblockUsages(dbFile, { api: "Bitrix\\Iblock\\ElementTable::getList", limit: 10 });
+  assert.equal(d7Usages?.[0]?.iblockId, "$iblockId");
+  assert.equal(d7Usages?.[0]?.contextName, "CatalogUsage::load");
+
+  const fileRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "iblock", targetName: "12", relationType: "uses_iblock", limit: 10 });
+  assert.equal(fileRelations?.[0]?.module, "iblock");
+  assert.equal(fileRelations?.[0]?.kind, "project");
+  assert.equal(fileRelations?.[0]?.metadata?.api, "CIBlockElement::GetList");
+
+  const methodRelations = await searchBitrixRelations(dbFile, { sourceType: "method", sourceName: "CatalogUsage::load", targetType: "iblock", targetName: "$iblockId", relationType: "uses_iblock", limit: 10 });
+  assert.ok((methodRelations?.length ?? 0) >= 1);
+});
+
+test("buildIndex indexes Highloadblock API usages and writes Highloadblock relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-hlblock-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-hlblock-data-"));
+  const usageFile = path.join(root, "local", "php_interface", "hlblock.php");
+  await fs.mkdir(path.dirname(usageFile), { recursive: true });
+  await fs.writeFile(usageFile, String.raw`<?php
+use Bitrix\Highloadblock\HighloadBlockTable;
+function loadHl($dynamicId) {
+    HighloadBlockTable::getById(3);
+    HighloadBlockTable::getList(["filter" => ["HLBLOCK_ID" => 3]]);
+    HighloadBlockTable::compileEntity($hlblock);
+    \Bitrix\Highloadblock\HighloadBlockTable::compileEntity(['ID' => HLBLOCK_CODE]);
+    \Bitrix\Highloadblock\HighloadBlockTable::getList(['filter' => ['HLBLOCK_ID' => $dynamicId]]);
+}
+`, "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const byIdUsages = await searchHlblockUsages(dbFile, { hlblockId: "3", api: "HighloadBlockTable::getById", limit: 10 });
+  assert.equal(byIdUsages?.length, 1);
+  assert.equal(byIdUsages?.[0]?.kind, "project");
+  assert.equal(byIdUsages?.[0]?.relativeFile, slashPath("local/php_interface/hlblock.php"));
+
+  const listUsages = await searchHlblockUsages(dbFile, { api: "HighloadBlockTable::getList", limit: 10 });
+  assert.ok(listUsages?.some((usage) => usage.hlblockId === "3"));
+  assert.ok(listUsages?.some((usage) => usage.hlblockId === "unknown"));
+
+  const compileUsages = await searchHlblockUsages(dbFile, { api: "HighloadBlockTable::compileEntity", limit: 10 });
+  assert.ok(compileUsages?.some((usage) => usage.hlblockId === "HLBLOCK_CODE"));
+  assert.ok(compileUsages?.some((usage) => usage.hlblockId === "unknown"));
+
+  const fileRelations = await searchBitrixRelations(dbFile, { sourceType: "file", targetType: "hlblock", targetName: "3", relationType: "uses_hlblock", limit: 10 });
+  assert.equal(fileRelations?.[0]?.module, "highloadblock");
+  assert.equal(fileRelations?.[0]?.kind, "project");
+  assert.ok(fileRelations?.some((relation) => relation.metadata?.api === "HighloadBlockTable::getById"));
+
+  const functionRelations = await searchBitrixRelations(dbFile, { sourceType: "function", sourceName: "loadHl", targetType: "hlblock", targetName: "HLBLOCK_CODE", relationType: "uses_hlblock", limit: 10 });
+  assert.ok((functionRelations?.length ?? 0) >= 1);
+});
+
+test("component template path resolution covers site and source templates", () => {
+  assert.deepEqual(possibleComponentTemplateRelativePaths("bitrix:catalog.section", ".default"), [
+    "local/templates/<site>/components/bitrix/catalog.section/.default",
+    "bitrix/templates/<site>/components/bitrix/catalog.section/.default",
+    "local/components/bitrix/catalog.section/templates/.default",
+    "bitrix/components/bitrix/catalog.section/templates/.default"
+  ]);
+  assert.deepEqual(possibleComponentTemplateRelativePaths("vendor:demo", ".default"), [
+    "local/templates/<site>/components/vendor/demo/.default",
+    "bitrix/templates/<site>/components/vendor/demo/.default",
+    "local/components/vendor/demo/templates/.default",
+    "bitrix/components/vendor/demo/templates/.default"
+  ]);
+});
+
+test("buildIndex indexes component calls, files, params, relations, and context", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-components-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-components-data-"));
+  const callFile = path.join(root, "index.php");
+  const templateDir = path.join(root, "local", "templates", "site", "components", "bitrix", "catalog.section", ".default");
+  const sourceTemplateDir = path.join(root, "local", "components", "bitrix", "catalog.section", "templates", ".default");
+  await fs.mkdir(templateDir, { recursive: true });
+  await fs.mkdir(sourceTemplateDir, { recursive: true });
+  await fs.writeFile(callFile, String.raw`<?php
+$APPLICATION->IncludeComponent(
+  "bitrix:catalog.section",
+  "",
+  ["IBLOCK_ID" => 42, "CACHE_TYPE" => "A", "CACHE_TIME" => 3600]
+);
+$APPLICATION->IncludeComponent('vendor:demo', '.default', ['AJAX_MODE' => 'Y']);
+`, "utf8");
+  await fs.writeFile(path.join(templateDir, "template.php"), "<?php echo 'template';\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "result_modifier.php"), "<?php $arResult['X'] = 1;\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "script.js"), "console.log('asset');\n", "utf8");
+  await fs.writeFile(path.join(templateDir, "style.css"), ".catalog{}\n", "utf8");
+  await fs.writeFile(path.join(sourceTemplateDir, ".parameters.php"), "<?php $arComponentParameters = [];\n", "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  await buildIndex({ root, kind: "template", outFile: path.join(dataDir, "template-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+
+  const components = await searchComponents(dbFile, { component: "bitrix:catalog.section", limit: 10 });
+  assert.equal(components?.length, 1);
+  assert.equal(components?.[0]?.template, ".default");
+  assert.deepEqual(components?.[0]?.params, [
+    { name: "IBLOCK_ID", value: 42 },
+    { name: "CACHE_TYPE", value: "A" },
+    { name: "CACHE_TIME", value: 3600 }
+  ]);
+
+  const relations = await searchBitrixRelations(dbFile, { sourceType: "component", sourceName: "bitrix:catalog.section", limit: 20 });
+  assert.ok(relations?.some((relation) => relation.relationType === "uses_template"));
+  assert.ok(relations?.some((relation) => relation.relationType === "uses_iblock" && relation.targetName === "42"));
+  assert.ok(relations?.some((relation) => relation.relationType === "component_template_file" && relation.targetName.endsWith("template.php")));
+  assert.ok(relations?.some((relation) => relation.relationType === "component_asset" && relation.targetName.endsWith("script.js")));
+
+  const context = await getComponentContext(dbFile, { component: "bitrix:catalog.section", template: ".default" });
+  assert.equal(context?.component, "bitrix:catalog.section");
+  assert.equal(context?.template, ".default");
+  assert.equal(context?.calls.length, 1);
+  assert.ok(context?.templateFiles.some((file) => file.relativePath.endsWith("template.php")));
+  assert.ok(context?.templateFiles.some((file) => file.relativePath.endsWith(".parameters.php")));
+  assert.ok(context?.assets.some((file) => file.relativePath.endsWith("script.js")));
+  assert.ok(context?.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 42));
+  assert.ok(context?.relations.some((relation) => relation.relationType === "uses_template"));
+});
+
+test("buildIndex indexes Composer autoload metadata, bootstraps, and relations", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-autoload-root-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-autoload-data-"));
+  await fs.mkdir(path.join(root, "local", "php_interface"), { recursive: true });
+  await fs.writeFile(path.join(root, "local", "php_interface", "init.php"), "<?php\n", "utf8");
+  await fs.writeFile(path.join(root, "composer.json"), JSON.stringify({
+    autoload: {
+      "psr-4": { "Vendor\\Module\\": "local/modules/vendor.module/lib" },
+      files: ["local/php_interface/functions.php"],
+      classmap: ["legacy"]
+    },
+    "autoload-dev": { "psr-4": { "Vendor\\Module\\Tests\\": "tests" } },
+    require: { "bitrix/framework": "^1.0" },
+    "require-dev": { "phpunit/phpunit": "^11.0" }
+  }), "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json"), force: true });
+  const dbFile = sqlitePath(dataDir);
+  const psr4 = await searchAutoloadRecords(dbFile, { type: "psr-4", namespace: "Vendor\\Module\\" });
+  assert.equal(psr4?.[0]?.paths?.[0], "local/modules/vendor.module/lib");
+  const files = await searchAutoloadRecords(dbFile, { type: "files" });
+  assert.equal(files?.[0]?.file, "local/php_interface/functions.php");
+  const dependencies = await searchAutoloadRecords(dbFile, { package: "bitrix/framework" });
+  assert.equal(dependencies?.[0]?.type, "dependency");
+  const devDependencies = await searchAutoloadRecords(dbFile, { package: "phpunit/phpunit" });
+  assert.equal(devDependencies?.[0]?.type, "dev_dependency");
+  const bootstraps = await searchAutoloadRecords(dbFile, { type: "bootstrap" });
+  assert.equal(bootstraps?.[0]?.file, "local/php_interface/init.php");
+  const namespaceRelations = await searchBitrixRelations(dbFile, { sourceType: "namespace_prefix", sourceName: "Vendor\\Module\\", relationType: "autoloads_from" });
+  assert.equal(namespaceRelations?.[0]?.targetName, "local/modules/vendor.module/lib");
+  const bootstrapRelations = await searchBitrixRelations(dbFile, { targetType: "bootstrap", relationType: "is_bootstrap" });
+  assert.equal(bootstrapRelations?.[0]?.sourceName, "local/php_interface/init.php");
+});
+
+test("readIndexedRecordsForFiles resolves normalized relative and absolute file paths", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-record-paths-"));
+  const outFile = path.join(dataDir, "project-index.json");
+  await buildIndex({ root: fixtureRoot, kind: "project", outFile });
+
+  const relativeRecords = await readIndexedRecordsForFiles(sqlitePath(dataDir), [".\\index.php"]);
+  assert.equal(relativeRecords.symbols.find((symbol) => symbol.type === "class")?.name, "DemoComponent");
+  assert.ok(relativeRecords.relations.some((relation) => relation.targetType === "component" && relation.targetName === "bitrix:news.list"));
+
+  const absoluteRecords = await readIndexedRecordsForFiles(sqlitePath(dataDir), [path.join(fixtureRoot, "index.php").replace(/\//g, "\\")]);
+  assert.equal(absoluteRecords.symbols.find((symbol) => symbol.type === "method")?.name, "executeComponent");
+  assert.ok(absoluteRecords.relations.some((relation) => relation.targetType === "component" && relation.targetName === "bitrix:news.list"));
 });

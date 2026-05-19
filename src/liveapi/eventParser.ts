@@ -8,7 +8,8 @@ function unquote(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   const match = trimmed.match(/^["']([\s\S]*)["']$/);
-  return match?.[1].replace(/\\(["'])/g, "$1");
+  if (!match) return undefined;
+  return match[1].replace(/\\([\\"'])/g, "$1");
 }
 
 function splitArguments(args: string): string[] {
@@ -35,11 +36,11 @@ function splitArguments(args: string): string[] {
       quote = char;
       continue;
     }
-    if (char === "(" || char === "[") {
+    if (char === "(" || char === "[" || char === "{") {
       depth += 1;
       continue;
     }
-    if (char === ")" || char === "]") {
+    if (char === ")" || char === "]" || char === "}") {
       depth = Math.max(0, depth - 1);
       continue;
     }
@@ -78,13 +79,13 @@ function extractCallArguments(source: string, openParenIndex: number): string | 
       quote = char;
       continue;
     }
-    if (char === "(") {
+    if (char === "(" || char === "[" || char === "{") {
       depth += 1;
       continue;
     }
-    if (char === ")") {
+    if (char === ")" || char === "]" || char === "}") {
       depth -= 1;
-      if (depth === 0) {
+      if (char === ")" && depth === 0) {
         return source.slice(openParenIndex + 1, index);
       }
     }
@@ -92,10 +93,25 @@ function extractCallArguments(source: string, openParenIndex: number): string | 
   return undefined;
 }
 
-function callbackHandler(callback: string): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction"> {
-  const arrayMatch = callback.match(/^(?:array\s*\(|\[)\s*(["'][^"']+["'])\s*,\s*(["'][^"']+["'])/i);
+function parseClassConstant(value: string): string | undefined {
+  const match = value.trim().match(/^\\?([A-Za-z_][A-Za-z0-9_]*(?:\\\\?[A-Za-z_][A-Za-z0-9_]*)*)\s*::\s*class$/i);
+  return match?.[1].replace(/\\\\/g, "\\");
+}
+
+function callbackPart(value: string | undefined): string | undefined {
+  const stringValue = unquote(value);
+  return stringValue ?? (value ? parseClassConstant(value) : undefined);
+}
+
+function callbackHandler(callback: string): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous"> {
+  const trimmed = callback.trim();
+  if (/^(?:static\s+)?function\b/i.test(trimmed) || /^fn\s*\(/i.test(trimmed)) {
+    return { handlerFunction: "closure", anonymous: true };
+  }
+
+  const arrayMatch = trimmed.match(/^(?:array\s*\(|\[)\s*([\s\S]+?)\s*,\s*(["'][^"']+["'])/i);
   if (arrayMatch) {
-    return { handlerClass: unquote(arrayMatch[1]), handlerMethod: unquote(arrayMatch[2]) };
+    return { handlerClass: callbackPart(arrayMatch[1]), handlerMethod: unquote(arrayMatch[2]) };
   }
 
   const stringValue = unquote(callback);
@@ -109,7 +125,7 @@ function callbackHandler(callback: string): Pick<EventRecord, "handlerClass" | "
   return { handlerFunction: stringValue };
 }
 
-function buildEvent(source: string, filePath: string, startIndex: number, signature: string, module: string | undefined, eventName: string | undefined, handler: Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction">): EventRecord | undefined {
+function buildEvent(source: string, filePath: string, startIndex: number, signature: string, module: string | undefined, eventName: string | undefined, handler: Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous">): EventRecord | undefined {
   if (!module || !eventName) {
     return undefined;
   }
@@ -119,6 +135,7 @@ function buildEvent(source: string, filePath: string, startIndex: number, signat
     handlerClass: handler.handlerClass,
     handlerMethod: handler.handlerMethod,
     handlerFunction: handler.handlerFunction,
+    anonymous: handler.anonymous,
     file: filePath,
     line: lineOf(source, startIndex),
     signature
@@ -149,7 +166,7 @@ export function parsePhpEvents(source: string, filePath: string): EventRecord[] 
 
     if (lowerCallName === "registermoduledependences" || lowerCallName === "registereventhandler") {
       const event = buildEvent(source, filePath, startIndex, signature, unquote(args[0]), unquote(args[1]), {
-        handlerClass: unquote(args[3]),
+        handlerClass: callbackPart(args[3]),
         handlerMethod: unquote(args[4])
       });
       if (event) events.push(event);

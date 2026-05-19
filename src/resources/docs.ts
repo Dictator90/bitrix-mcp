@@ -217,6 +217,42 @@ function splitLargeMarkdownSection(section: MarkdownSection): MarkdownDocChunk[]
   return chunks.filter((chunk) => chunk.text.length > 0);
 }
 
+
+const BITRIX_SYMBOL_PATTERNS: RegExp[] = [
+  /\b[A-Z][A-Za-z0-9_\\]*(?:Table|Manager|Field|Element|Section|Event|Option)?::[A-Za-z_][A-Za-z0-9_]*\b/gu,
+  /\b(?:CIBlockElement|CIBlockSection|CEvent|CModule|COption|Loader|EventManager|Option|HighloadBlockTable|DataManager|ReferenceField|ExpressionField)::[A-Za-z_][A-Za-z0-9_]*\b/gu,
+  /\b(?:AddEventHandler|RegisterModuleDependences|DataManager|ReferenceField|ExpressionField|HighloadBlockTable)\b/gu,
+  /\bOn[A-Z][A-Za-z0-9_]{3,}\b/gu
+];
+
+const COMMON_BITRIX_SHORT_SYMBOLS = new Set([
+  "AddEventHandler",
+  "RegisterModuleDependences",
+  "DataManager",
+  "ReferenceField",
+  "ExpressionField",
+  "HighloadBlockTable"
+]);
+
+function normalizeDocSymbol(symbol: string): string {
+  return symbol.replace(/^\\+|[.,;:!?)}\]`'"<>]+$/gu, "").trim();
+}
+
+export function extractDocSymbolRefs(text: string): string[] {
+  const symbols = new Set<string>();
+  for (const pattern of BITRIX_SYMBOL_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const symbol = normalizeDocSymbol(match[0]);
+      if (!symbol) continue;
+      if (symbol.includes("::") || symbol.startsWith("On") || COMMON_BITRIX_SHORT_SYMBOLS.has(symbol)) {
+        symbols.add(symbol);
+      }
+    }
+  }
+  return [...symbols].sort((a, b) => a.localeCompare(b));
+}
+
 function splitDocChunks(text: string): MarkdownDocChunk[] {
   const normalized = text.trim();
   if (!normalized) {
@@ -530,7 +566,8 @@ export async function indexDocResourcesToSqlite(dataDir: string, docsPaths: stri
           headingPath: chunk.headingPath,
           sectionAnchor: chunk.sectionAnchor,
           sourceUri: resource.uri,
-          relativePath: resource.relativePath
+          relativePath: resource.relativePath,
+          symbolRefs: extractDocSymbolRefs(chunk.text)
         });
       });
     }

@@ -20,7 +20,7 @@ Bitrix MCP полезен, если вы хотите подключить Curso
 ## Системные требования
 
 - ОС: Linux, macOS или Windows / Windows PowerShell.
-- Node.js **20+**.
+- Node.js **22.12+**, потому что Bitrix MCP использует `node:sqlite`.
 - npm **10+**.
 - Доступ к диску с проектом Битрикс, который нужно индексировать.
 - Доступ в интернет рекомендуется при первой индексации документации: официальный репозиторий документации Bitrix Framework клонируется или обновляется по умолчанию.
@@ -39,6 +39,39 @@ Bitrix MCP полезен, если вы хотите подключить Curso
 
 Зависимости для опционального семантического поиска находятся в `embeddings/requirements.txt` и устанавливаются только если вы запускаете Python-сервис embeddings.
 
+## Установка из npm
+
+Установите пакет глобально:
+
+```bash
+npm install -g @mb4it/bitrix-mcp
+```
+
+Или запустите без глобальной установки:
+
+```bash
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
+```
+
+Команда после установки остается `bitrix-mcp`:
+
+```bash
+bitrix-mcp --help
+bitrix-mcp init --agent cursor --no-serve
+bitrix-mcp index-all
+bitrix-mcp serve
+```
+
+## Приоритет результатов MCP
+
+Bitrix MCP обеспечивает глубокое специализированное индексирование Bitrix Framework и кода вашего проекта. При использовании ИИ-ассистента с Bitrix MCP:
+
+- **Основной источник истины**: Результаты инструментов MCP являются приоритетными для символов проекта, API фреймворка, обработчиков событий, ORM-сущностей и документации.
+- **Ручной поиск как резерв**: ИИ-агенты получают инструкции искать файлы вручную или использовать \`grep\` только тогда, когда инструменты MCP не возвращают результатов, указывают на устаревший индекс или когда вы явно просите выполнить ручную проверку.
+- **Правило авторитетности**: Успешные, непустые результаты MCP не должны ставиться под сомнение на основе неиндексированных ручных предположений.
+
+Такое поведение снижает расход токенов и предотвращает галлюцинации ассистента, вызванные неполным сканированием файлов вручную.
+
 ## Быстрый старт
 
 Из корня проекта Битрикс:
@@ -53,8 +86,7 @@ cd /path/to/bitrix/project
 
 # 3. Настройте MCP-клиент и создайте индексы .bitrix-mcp
 # В CI и скриптах --no-serve не дает init занять stdio после настройки.
-npx bitrix-mcp init --agent cursor --no-serve
-```
+npm bitrix-mcp init --agent cursor --no-serve
 
 Во время интерактивного `init` выберите одного или несколько AI-агентов из списка. Для неинтерактивной настройки передайте `--agent <id>` (можно повторять или разделять ID запятыми), `--all-agents` или `--yes` для настройки Cursor по умолчанию. Bitrix MCP создаст или обновит конфигурацию MCP-клиента, добавит reusable-инструкции/rules, построит первичные индексы и запустит MCP-сервер через stdio, если не передан `--no-serve` и не обнаружена CI-среда.
 
@@ -68,15 +100,15 @@ npx bitrix-mcp init --agent cursor --no-serve
 
 ```bash
 # Индексировать всё: проект, шаблоны, модули Битрикс, install-ресурсы и документацию
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Показать счетчики индекса, разрешенные runtime-пути и диагностику окружения
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npm bitrix-mcp status
+npm bitrix-mcp config
+npm bitrix-mcp doctor
 
 # Запустить MCP-сервер, если индексы уже созданы
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 ```
 
 ## Типовые сценарии
@@ -102,7 +134,7 @@ BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all
 
 ```bash
 # Настроить агента, создать .bitrix-mcp индексы и запустить stdio-сервер
-npx bitrix-mcp init
+npx @mb4it/bitrix-mcp init
 
 # Неинтерактивный init для скриптов/CI: настроить Cursor и не запускать сервер после настройки
 npx bitrix-mcp init --agent cursor --no-serve
@@ -111,32 +143,32 @@ npx bitrix-mcp init --agent cursor --no-serve
 npx bitrix-mcp configure --agent cursor
 
 # Запустить MCP-сервер через stdio для Cursor, PhpStorm, Claude Desktop, Kilo и т.д.
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 
 # Индексировать всё: проект, шаблоны, модули Битрикс, install-ресурсы и документацию
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Индексировать только кодовые области без документации
-npx bitrix-mcp index-code
+npx @mb4it/bitrix-mcp index-code
 
 # Индексировать текущий проект
-npx bitrix-mcp index-project /path/to/project
+npx @mb4it/bitrix-mcp index-project /path/to/project
 
 # Отдельно индексировать шаблоны/компоненты/скрипты/стили
-npx bitrix-mcp index-template /path/to/project
+npx @mb4it/bitrix-mcp index-template /path/to/project
 
 # Индексировать PHP-исходники установленного Bitrix Framework для LiveAPI
 cd /path/to/bitrix/project
-npx bitrix-mcp index-bitrix
+npx @mb4it/bitrix-mcp index-bitrix
 
 # Индексировать install-ресурсы модулей Битрикс
-npx bitrix-mcp index-install /path/to/project
+npx @mb4it/bitrix-mcp index-install /path/to/project
 
 # Зарегистрировать, обновить и проиндексировать источники документации
-npx bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
-npx bitrix-mcp docs-add-path /path/to/local/docs
-npx bitrix-mcp docs-update
-npx bitrix-mcp index-docs
+npx @mb4it/bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
+npx @mb4it/bitrix-mcp docs-add-path /path/to/local/docs
+npx @mb4it/bitrix-mcp docs-update
+npx @mb4it/bitrix-mcp index-docs
 
 # Отправить SQLite chunks документации в embeddings-сервис
 npx bitrix-mcp index-embeddings
@@ -144,9 +176,9 @@ npx bitrix-mcp index-embeddings
 npx bitrix-mcp index-docs --embeddings
 
 # Показать счетчики индекса, runtime-пути или выполнить диагностику окружения
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npm bitrix-mcp status
+npm bitrix-mcp config
+npm bitrix-mcp doctor
 ```
 
 По умолчанию индексы создаются в `.bitrix-mcp/`. При индексации всегда применяются встроенные исключения для тяжелых и сгенерированных директорий: `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`. Также учитываются правила из `.gitignore`, если файл есть в проекте.
@@ -198,7 +230,7 @@ Bitrix MCP поддерживает два режима:
 
 ## `bitrix-mcp init`
 
-Запускайте `init` из корня проекта Битрикс после глобальной установки `bitrix-mcp` или если команда доступна в `PATH`:
+Запускайте `init` из корня проекта Битрикс после глобальной установки `@mb4it/bitrix-mcp` или если команда `bitrix-mcp` доступна в `PATH`:
 
 ```bash
 cd /path/to/bitrix/project
@@ -249,15 +281,18 @@ bitrix-mcp init
 
 ## MCP-инструменты
 
-- `bitrix_liveapi_search` — поиск по проиндексированным PHP-символам.
-- `bitrix_event_search` — поиск обработчиков событий Битрикс по модулю, имени события, классу/методу или функции.
-- `bitrix_index_project` — индексация текущего проекта из агента.
-- `bitrix_index_all` — индексация файлов проекта, шаблонов, модулей Битрикс, install-ресурсов и документации, включая официальный репозиторий Bitrix Framework docs, если официальная документация включена.
-- `bitrix_index_status` — показывает путь к SQLite DB, количество файлов, символов, событий, документов и время последней индексации.
-- `bitrix_index_template` — индексирует стандартные расположения шаблонов или принимает `templatePath` относительно корня проекта, например `local/templates/site`, чтобы индексировать конкретную директорию шаблона. Временный аргумент `root` устарел; используйте `templatePath`.
-- `bitrix_index_docs` — клонирует/обновляет и индексирует источники документации в SQLite, включая официальный репозиторий Bitrix Framework docs, если официальная документация включена.
-- `bitrix_docs_search` — базовый локальный поиск по документации через SQLite FTS.
-- `bitrix_semantic_docs_search` — опциональный семантический поиск по документации через embeddings; доступен только при включенном `BITRIX_MCP_SEMANTIC_ENABLED`.
+- **Индексация/статус/config/doctor**: `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status`, а также CLI `config` и `doctor`.
+- **LiveAPI и поиск символов**: `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`.
+- **Контекст исходников**: `bitrix_read_file_context`, `bitrix_read_symbol_context`.
+- **Агенты и почтовые события**: `bitrix_agent_search`, `bitrix_mail_event_search`.
+- **Компоненты**: `bitrix_component_search`, `bitrix_component_context`.
+- **ORM**: `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`.
+- **IBlock / Highloadblock / Options**: `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`.
+- **Связи и граф**: `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`.
+- **Detect changes**: `bitrix_detect_changes` объединяет Git-изменения, индексированные сущности, graph impact, риск и рекомендации.
+- **Autoload и обзор проекта**: `bitrix_autoload_search`, `bitrix_project_overview`.
+- **Документация и объяснение API**: `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage`, опционально `bitrix_semantic_docs_search` при включенном `BITRIX_MCP_SEMANTIC_ENABLED`.
+- **Бенчмарки**: CLI `benchmark` пишет `.bitrix-mcp/benchmark.json` и `.bitrix-mcp/benchmark.md`.
 
 ## MCP resources
 
@@ -380,3 +415,35 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Отчёты benchmark Phase 17
+
+Запуск из репозитория или установленного пакета:
+
+```bash
+npm run benchmark
+# или после сборки/установки
+bitrix-mcp benchmark
+```
+
+Отчёты создаются в `.bitrix-mcp/benchmark.json` и `.bitrix-mcp/benchmark.md`. Benchmark измеряет инкрементальные `index-all`, `index-project`, `index-template`, опциональный `index-bitrix`, задержки поиска по docs/LiveAPI/events/relations, обход графа, impact-radius, detect-changes, размер SQLite DB и счётчики файлов, символов, событий, relations и docs chunks. Если корень Bitrix, документация или опциональные индексы отсутствуют, шаг пропускается с предупреждением. Полная переиндексация не форсируется без `--force`.
+
+## Карта документации
+
+- [MCP tools](./docs/tools.md) — только реально реализованные инструменты, параметры, примеры, prompts, сценарии и ограничения.
+- [Indexing](./docs/indexing.md) — области индексации и benchmark.
+- [Bitrix events](./docs/bitrix-events.md) — workflow для событий.
+- [ORM](./docs/orm.md) — workflow для D7 ORM.
+- [Components](./docs/components.md) — workflow для компонентов и шаблонов.
+- [Graph](./docs/graph.md) — `bitrix_relations`, neighbors, traverse, impact radius.
+- [Detect changes](./docs/detect-changes.md) — workflow ревью изменений.
+- [Security](./docs/security.md) — локальные данные и ограничения путей.
+- [Examples](./docs/examples.md) — готовые prompts.
+
+Рекомендуемый AI workflow:
+
+1. Общая работа: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` → `bitrix_read_file_context` или `bitrix_read_symbol_context`.
+2. Ревью: `bitrix_detect_changes` → `bitrix_impact_radius` → `bitrix_graph_neighbors` или `bitrix_graph_traverse` → `bitrix_relation_search` → context tools.
+3. События Bitrix: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
+4. ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
+5. Компоненты: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` при изменении файлов компонента.

@@ -39,7 +39,9 @@ interface SymbolRow {
   module: string | null;
   class_name: string | null;
   file: string;
+  relative_file?: string | null;
   line: number;
+  line_end?: number | null;
   signature: string | null;
   description: string | null;
   rank: number | null;
@@ -57,6 +59,7 @@ interface EventRow {
   handler_method: string | null;
   handler_function: string | null;
   file: string;
+  relative_file?: string | null;
   line: number;
   signature: string | null;
   description: string | null;
@@ -143,6 +146,7 @@ function rowToEvent(row: EventRow): EventRecord {
     handlerMethod: row.handler_method ?? undefined,
     handlerFunction: row.handler_function ?? undefined,
     file: row.file,
+    relativeFile: row.relative_file ?? undefined,
     line: row.line,
     signature: row.signature ?? undefined,
     description: row.description ?? undefined
@@ -158,7 +162,9 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     module: row.module ?? undefined,
     className: row.class_name ?? undefined,
     file: row.file,
+    relativeFile: row.relative_file ?? undefined,
     line: row.line,
+    lineEnd: row.line_end ?? undefined,
     signature: row.signature ?? undefined,
     description: row.description ?? undefined
   };
@@ -211,6 +217,7 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
         SELECT * FROM (
           SELECT
             s.*,
+            f.relative_path AS relative_file,
             CASE WHEN lower(s.name) = ? OR lower(coalesce(s.class_name, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
             CASE WHEN lower(s.name) LIKE ? ESCAPE '\\' OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
             CASE WHEN lower(s.name) LIKE ? ESCAPE '\\'
@@ -222,6 +229,7 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
             ${localRankSql} AS local_rank,
             NULL AS rank
           FROM symbols s
+          JOIN files f ON f.id = s.file_id
           WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
           ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, s.name ASC
           LIMIT ?
@@ -230,6 +238,7 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
         SELECT * FROM (
           SELECT
             s.*,
+            f.relative_path AS relative_file,
             0 AS exact_rank,
             0 AS prefix_rank,
             0 AS like_rank,
@@ -237,15 +246,16 @@ export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): 
             bm25(symbols_fts) AS rank
           FROM symbols_fts
           JOIN symbols s ON s.id = symbols_fts.rowid
+          JOIN files f ON f.id = s.file_id
           WHERE symbols_fts MATCH ?${branchWhere}
           ORDER BY rank ASC, local_rank DESC
           LIMIT ?
         )
       )
-      SELECT kind, type, language, name, module, class_name, file, line, signature, description,
+      SELECT kind, type, language, name, module, class_name, file, relative_file, line, line_end, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
       FROM candidates
-      GROUP BY kind, type, language, name, module, class_name, file, line, signature, description
+      GROUP BY kind, type, language, name, module, class_name, file, relative_file, line, line_end, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as SymbolRow[];
@@ -300,6 +310,7 @@ export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuer
         SELECT * FROM (
           SELECT
             e.*,
+            f.relative_path AS relative_file,
             CASE WHEN lower(e.name) = ? OR lower(coalesce(e.module, '') || ':' || e.name) = ? THEN 1 ELSE 0 END AS exact_rank,
             CASE WHEN lower(e.name) LIKE ? ESCAPE '\\' OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
             CASE WHEN lower(e.name) LIKE ? ESCAPE '\\'
@@ -314,6 +325,7 @@ export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuer
             ${localRankSql} AS local_rank,
             NULL AS rank
           FROM events e
+          JOIN files f ON f.id = e.file_id
           WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
           ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, e.name ASC
           LIMIT ?
@@ -322,6 +334,7 @@ export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuer
         SELECT * FROM (
           SELECT
             e.*,
+            f.relative_path AS relative_file,
             0 AS exact_rank,
             0 AS prefix_rank,
             0 AS like_rank,
@@ -329,15 +342,16 @@ export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuer
             bm25(events_fts) AS rank
           FROM events_fts
           JOIN events e ON e.id = events_fts.rowid
+          JOIN files f ON f.id = e.file_id
           WHERE events_fts MATCH ?${branchWhere}
           ORDER BY rank ASC, local_rank DESC
           LIMIT ?
         )
       )
-      SELECT kind, module, name, handler_class, handler_method, handler_function, file, line, signature, description,
+      SELECT kind, module, name, handler_class, handler_method, handler_function, file, relative_file, line, signature, description,
              min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
       FROM candidates
-      GROUP BY kind, module, name, handler_class, handler_method, handler_function, file, line, signature, description
+      GROUP BY kind, module, name, handler_class, handler_method, handler_function, file, relative_file, line, signature, description
       ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
       LIMIT ?
     `).all(exact, exact, prefix, prefix, like, like, like, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as EventRow[];

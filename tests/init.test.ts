@@ -290,3 +290,28 @@ test("initAndServe does not start server when --no-serve behavior is requested",
   assert.equal(serveCalled, false);
   await fs.access(path.join(projectRoot, ".cursor", "mcp.json"));
 });
+
+test("writeAgentGuidance includes authority rule and descriptive labels", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-guidance-authority-"));
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  const results = await writeAgentGuidance("claude-code", context);
+
+  assert.equal(results.length, 2);
+  assert.equal(results[0].label, "canonical skill");
+  assert.equal(results[1].label, "Claude Code guidance");
+
+  const skill = await fs.readFile(results[0].path, "utf8");
+  assert.match(skill, /## Authority Rule/);
+  assert.match(skill, /primary source of truth/);
+
+  const rule = await fs.readFile(results[1].path, "utf8");
+  assert.match(rule, /## Authority Rule/);
+  assert.match(rule, /Treat `bitrix-mcp` tool results as the primary source of truth/);
+});

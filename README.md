@@ -10,17 +10,18 @@ Use Bitrix MCP when you want an MCP-capable assistant such as Cursor, Claude Des
 
 ## Capabilities
 
-- **LiveAPI search**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, and constants.
+- **LiveAPI search**: indexes PHP sources from an installed Bitrix instance and searches functions, classes, methods, events, components, constants, and Bitrix module include/check usage records.
 - **Project indexing**: indexes the current project from a terminal command or MCP tool.
 - **Template indexing**: separately indexes templates, components, scripts, styles, and layout assets.
 - **Documentation search**: exposes local Bitrix Framework documentation as MCP resources and searches indexed Markdown/text docs with SQLite FTS.
 - **Optional semantic documentation search**: delegates embedding search to a Python `sentence-transformers` FastAPI service when explicitly enabled.
+- **Bitrix dependency graph**: queries `bitrix_relations` as a Bitrix-aware graph of events, handlers, modules, agents, mail events, ORM entities, components, templates, iblocks, hlblocks, options, and inheritance.
 - **Local access model**: no token or Bitrix authentication is required; access is controlled by where you run the process and which local folders you expose.
 
 ## System requirements
 
 - Operating system: Linux, macOS, or Windows / Windows PowerShell.
-- Node.js **20+**.
+- Node.js **22.12+** because Bitrix MCP uses `node:sqlite`.
 - npm **10+**.
 - Disk access to the Bitrix project you want to index.
 - Network access is recommended for the first documentation index because the official Bitrix Framework docs repository is cloned or updated by default.
@@ -39,6 +40,39 @@ Runtime dependencies are installed by `npm install` and include:
 
 Optional semantic search dependencies live in `embeddings/requirements.txt` and are installed only if you run the Python embeddings service.
 
+## Installation from npm
+
+Install globally:
+
+```bash
+npm install -g @mb4it/bitrix-mcp
+```
+
+Or run without a global install:
+
+```bash
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
+```
+
+The installed CLI command remains `bitrix-mcp`:
+
+```bash
+bitrix-mcp --help
+bitrix-mcp init --agent cursor --no-serve
+bitrix-mcp index-all
+bitrix-mcp serve
+```
+
+## MCP result authority
+
+Bitrix MCP provides deep, specialized indexing of the Bitrix Framework and your project code. When using an AI assistant with Bitrix MCP:
+
+- **Primary Source of Truth**: Treat MCP tool results as authoritative for project symbols, framework APIs, event handlers, ORM entities, and documentation.
+- **Manual Search as Fallback**: AI agents are instructed to search files manually or use \`grep\` only when MCP tools return no results, indicate a stale index, or when you explicitly ask for a manual check.
+- **Authority Rule**: Successful, non-empty MCP results should not be contradicted by unindexed manual assumptions.
+
+This behavior reduces token waste and prevents the assistant from hallucinating based on incomplete manual file scans.
+
 ## Quick start
 
 From the root of your Bitrix project:
@@ -53,7 +87,7 @@ cd /path/to/bitrix/project
 
 # 3. Configure your MCP client and create .bitrix-mcp indexes
 # In CI or scripts, --no-serve avoids taking over stdio after setup.
-npx bitrix-mcp init --agent cursor --no-serve
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 ```
 
 During interactive `init`, select one or more AI agents from the prompt. For non-interactive setup, pass `--agent <id>` (repeat or comma-separate IDs), `--all-agents`, or `--yes` for the default Cursor setup. Bitrix MCP writes or updates the selected agents' MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio unless `--no-serve` is passed or a CI environment is detected.
@@ -68,15 +102,15 @@ If you only need to run or refresh indexes manually:
 
 ```bash
 # Index everything: project, templates, Bitrix modules, install assets, and docs
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Show index counters, resolved runtime paths, and diagnostics
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp config
+npx @mb4it/bitrix-mcp doctor
 
 # Start the MCP server after indexes already exist
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 ```
 
 ## Common workflows
@@ -102,54 +136,61 @@ Use the same environment variable with `npx` if the package is not installed glo
 
 ```bash
 # Configure an agent, create .bitrix-mcp indexes, and start stdio server
-npx bitrix-mcp init
+npx @mb4it/bitrix-mcp init
 
 # Non-interactive init for scripts/CI: configure Cursor, skip serving after setup
-npx bitrix-mcp init --agent cursor --no-serve
+npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 
 # Configure MCP config and guidance only; do not index or start the server
-npx bitrix-mcp configure --agent cursor
+npx @mb4it/bitrix-mcp configure --agent cursor
 
 # Start MCP server over stdio for Cursor, PhpStorm, Claude Desktop, Kilo, etc.
-npx bitrix-mcp serve
+npx @mb4it/bitrix-mcp serve
 
 # Index everything: project, templates, Bitrix modules, install assets, and docs
-npx bitrix-mcp index-all
+npx @mb4it/bitrix-mcp index-all
 
 # Index all code scopes without documentation
-npx bitrix-mcp index-code
+npx @mb4it/bitrix-mcp index-code
 
 # Index the current project
-npx bitrix-mcp index-project /path/to/project
+npx @mb4it/bitrix-mcp index-project /path/to/project
 
 # Index templates/components/scripts/styles separately
-npx bitrix-mcp index-template /path/to/project
+npx @mb4it/bitrix-mcp index-template /path/to/project
 
 # Index installed Bitrix Framework PHP sources for LiveAPI
 cd /path/to/bitrix/project
-npx bitrix-mcp index-bitrix
+npx @mb4it/bitrix-mcp index-bitrix
 
 # Index Bitrix module install assets
-npx bitrix-mcp index-install /path/to/project
+npx @mb4it/bitrix-mcp index-install /path/to/project
 
 # Register, update, and index documentation sources
-npx bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
-npx bitrix-mcp docs-add-path /path/to/local/docs
-npx bitrix-mcp docs-update
-npx bitrix-mcp index-docs
+npx @mb4it/bitrix-mcp docs-add-git https://github.com/bitrix-tools/framework-docs.git
+npx @mb4it/bitrix-mcp docs-add-path /path/to/local/docs
+npx @mb4it/bitrix-mcp docs-update
+npx @mb4it/bitrix-mcp index-docs
 
 # Send SQLite documentation chunks to the embeddings service
-npx bitrix-mcp index-embeddings
+npx @mb4it/bitrix-mcp index-embeddings
 # Or reindex SQLite docs and embeddings together when the service is running
-npx bitrix-mcp index-docs --embeddings
+npx @mb4it/bitrix-mcp index-docs --embeddings
+
+# Search indexed Bitrix module include/check API usages by module
+npx @mb4it/bitrix-mcp search-modules iblock
+
+# Query the Bitrix-aware dependency graph
+npx @mb4it/bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx @mb4it/bitrix-mcp impact-radius local/php_interface/init.php --depth 2
 
 # Show index counters, resolved runtime paths, or environment diagnostics
-npx bitrix-mcp status
-npx bitrix-mcp config
-npx bitrix-mcp doctor
+npx @mb4it/bitrix-mcp status
+npx @mb4it/bitrix-mcp config
+npx @mb4it/bitrix-mcp doctor
 ```
 
-Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, and `cache/`; it also reads project `.gitignore` rules when present.
+Generated indexes are written to `.bitrix-mcp/` by default. Indexing always applies built-in ignores for heavy/generated directories such as `node_modules/`, `vendor/`, `.git/`, `dist/`, `build/`, `upload/`, `cache/`, and `generated/`; it also reads project `.gitignore` rules when present.
 
 To exclude additional project-specific files from LiveAPI and template indexes, add a `.bitrixmcpignore` file to the project root. It uses the same pattern syntax as `.gitignore` and is applied together with the built-in rules and `.gitignore`:
 
@@ -160,6 +201,53 @@ local/scripts/generated/**
 # Private custom code that should not be searchable
 private/*.php
 assets/ignored.js
+```
+
+## Bitrix dependency graph and impact radius
+
+Bitrix MCP builds a queryable graph from indexed `bitrix_relations` rather than a generic AST dependency graph. Each edge is a Bitrix relation in the form `source_type:source_name --relation_type--> target_type:target_name`, for example:
+
+- `event:main:OnBeforeProlog --handles_event--> method:Vendor\Module\Handler::onBeforeProlog`
+- `file:local/php_interface/init.php --registers_event_handler--> event:main:OnBeforeProlog`
+- `component:bitrix:catalog.section --uses_iblock--> iblock:CATALOG_IBLOCK_ID`
+- `orm_entity:Vendor\Module\ProductTable --references_orm_entity--> orm_entity:Bitrix\Main\UserTable`
+
+This graph differs from a code-review AST graph because it follows Bitrix concepts that are often dynamic or configured through framework APIs: events and event handlers, module includes, agents, mail events, ORM entity references, components/templates, iblock and highloadblock usage, options, assets, and PHP inheritance relations.
+
+MCP tools:
+
+- `bitrix_graph_neighbors` returns direct or bounded-depth neighbors for a node. Parameters include `nodeType`, `nodeName`, `direction` (`out`, `in`, `both`), `relationType`, `depth`, `limit`, and `format`.
+- `bitrix_graph_traverse` performs safe BFS traversal with cycle protection. Parameters include `startType`, `startName`, `direction`, `maxDepth`, `relationTypes`, `limit`, and `format`.
+- `bitrix_impact_radius` starts from provided files or `git diff --name-only <base>` (default `HEAD~1`) and groups impacted events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods. It can include relation-weighted risk reasons for high-impact relations such as `handles_event`, `registers_event_handler`, `registers_agent`, `sends_mail_event`, `references_orm_entity`, `includes_component`, `uses_template`, `extends`, and `implements`.
+
+Examples:
+
+```text
+bitrix_graph_neighbors({
+  "nodeType": "event",
+  "nodeName": "main:OnBeforeProlog",
+  "direction": "both"
+})
+
+bitrix_graph_traverse({
+  "startType": "component",
+  "startName": "bitrix:catalog.section",
+  "maxDepth": 2,
+  "relationTypes": ["uses_iblock", "uses_template"]
+})
+
+bitrix_impact_radius({
+  "files": ["local/php_interface/init.php"],
+  "maxDepth": 2,
+  "includeRisk": true
+})
+```
+
+Optional CLI equivalents are available for quick inspection:
+
+```bash
+npx @mb4it/bitrix-mcp graph-neighbors event main:OnBeforeProlog --direction both
+npx @mb4it/bitrix-mcp impact-radius local/php_interface/init.php --depth 2
 ```
 
 ## Configuration
@@ -186,7 +274,7 @@ Use local FTS as the baseline documentation search. Enable semantic mode only wh
 
 ## `bitrix-mcp init`
 
-Run `init` from the root of a Bitrix project after installing `bitrix-mcp` globally or making it available on your `PATH`:
+Run `init` from the root of a Bitrix project after installing `@mb4it/bitrix-mcp` globally or making `bitrix-mcp` available on your `PATH`:
 
 ```bash
 cd /path/to/bitrix/project
@@ -249,29 +337,31 @@ After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds
 
 ## MCP tools
 
-- `bitrix_liveapi_search` — search indexed PHP symbols; use `kind` to limit sources to `project`, `template`, `bitrix`, `install`, or an array of those kinds.
-- `bitrix_event_search` — search indexed Bitrix event handlers by module, event name, class/method, or function; use `kind` to search only project/template/core/install handlers.
-- `bitrix_index_project` — index the current project from an agent.
-- `bitrix_index_all` — index project files, templates, Bitrix modules, install assets, and documentation sources, including the official Bitrix Framework docs repository when official docs are enabled.
-- `bitrix_index_status` — report the SQLite DB path plus files, symbols, events, documents, and last index timestamp.
-- `bitrix_read_file_context` — read numbered source lines around a specific line from a file inside the configured workspace or Bitrix MCP data directory; returns absolute/relative path metadata and detected language.
-- `bitrix_index_template` — index standard template locations, or pass `templatePath` relative to the project root (for example `local/templates/site`) to index a specific template directory. The temporary `root` argument is deprecated; use `templatePath` instead.
-- `bitrix_index_docs` — clone/pull and index documentation sources into SQLite, including the official Bitrix Framework docs repository when official docs are enabled.
-- `bitrix_docs_search` — default local SQLite FTS documentation search.
-- `bitrix_semantic_docs_search` — optional semantic documentation search through embeddings; available only when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
+- **Index/status/config/doctor**: `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status` plus CLI `config` and `doctor`.
+- **LiveAPI and symbol search**: `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`.
+- **Source context**: `bitrix_read_file_context`, `bitrix_read_symbol_context`.
+- **Agents and mail events**: `bitrix_agent_search`, `bitrix_mail_event_search`.
+- **Components**: `bitrix_component_search`, `bitrix_component_context`.
+- **ORM**: `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`.
+- **IBlock / Highloadblock / Options**: `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`.
+- **Relations and graph**: `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`.
+- **Detect changes**: `bitrix_detect_changes` combines Git-changed indexed records with graph impact, merged risk, and recommendations.
+- **Autoload and overview**: `bitrix_autoload_search`, `bitrix_project_overview`.
+- **Docs search and API explanation**: `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage`, and optional `bitrix_semantic_docs_search` when `BITRIX_MCP_SEMANTIC_ENABLED` is enabled.
+- **Benchmarks**: CLI `benchmark` writes `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`.
 
 ### Search result formats
 
 Search tools support shared response-shaping options:
 
-- `kind`: for `bitrix_liveapi_search` and `bitrix_event_search`, restrict results to one index kind (`"project"`, `"template"`, `"bitrix"`, or `"install"`) or an array of kinds.
+- `kind`: for `bitrix_liveapi_search`, `bitrix_event_search`, and `bitrix_module_usage_search`, restrict results to one index kind (`"project"`, `"template"`, `"bitrix"`, or `"install"`) or an array of kinds.
 - `preferLocal`: for `bitrix_liveapi_search` and `bitrix_event_search`, boost `project` and `template` results ahead of equally relevant `bitrix` and `install` results; defaults to `true`.
 - `format`: `"compact"` (default) or `"full"`.
 - `includeSignature`: include the compact `signature` field for symbol/event results; defaults to `true`.
 - `maxSignatureChars`: truncate compact signatures to this many characters; defaults to `160`.
 - `maxTextChars`: truncate documentation excerpts to this many characters; defaults to `500`.
 
-Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `kind`, `name`, `module`, `file`, `line`, and a truncated `signature` when available:
+Compact mode is optimized for agent context windows. `bitrix_liveapi_search` and `bitrix_event_search` return short rows with `score`, `type`, `kind`, `name`, `module`, workspace-relative `file`, `line`, and a truncated `signature` when available:
 
 ```json
 {
@@ -324,6 +414,31 @@ Example response shape:
   },
   "numberedLines": "777: ...\n785: public static function GetList(...)\n809: ..."
 }
+```
+
+
+Module usage compact mode returns the module name, API call, index kind, relative file, line, and exact call signature:
+
+```json
+{
+  "module": "iblock",
+  "limit": 5
+}
+```
+
+Example compact module usage response shape:
+
+```json
+[
+  {
+    "module": "iblock",
+    "call": "Loader::includeModule",
+    "kind": "project",
+    "file": "local/php_interface/init.php",
+    "line": 42,
+    "signature": "Loader::includeModule('iblock')"
+  }
+]
 ```
 
 Documentation search compact mode returns an `excerpt` instead of the full indexed chunk. Matching query terms are highlighted when possible; otherwise the chunk is truncated:
@@ -561,3 +676,35 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+## Phase 17 benchmark reporting
+
+Run benchmark reporting from this repository or from an installed package:
+
+```bash
+npm run benchmark
+# or, after build/install
+bitrix-mcp benchmark
+```
+
+Reports are written to `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`. The benchmark measures incremental `index-all`, `index-project`, `index-template`, optional `index-bitrix`, docs search, LiveAPI search, event search, relation search, graph traversal, impact-radius, detect-changes, SQLite DB size, indexed files, symbols, events, relations, and docs chunks. It skips missing Bitrix roots, missing docs, and unavailable optional indexes with warnings. It does not force a full reindex unless `--force` is passed.
+
+## Documentation map
+
+- [MCP tools](./docs/tools.md) — implemented tools only, with parameters, examples, prompts, usage guidance, and limitations.
+- [Indexing](./docs/indexing.md) — indexing scopes and benchmark reporting.
+- [Bitrix events](./docs/bitrix-events.md) — event-search workflow.
+- [ORM](./docs/orm.md) — D7 entity and usage workflow.
+- [Components](./docs/components.md) — component/template workflow.
+- [Graph](./docs/graph.md) — `bitrix_relations`, neighbors, traversal, and impact radius.
+- [Detect changes](./docs/detect-changes.md) — review workflow.
+- [Security](./docs/security.md) — local data, path restrictions, and network notes.
+- [Examples](./docs/examples.md) — copy-ready prompts.
+
+Recommended AI workflow:
+
+1. General project work: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` as needed → `bitrix_read_file_context` or `bitrix_read_symbol_context`.
+2. Review work: `bitrix_detect_changes` → `bitrix_impact_radius` → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → context tools.
+3. Bitrix events: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
+4. ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
+5. Components: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.

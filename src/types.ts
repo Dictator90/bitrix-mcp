@@ -8,23 +8,156 @@ export interface IndexFile {
   mtimeMs: number;
   language: string;
   symbols: SymbolRecord[];
+  moduleUsages?: ModuleUsageRecord[];
+  ormEntities?: OrmEntityRecord[];
+  ormUsages?: OrmUsageRecord[];
+  iblockUsages?: IblockUsageRecord[];
+  hlblockUsages?: HlblockUsageRecord[];
+  optionUsages?: OptionUsageRecord[];
+}
+
+export interface ComponentParamRecord {
+  name: string;
+  value: string | number | boolean | null | "unknown";
+}
+
+export interface SymbolParameterRecord {
+  name: string;
+  type?: string;
+  default?: string;
+  nullable?: boolean;
+  variadic?: boolean;
 }
 
 export interface SymbolRecord {
-  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method";
+  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event";
   kind?: IndexKind;
   language?: string;
   name: string;
   module?: string;
+  fullyQualifiedName?: string;
+  namespace?: string;
   className?: string;
+  visibility?: "public" | "protected" | "private";
+  static?: boolean;
+  abstract?: boolean;
+  final?: boolean;
+  returnType?: string;
+  extends?: string;
+  implements?: string[];
+  traits?: string[];
+  parameters?: SymbolParameterRecord[];
   handlerClass?: string;
   handlerMethod?: string;
   handlerFunction?: string;
+  anonymous?: boolean;
   eventName?: string;
+  agentAction?: "AddAgent" | "RemoveAgent" | "GetList";
+  api?: string;
+  siteId?: string;
+  periodic?: string;
+  interval?: number;
+  relativeFile?: string;
   file: string;
   line: number;
+  lineEnd?: number;
   signature?: string;
   description?: string;
+  template?: string;
+  params?: ComponentParamRecord[];
+}
+
+export interface OrmFieldRecord {
+  name: string;
+  type: string;
+  className?: string;
+  line: number;
+  options?: Record<string, unknown>;
+  referenceClass?: string;
+  signature?: string;
+}
+
+export interface OrmEntityRecord {
+  type: "orm_entity";
+  className: string;
+  fullyQualifiedName: string;
+  namespace?: string;
+  parentClass?: string;
+  module?: string;
+  tableName?: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  fields: OrmFieldRecord[];
+  references: OrmFieldRecord[];
+  kind?: IndexKind;
+  signature?: string;
+}
+
+export interface IblockUsageRecord {
+  type: "iblock_usage";
+  iblockId: string;
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
+  component?: string;
+}
+
+export interface HlblockUsageRecord {
+  type: "hlblock_usage";
+  hlblockId: string;
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
+}
+
+export interface OptionUsageRecord {
+  type: "option";
+  module: string;
+  name: string;
+  operation: "get" | "set";
+  api: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature: string;
+  contextType?: "method" | "function";
+  contextName?: string;
+}
+
+export interface OrmUsageRecord {
+  type: "orm_usage";
+  entity: string;
+  method: string;
+  usageKind: "datamanager" | "compile_entity" | "compile_entity_by_iblock";
+  module?: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  kind?: IndexKind;
+  signature?: string;
+}
+
+export interface ModuleUsageRecord {
+  type: "module_usage";
+  module: string;
+  file: string;
+  relativeFile?: string;
+  line: number;
+  call: "Loader::includeModule" | "CModule::IncludeModule" | "IsModuleInstalled" | "ModuleManager::isModuleInstalled";
+  kind?: IndexKind;
+  signature: string;
 }
 
 export interface EventRecord {
@@ -34,7 +167,9 @@ export interface EventRecord {
   handlerClass?: string;
   handlerMethod?: string;
   handlerFunction?: string;
+  anonymous?: boolean;
   file: string;
+  relativeFile?: string;
   line: number;
   signature?: string;
   description?: string;
@@ -43,6 +178,37 @@ export interface EventRecord {
 export interface SearchResult<T = unknown> {
   score: number;
   item: T;
+}
+
+export type AutoloadRecordType = "psr-4" | "files" | "classmap" | "dependency" | "dev_dependency" | "bootstrap";
+
+export interface AutoloadRecord {
+  id?: number;
+  type: AutoloadRecordType;
+  namespace?: string;
+  paths?: string[];
+  file?: string;
+  package?: string;
+  version?: string;
+  sourceFile: string;
+  root: string;
+  dev?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface BitrixRelationRecord {
+  id?: number;
+  sourceType: string;
+  sourceName: string;
+  targetType: string;
+  targetName: string;
+  relationType: string;
+  file: string;
+  line: number;
+  module?: string;
+  kind?: string;
+  signature?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface IndexWarning {

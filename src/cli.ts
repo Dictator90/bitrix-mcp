@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
+import { detectChanges, formatDetectChangesText, type DetectChangesOptions } from "./indexer/detectChanges.js";
+import { getGraphNeighbors, getImpactRadiusForPaths, type GraphNeighborsOptions, type ImpactRadiusOptions } from "./indexer/graph.js";
 import { buildIndex } from "./indexer/indexer.js";
+import { searchModuleUsages } from "./indexer/sqliteStore.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
 import { configureAgents, initAndServe, parseAgentIds, type InitOptions } from "./init/init.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
 import { serveStdio } from "./mcp/server.js";
+import { runBenchmark } from "./benchmark/report.js";
+import { formatModuleUsageSearchResults } from "./mcp/format.js";
 
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
@@ -27,8 +32,13 @@ Commands:
   docs-update                   Clone or pull registered Git documentation sources
   index-docs [--force] [--embeddings] Index registered documentation sources into SQLite, optionally then into embeddings
   index-embeddings              Send SQLite documentation chunks to the embeddings service
+  search-modules <module>       Search indexed Bitrix module include/check API usages
   status                        Show SQLite DB path and index counters
   doctor [--json] [--verbose]   Check workspace, Bitrix root, SQLite, docs, ignore file, and semantic embeddings when enabled
+  detect-changes [--base <ref>] [--json] [--depth <n>] Analyze Git-changed Bitrix files, indexed entities, and impact
+  graph-neighbors <type> <name> [--direction out|in|both] [--relation-type <type>] [--depth <n>] [--json]
+  impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
+  benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
@@ -93,11 +103,150 @@ function parseInitOptions(argv: string[]): InitOptions {
   return options;
 }
 
-function positionalArgs(argv: string[]): string[] {
-  const result: string[] = [];
+function parseDetectChangesOptions(argv: string[]): DetectChangesOptions {
+  const options: DetectChangesOptions = {};
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--agent") {
+    if (value === "--base") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--base requires a git ref.");
+      options.base = next;
+      index += 1;
+    } else if (value.startsWith("--base=")) {
+      options.base = value.slice("--base=".length);
+    } else if (value === "--kind") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--kind requires a file kind.");
+      options.kind = next.split(",").map((item) => item.trim()).filter(Boolean);
+      index += 1;
+    } else if (value.startsWith("--kind=")) {
+      options.kind = value.slice("--kind=".length).split(",").map((item) => item.trim()).filter(Boolean);
+    } else if (value === "--include-source") {
+      options.includeSource = true;
+    } else if (value === "--no-relations") {
+      options.includeRelations = false;
+    } else if (value === "--no-impact") {
+      options.includeImpact = false;
+    } else if (value === "--no-risk") {
+      options.includeRisk = false;
+    } else if (value === "--depth") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
+      options.maxDepth = Number(next);
+      index += 1;
+    } else if (value.startsWith("--depth=")) {
+      options.maxDepth = Number(value.slice("--depth=".length));
+    } else if (value === "--max-files") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--max-files requires a number.");
+      options.maxFiles = Number(next);
+      index += 1;
+    } else if (value.startsWith("--max-files=")) {
+      options.maxFiles = Number(value.slice("--max-files=".length));
+    } else if (value === "--max-items") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--max-items requires a number.");
+      options.maxItems = Number(next);
+      index += 1;
+    } else if (value.startsWith("--max-items=")) {
+      options.maxItems = Number(value.slice("--max-items=".length));
+    } else if (value === "--full") {
+      options.format = "full";
+    }
+  }
+  return options;
+}
+
+function parseGraphNeighborsOptions(argv: string[]): GraphNeighborsOptions {
+  const options: GraphNeighborsOptions = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--direction") {
+      const next = argv[index + 1];
+      if (next !== "out" && next !== "in" && next !== "both") throw new Error("--direction must be out, in, or both.");
+      options.direction = next;
+      index += 1;
+    } else if (value.startsWith("--direction=")) {
+      const next = value.slice("--direction=".length);
+      if (next !== "out" && next !== "in" && next !== "both") throw new Error("--direction must be out, in, or both.");
+      options.direction = next;
+    } else if (value === "--relation-type") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--relation-type requires a value.");
+      options.relationType = next;
+      index += 1;
+    } else if (value.startsWith("--relation-type=")) {
+      options.relationType = value.slice("--relation-type=".length);
+    } else if (value === "--depth") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
+      options.depth = Number(next);
+      index += 1;
+    } else if (value.startsWith("--depth=")) {
+      options.depth = Number(value.slice("--depth=".length));
+    } else if (value === "--limit") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--limit requires a number.");
+      options.limit = Number(next);
+      index += 1;
+    } else if (value.startsWith("--limit=")) {
+      options.limit = Number(value.slice("--limit=".length));
+    } else if (value === "--full") {
+      options.format = "full";
+    }
+  }
+  return options;
+}
+
+function parseImpactRadiusOptions(argv: string[], files: string[]): ImpactRadiusOptions {
+  const options: ImpactRadiusOptions = { files: files.length > 0 ? files : undefined };
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--base") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--base requires a git ref.");
+      options.base = next;
+      index += 1;
+    } else if (value.startsWith("--base=")) {
+      options.base = value.slice("--base=".length);
+    } else if (value === "--depth") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
+      options.maxDepth = Number(next);
+      index += 1;
+    } else if (value.startsWith("--depth=")) {
+      options.maxDepth = Number(value.slice("--depth=".length));
+    } else if (value === "--relation-types") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--relation-types requires a comma-separated list.");
+      options.relationTypes = next.split(",").map((item) => item.trim()).filter(Boolean);
+      index += 1;
+    } else if (value.startsWith("--relation-types=")) {
+      options.relationTypes = value.slice("--relation-types=".length).split(",").map((item) => item.trim()).filter(Boolean);
+    } else if (value === "--no-symbols") {
+      options.includeChangedSymbols = false;
+    } else if (value === "--no-risk") {
+      options.includeRisk = false;
+    } else if (value === "--limit") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) throw new Error("--limit requires a number.");
+      options.limit = Number(next);
+      index += 1;
+    } else if (value.startsWith("--limit=")) {
+      options.limit = Number(value.slice("--limit=".length));
+    } else if (value === "--full") {
+      options.format = "full";
+    }
+  }
+  return options;
+}
+
+function positionalArgs(argv: string[]): string[] {
+  const result: string[] = [];
+  const optionsWithValues = new Set(["--agent", "--base", "--kind", "--max-files", "--max-items", "--direction", "--relation-type", "--depth", "--limit", "--relation-types"]);
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (optionsWithValues.has(value)) {
       index += 1;
       continue;
     }
@@ -218,8 +367,48 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  if (command === "search-modules") {
+    if (!arg) {
+      throw new Error("search-modules requires a module name.");
+    }
+    const results = await searchModuleUsages(sqlitePath(paths.dataDir), { module: arg, limit: 50 }) ?? [];
+    console.log(JSON.stringify(formatModuleUsageSearchResults(results), null, 2));
+    return;
+  }
+
+
+  if (command === "graph-neighbors") {
+    const [, nodeType, nodeName] = positional;
+    if (!nodeType || !nodeName) {
+      throw new Error("graph-neighbors requires <type> <name>.");
+    }
+    const result = await getGraphNeighbors(sqlitePath(paths.dataDir), { type: nodeType, name: nodeName }, parseGraphNeighborsOptions(argv.slice(1)));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "impact-radius") {
+    const files = positional.slice(1);
+    const result = await getImpactRadiusForPaths(paths, parseImpactRadiusOptions(argv.slice(1), files));
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
   if (command === "status") {
     console.log(formatIndexStatus(await readIndexStatus(paths)));
+    return;
+  }
+
+  if (command === "detect-changes") {
+    const result = await detectChanges(paths, parseDetectChangesOptions(argv.slice(1)));
+    console.log(argv.includes("--json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
+    return;
+  }
+
+  if (command === "benchmark") {
+    const report = await runBenchmark({ force });
+    console.log(`Benchmark report written to ${paths.dataDir}/benchmark.json and ${paths.dataDir}/benchmark.md`);
+    console.log(JSON.stringify({ metrics: report.metrics, warnings: report.warnings }, null, 2));
     return;
   }
 
