@@ -212,7 +212,11 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     symbols: symbolCount,
     relations: relationCount
   });
-  return (await readIndexFromSqlite(dbFile, options.kind)) ?? manifest;
+  // Return the in-memory manifest built during this run. Callers only need
+  // file counts / freshly parsed symbols, so we avoid re-reading the entire
+  // index back from SQLite (a per-file query fan-out that cost minutes on
+  // large scopes). Unchanged files stay fully indexed in SQLite either way.
+  return manifest;
 }
 
 export async function readIndex(indexFile: string, kind?: IndexKind): Promise<IndexManifest | undefined> {

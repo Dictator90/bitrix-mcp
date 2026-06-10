@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+### Changed
+
+- `buildIndex` now returns the manifest it built in memory instead of re-reading the whole index back from SQLite. The readback issued a per-file query fan-out across every child table purely to hand callers a value they only use for `manifest.files.length`, adding seconds per scope on large projects (and minutes before the `file_id` indexes). Unchanged files remain fully indexed in SQLite; only the returned manifest skips rehydrating them.
+
 ## 0.3.2
 
 ### Fixed
