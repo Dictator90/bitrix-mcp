@@ -1,13 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Added
+
+- Visual indexing progress for all `index-*` commands (`index-project`, `index-template`, `index-bitrix`, `index-install`, `index-docs`, `index-code`, `index-all`). Progress is on by default in an interactive terminal, always written to `stderr` (never `stdout`), and shows the current phase, scope, processed/total files, current file, elapsed time, and a final summary.
+- `--compact` progress mode using dots for ongoing work and checkmarks for completed phases/scopes, with a one-line summary per scope.
+- `--no-progress` to disable progress, `--progress` to force it on a non-interactive shell, and `--json-progress` to emit JSON Lines progress events to `stderr`.
+- New `src/progress/` reporting layer (`ProgressReporter` interface with Noop/Tty/Compact/Json implementations and a `createProgressReporter` factory) so indexers stay free of ad-hoc logging and `serve` (MCP stdio) stays unaffected.
 
 ### Fixed
 
-<<<<<<< ours
 - Restored `tests/fixtures/project/index.php` class declaration to valid `DemoComponent`, preventing PHP AST fallback and recovering symbol/index/context test coverage.
-=======
->>>>>>> theirs
 - Hardened symbol-context and detect-changes indexed record lookups to normalize `./`, Windows-backslash, relative, and absolute file filters consistently.
 - Added regression coverage for fixture PHP class/method AST line bounds, SQLite class search, method context lookup, and indexed-record path matching.
 - Stabilized Windows test runs by using slash-normalized relative path expectations and file URL `--import` loader paths for CLI test launches.

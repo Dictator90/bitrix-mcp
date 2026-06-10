@@ -1,0 +1,153 @@
+import { formatDuration, formatNumber, percent } from "./format.js";
+import type { ProgressStream } from "./jsonReporter.js";
+import type { IndexProgressEvent, ProgressReporter } from "./types.js";
+
+export interface TtyProgressReporterOptions {
+  stream: ProgressStream;
+  isTty?: boolean;
+  columns?: number;
+  useColor?: boolean;
+  now?: () => number;
+  intervalMs?: number;
+}
+
+const CLEAR_LINE = "\x1b[2K";
+const PHASE_LABELS: Record<string, string> = {
+  discover: "Discover files",
+  filter: "Filter files",
+  parse: "Parse files",
+  relations: "Extract relations",
+  write: "Write index",
+  docs: "Index documentation",
+  embeddings: "Index embeddings",
+  finalize: "Finalize",
+  done: "Done"
+};
+
+/**
+ * Rich single-line progress for interactive terminals: a header per phase and
+ * a live status line (rewritten in place on a TTY) showing current/total,
+ * percentage, elapsed time and the current file. Updates are throttled.
+ */
+export class TtyProgressReporter implements ProgressReporter {
+  private readonly stream: ProgressStream;
+  private readonly isTty: boolean;
+  private readonly columns: number;
+  private readonly useColor: boolean;
+  private readonly now: () => number;
+  private readonly intervalMs: number;
+
+  private lineActive = false;
+  private lastRenderAt = Number.NEGATIVE_INFINITY;
+  private phaseStartedAt = 0;
+
+  constructor(options: TtyProgressReporterOptions) {
+    this.stream = options.stream;
+    this.isTty = options.isTty ?? Boolean(options.stream.isTTY);
+    this.columns = options.columns ?? options.stream.columns ?? 80;
+    this.useColor = options.useColor ?? this.isTty;
+    this.now = options.now ?? Date.now;
+    this.intervalMs = options.intervalMs ?? 150;
+  }
+
+  private finishLine(): void {
+    if (this.lineActive) {
+      this.stream.write("\n");
+      this.lineActive = false;
+    }
+  }
+
+  private dim(text: string): string {
+    return this.useColor ? `\x1b[2m${text}\x1b[0m` : text;
+  }
+
+  private truncate(text: string): string {
+    const max = Math.max(10, this.columns - 1);
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  }
+
+  start(event: IndexProgressEvent): void {
+    this.finishLine();
+    this.phaseStartedAt = this.now();
+    this.lastRenderAt = Number.NEGATIVE_INFINITY;
+    const label = event.message ?? PHASE_LABELS[event.phase] ?? event.phase;
+    this.stream.write(`${event.scope}: ${label}\n`);
+  }
+
+  update(event: IndexProgressEvent): void {
+    const timestamp = this.now();
+    if (timestamp - this.lastRenderAt < this.intervalMs) {
+      return;
+    }
+    this.lastRenderAt = timestamp;
+
+    const segments: string[] = [];
+    if (event.current !== undefined && event.total !== undefined) {
+      segments.push(`${formatNumber(event.current)}/${formatNumber(event.total)}`);
+      const pct = percent(event.current, event.total);
+      if (pct) segments.push(pct);
+    } else if (event.current !== undefined) {
+      segments.push(formatNumber(event.current));
+    }
+    const elapsed = timestamp - this.phaseStartedAt;
+    if (elapsed > 0) {
+      segments.push(`${formatDuration(elapsed)} elapsed`);
+    }
+    if (event.current && event.total && event.current > 0) {
+      const remaining = ((timestamp - this.phaseStartedAt) / event.current) * (event.total - event.current);
+      if (Number.isFinite(remaining) && remaining > 0) {
+        segments.push(`~${formatDuration(remaining)} left`);
+      }
+    }
+    let line = `  ${segments.join(" | ")}`;
+    if (event.file) {
+      line += this.dim(` ${event.file}`);
+    }
+    line = this.truncate(line);
+
+    if (this.isTty) {
+      this.stream.write(`\r${CLEAR_LINE}${line}`);
+      this.lineActive = true;
+    } else {
+      this.stream.write(`${line}\n`);
+    }
+  }
+
+  warn(message: string, _event?: Partial<IndexProgressEvent>): void {
+    this.finishLine();
+    this.stream.write(`Warning: ${message}\n`);
+  }
+
+  error(message: string, event?: Partial<IndexProgressEvent>): void {
+    this.finishLine();
+    const where = event?.file ? ` while parsing ${event.file}` : "";
+    this.stream.write(`${this.useColor ? "\x1b[31m" : ""}✗ Failed${where}${this.useColor ? "\x1b[0m" : ""}\n`);
+    this.stream.write(`${message}\n`);
+  }
+
+  done(event: IndexProgressEvent): void {
+    this.finishLine();
+    if (event.phase !== "done") {
+      return;
+    }
+    const parts: string[] = [];
+    if (event.elapsedMs !== undefined) {
+      parts.push(`Done in ${formatDuration(event.elapsedMs)}`);
+    } else {
+      parts.push("Done");
+    }
+    const metrics: Array<[string, number | undefined]> = [
+      ["files", event.indexedFiles],
+      ["skipped", event.skippedFiles],
+      ["symbols", event.symbols],
+      ["events", event.events],
+      ["relations", event.relations],
+      ["docs", event.docsChunks]
+    ];
+    const rendered = metrics
+      .filter((entry): entry is [string, number] => entry[1] !== undefined)
+      .map(([label, value]) => `${label}: ${formatNumber(value)}`);
+    const check = "✓";
+    this.stream.write(`${check} ${[parts[0], ...rendered].join(" | ")}\n`);
+  }
+}

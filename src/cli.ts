@@ -12,6 +12,7 @@ import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_
 import { serveStdio } from "./mcp/server.js";
 import { runBenchmark } from "./benchmark/report.js";
 import { formatModuleUsageSearchResults } from "./mcp/format.js";
+import { createProgressReporter, detectCi, type CreateProgressReporterOptions } from "./progress/index.js";
 
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
@@ -39,6 +40,14 @@ Commands:
   graph-neighbors <type> <name> [--direction out|in|both] [--relation-type <type>] [--depth <n>] [--json]
   impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
   benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
+
+Indexing progress options (index-* commands):
+  --progress                    Force progress output (useful for non-TTY)
+  --no-progress                 Disable progress output
+  --compact                     Compact progress with dots and checkmarks
+  --json-progress               Emit JSON Lines progress events to stderr
+                                Progress is on by default in an interactive terminal,
+                                always written to stderr, and off in CI/non-TTY.
 
 Init/configure options:
   --agent <id>                  Configure an agent non-interactively (repeat or comma-separate)
@@ -241,6 +250,26 @@ function parseImpactRadiusOptions(argv: string[], files: string[]): ImpactRadius
   return options;
 }
 
+function parseProgressOptions(argv: string[]): CreateProgressReporterOptions {
+  const options: CreateProgressReporterOptions = {
+    stderr: process.stderr,
+    isTty: Boolean(process.stderr.isTTY),
+    isCi: detectCi()
+  };
+  if (argv.includes("--no-progress")) {
+    options.progress = false;
+  } else if (argv.includes("--progress")) {
+    options.progress = true;
+  }
+  if (argv.includes("--compact")) {
+    options.compact = true;
+  }
+  if (argv.includes("--json-progress")) {
+    options.jsonProgress = true;
+  }
+  return options;
+}
+
 function positionalArgs(argv: string[]): string[] {
   const result: string[] = [];
   const optionsWithValues = new Set(["--agent", "--base", "--kind", "--max-files", "--max-items", "--direction", "--relation-type", "--depth", "--limit", "--relation-types"]);
@@ -292,25 +321,47 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-all") {
-    console.log(formatIndexAllResult(await indexAll(paths, { force })));
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const startedAt = Date.now();
+    const result = await indexAll(paths, { force, reporter });
+    reporter.done({
+      scope: "all",
+      phase: "done",
+      status: "done",
+      elapsedMs: Date.now() - startedAt,
+      indexedFiles: result.projectFiles + result.templateFiles + result.bitrixFiles + result.installFiles,
+      docsChunks: result.docChunks
+    });
+    console.log(formatIndexAllResult(result));
     return;
   }
 
   if (command === "index-code") {
-    const result = await indexCode(paths, { force });
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const startedAt = Date.now();
+    const result = await indexCode(paths, { force, reporter });
+    reporter.done({
+      scope: "code",
+      phase: "done",
+      status: "done",
+      elapsedMs: Date.now() - startedAt,
+      indexedFiles: result.projectFiles + result.templateFiles + result.bitrixFiles + result.installFiles
+    });
     console.log(formatIndexAllResult({ ...result, docChunks: 0 }));
     return;
   }
 
   if (command === "index-project") {
-    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force });
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-template") {
+    const reporter = createProgressReporter(parseProgressOptions(argv));
     const options = resolveTemplateIndexOptions(paths, arg);
-    const manifest = await buildIndex({ ...options, force });
+    const manifest = await buildIndex({ ...options, force, reporter });
     console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -320,14 +371,16 @@ async function main(argv: string[]): Promise<void> {
     if (!root) {
       throw new Error("Bitrix root not found. Run from a project containing ./bitrix, pass [root], or set BITRIX_ROOT.");
     }
+    const reporter = createProgressReporter(parseProgressOptions(argv));
     const projectRoot = resolveBitrixProjectRoot(root);
-    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force });
+    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force, reporter });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-install") {
-    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force });
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter });
     console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -354,7 +407,11 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-docs") {
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const startedAt = Date.now();
+    reporter.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
     const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force });
+    reporter.done({ scope: "docs", phase: "done", status: "done", elapsedMs: Date.now() - startedAt, docsChunks: chunks });
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     if (embeddings) {
       console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));

@@ -6,6 +6,7 @@ import { buildIndex, DEFAULT_BITRIX_PATTERNS, DEFAULT_INSTALL_ASSET_PATTERNS, ty
 import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
 import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
+import type { ProgressReporter } from "../progress/types.js";
 
 export interface IndexAllResult {
   projectFiles: number;
@@ -49,18 +50,24 @@ async function fileExists(targetPath: string): Promise<boolean> {
   }
 }
 
-export async function indexCode(paths: RuntimePaths, options: { force?: boolean } = {}): Promise<Omit<IndexAllResult, "docChunks">> {
-  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force: options.force });
-  const templateManifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force: options.force });
+export interface IndexActionOptions {
+  force?: boolean;
+  reporter?: ProgressReporter;
+}
+
+export async function indexCode(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<Omit<IndexAllResult, "docChunks">> {
+  const reporter = options.reporter;
+  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force: options.force, reporter });
+  const templateManifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force: options.force, reporter });
 
   let bitrixFiles = 0;
   let installFiles = 0;
   if (paths.bitrixRoot) {
     const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot);
-    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: DEFAULT_BITRIX_PATTERNS, force: options.force });
+    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: DEFAULT_BITRIX_PATTERNS, force: options.force, reporter });
     bitrixFiles = bitrixManifest.files.length;
 
-    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force });
+    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter });
     installFiles = installManifest.files.length;
   }
 
@@ -73,9 +80,11 @@ export async function indexCode(paths: RuntimePaths, options: { force?: boolean 
   };
 }
 
-export async function indexAll(paths: RuntimePaths, options: { force?: boolean } = {}): Promise<IndexAllResult> {
+export async function indexAll(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<IndexAllResult> {
   const codeResult = await indexCode(paths, options);
+  options.reporter?.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
   const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force: options.force });
+  options.reporter?.done({ scope: "docs", phase: "done", status: "done", docsChunks: docChunks });
   return { ...codeResult, docChunks };
 }
 

@@ -203,6 +203,59 @@ private/*.php
 assets/ignored.js
 ```
 
+## Indexing progress
+
+Indexing a full Bitrix project (especially `index-bitrix` over a real `/bitrix/`
+tree) can take many minutes. To make the process visible, every `index-*`
+command shows progress while it works.
+
+```bash
+# Default: live progress in an interactive terminal
+npx @mb4it/bitrix-mcp index-project
+npx @mb4it/bitrix-mcp index-bitrix
+
+# Compact progress: dots for work, checkmarks for completed phases/scopes
+npx @mb4it/bitrix-mcp index-bitrix --compact
+
+# Disable progress entirely
+npx @mb4it/bitrix-mcp index-all --no-progress
+
+# Force progress on a non-interactive shell (e.g. when piping to a log)
+npx @mb4it/bitrix-mcp index-bitrix --progress
+
+# Machine-readable JSON Lines progress (to stderr)
+npx @mb4it/bitrix-mcp index-bitrix --json-progress
+```
+
+Behaviour:
+
+- Progress is **on by default** in an interactive terminal (`stderr` is a TTY).
+- `--compact` prints a short line per scope with `.` for ongoing work and `✓` for
+  completed phases, followed by a one-line summary per scope. Example for
+  `index-all`:
+
+  ```text
+  project    ✓ . ✓ ✓ ✓
+  ✓ project indexed in 00:03 | files: 412 | skipped: 0 | symbols: 1 980 | relations: 220
+  template   ✓ . . ✓ ✓ ✓
+  ✓ template indexed in 00:02 | files: 168 | skipped: 0 | symbols: 540 | relations: 12
+  bitrix     ✓ . . . . . . . ✓ ✓ ✓
+  ✓ bitrix indexed in 07:43 | files: 16 811 | skipped: 0 | symbols: 38 210 | relations: 4 712
+  docs       ✓
+  ✓ docs indexed | docs: 1 240
+  all        ✓
+  ✓ all indexed in 08:31 | files: 17 391 | docs: 1 240
+  ```
+
+- `--no-progress` disables progress output completely.
+- `--json-progress` emits one JSON object per event (`{"phase":"parse","scope":"bitrix","current":1200,"total":16811,...}`).
+- Progress is always written to **`stderr`**, never `stdout`, so it never interferes
+  with the MCP stdio (`serve`) JSON-RPC protocol or with piped command output.
+- In **CI / non-interactive** environments progress is off by default; pass
+  `--progress`, `--compact`, or `--json-progress` to force it on.
+- If `NO_COLOR` is set (or the terminal lacks unicode), the reporters fall back to
+  ASCII marks.
+
 ## Bitrix dependency graph and impact radius
 
 Bitrix MCP builds a queryable graph from indexed `bitrix_relations` rather than a generic AST dependency graph. Each edge is a Bitrix relation in the form `source_type:source_name --relation_type--> target_type:target_name`, for example:

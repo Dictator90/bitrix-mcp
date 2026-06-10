@@ -8,6 +8,8 @@ import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
 import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
 import { indexAutoloadMetadata } from "./autoload.js";
+import { NoopProgressReporter } from "../progress/noopReporter.js";
+import type { IndexProgressEvent, IndexScope, ProgressReporter } from "../progress/types.js";
 import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
@@ -42,6 +44,15 @@ export interface IndexOptions {
   patterns?: string[];
   ignores?: string[];
   force?: boolean;
+  reporter?: ProgressReporter;
+  /** Progress scope label; defaults to the index kind. */
+  scope?: IndexScope;
+}
+
+/** Extract the Bitrix module name from a path like `bitrix/modules/iblock/lib/...`. */
+function detectModule(relativePath: string): string | undefined {
+  const match = relativePath.replace(/\\/g, "/").match(/(?:^|\/)(?:bitrix|local)\/modules\/([^/]+)\//);
+  return match?.[1];
 }
 
 async function loadIgnore(root: string, options: { useGitignore?: boolean; extraIgnores?: string[] } = {}) {
@@ -78,12 +89,17 @@ function defaultIgnoresForKind(kind: IndexKind): string[] {
 }
 
 export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
+  const startedAt = Date.now();
+  const reporter = options.reporter ?? new NoopProgressReporter();
+  const scope: IndexScope = options.scope ?? options.kind;
   const root = path.resolve(options.root);
   const patterns = options.patterns ?? defaultPatternsForKind(options.kind);
   const kindIgnores = [...defaultIgnoresForKind(options.kind), ...(options.ignores ?? [])];
   const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
   const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
   const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
+
+  reporter.start({ scope, phase: "discover", status: "start", startedAt });
   const ig = await loadIgnore(root, {
     useGitignore: options.kind !== "bitrix" && options.kind !== "install",
     extraIgnores: kindIgnores
@@ -95,19 +111,36 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     followSymbolicLinks: false,
     ignore: [...DEFAULT_IGNORES, ...kindIgnores]
   });
+  const queued = entries.filter((relativePath) => !ig.ignores(relativePath)).sort();
+  reporter.done({
+    scope,
+    phase: "discover",
+    status: "done",
+    foundFiles: entries.length,
+    ignoredFiles: entries.length - queued.length,
+    queuedFiles: queued.length
+  });
 
   const files: IndexFile[] = [];
   const warnings: IndexWarning[] = [];
   const debugParse = process.env.BITRIX_MCP_DEBUG_PARSE === "1";
-  for (const relativePath of entries.sort()) {
-    if (ig.ignores(relativePath)) {
-      continue;
-    }
+  let symbolCount = 0;
+  let relationCount = 0;
+  let skippedFiles = 0;
+  const total = queued.length;
+  reporter.start({ scope, phase: "parse", status: "start", message: "Parse files", total, startedAt: Date.now() });
+  let processed = 0;
+  for (const relativePath of queued) {
+    processed += 1;
     const absolutePath = path.join(root, relativePath);
     const stat = await fs.stat(absolutePath);
     const language = detectLanguage(absolutePath);
     const existing = existingByPath.get(absolutePath);
     const shouldParseSymbols = !existing || existing.size !== stat.size || existing.mtimeMs !== stat.mtimeMs;
+    if (!shouldParseSymbols) {
+      skippedFiles += 1;
+    }
+    reporter.update({ scope, phase: "parse", status: "progress", current: processed, total, file: relativePath, module: detectModule(relativePath) });
     const source = shouldParseSymbols && (language === "php" || language === "javascript" || language === "typescript") ? await fs.readFile(absolutePath, "utf8") : "";
     let symbols: SymbolRecord[] = [];
     let moduleUsages: ModuleUsageRecord[] = [];
@@ -149,7 +182,10 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
       hlblockUsages: hlblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
       optionUsages: optionUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
     });
+    symbolCount += symbols.length;
+    relationCount += moduleUsages.length + ormUsages.length + iblockUsages.length + hlblockUsages.length + optionUsages.length + ormEntities.length;
   }
+  reporter.done({ scope, phase: "parse", status: "done", symbols: symbolCount, relations: relationCount });
 
   const manifest: IndexManifest = {
     version: 1,
@@ -160,10 +196,22 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     warnings
   };
 
+  reporter.start({ scope, phase: "write", status: "start", message: "Write index" });
   await writeIndexToSqlite(dbFile, manifest, { force: options.force });
+  reporter.done({ scope, phase: "write", status: "done" });
   if (options.kind === "project") {
     await indexAutoloadMetadata(root, dbFile);
   }
+  reporter.done({
+    scope,
+    phase: "done",
+    status: "done",
+    elapsedMs: Date.now() - startedAt,
+    indexedFiles: files.length,
+    skippedFiles,
+    symbols: symbolCount,
+    relations: relationCount
+  });
   return (await readIndexFromSqlite(dbFile, options.kind)) ?? manifest;
 }
 
