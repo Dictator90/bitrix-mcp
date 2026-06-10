@@ -6,7 +6,8 @@ import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diag
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { detectChanges, formatDetectChangesText, type DetectChangesOptions } from "./indexer/detectChanges.js";
 import { getGraphNeighbors, getImpactRadiusForPaths, type GraphNeighborsOptions, type ImpactRadiusOptions } from "./indexer/graph.js";
-import { buildIndex } from "./indexer/indexer.js";
+import { buildIndex, discoverFiles } from "./indexer/indexer.js";
+import { resolveBitrixIndex, parseModuleSelection, validateBitrixModules, detectBitrixModule, type BitrixModuleSelection } from "./indexer/bitrixModules.js";
 import { searchModuleUsages } from "./indexer/sqliteStore.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
@@ -43,7 +44,7 @@ Commands:
   index-code [--force]          Index project, templates, Bitrix modules, and install assets
   index-project [root] [--force] Index project files
   index-template [templatePath] [--force] Index a specific template path, or standard template locations
-  index-bitrix [root] [--force]  Index installed Bitrix Framework PHP sources
+  index-bitrix [root] [options]  Index Bitrix core (modules/admin/tools/js). See Bitrix indexing options
   index-install [root] [--force] Index Bitrix module install assets
   docs-add-git [url]            Register a Git documentation source (defaults to official Bitrix docs)
   docs-add-path <path>          Register a local documentation directory
@@ -57,6 +58,15 @@ Commands:
   graph-neighbors <type> <name> [--direction out|in|both] [--relation-type <type>] [--depth <n>] [--json]
   impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
   benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
+
+Bitrix indexing options (index-bitrix; index-code/index-all accept --no-bitrix, --modules, --include-lang, --full):
+  --modules=main,iblock         Index only these Bitrix core modules (default: all). Use --modules=all for every module
+  --full                        Index every module plus lang files (slow). Alias for --modules=all --include-lang
+  --include-lang                Include per-module lang/ message files (excluded by default)
+  --no-bitrix                   index-code/index-all only: skip the Bitrix core and install scopes entirely
+  --plan                        index-bitrix only: print what would be indexed (files found/ignored/queued) without indexing
+                                The Bitrix core scope indexes modules + admin + tools + js; runtime, static assets,
+                                install and lang are excluded by default. Components/templates are the template scope.
 
 Indexing progress options (index-* commands):
   --progress                    Force progress output (useful for non-TTY)
@@ -287,6 +297,60 @@ function parseProgressOptions(argv: string[]): CreateProgressReporterOptions {
   return options;
 }
 
+function flagValue(argv: string[], name: string): string | undefined {
+  const prefix = `${name}=`;
+  const hit = argv.find((value) => value.startsWith(prefix));
+  return hit?.slice(prefix.length);
+}
+
+interface BitrixCliOptions {
+  modules: BitrixModuleSelection;
+  includeLang: boolean;
+  full: boolean;
+  plan: boolean;
+  noBitrix: boolean;
+}
+
+function parseBitrixOptions(argv: string[]): BitrixCliOptions {
+  const full = argv.includes("--full");
+  const plan = argv.includes("--plan");
+  const noBitrix = argv.includes("--no-bitrix");
+  let includeLang = argv.includes("--include-lang");
+  if (argv.includes("--exclude-lang")) {
+    includeLang = false;
+  }
+  let modules: BitrixModuleSelection = parseModuleSelection(flagValue(argv, "--modules") ?? flagValue(argv, "--bitrix-modules")) ?? "all";
+  if (full) {
+    modules = "all";
+    includeLang = true;
+  }
+  return { modules, includeLang, full, plan, noBitrix };
+}
+
+async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof resolveBitrixIndex>, modules: BitrixModuleSelection): Promise<void> {
+  const { found, queued } = await discoverFiles(projectRoot, { kind: "bitrix", patterns: resolved.patterns, ignores: resolved.ignores });
+  const byModule = new Map<string, number>();
+  for (const relativePath of queued) {
+    const moduleName = detectBitrixModule(relativePath) ?? "(core: admin/tools/js)";
+    byModule.set(moduleName, (byModule.get(moduleName) ?? 0) + 1);
+  }
+  const top = [...byModule.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  console.log([
+    "Bitrix indexing plan",
+    "",
+    `Root: ${nodePath.join(projectRoot, "bitrix")}`,
+    `Modules: ${modules === "all" ? "all" : modules.join(", ")}`,
+    `Lang files: ${resolved.includeLang ? "included" : "excluded"}`,
+    "",
+    `Files found:  ${found.length}`,
+    `Files ignored: ${found.length - queued.length}`,
+    `Files queued: ${queued.length}`,
+    "",
+    "Top queued modules:",
+    ...top.map(([moduleName, count]) => `- ${moduleName}: ${count} files`)
+  ].join("\n"));
+}
+
 function positionalArgs(argv: string[]): string[] {
   const result: string[] = [];
   const optionsWithValues = new Set(["--agent", "--base", "--kind", "--max-files", "--max-items", "--direction", "--relation-type", "--depth", "--limit", "--relation-types"]);
@@ -343,9 +407,11 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-all") {
+    const bitrix = parseBitrixOptions(argv);
+    if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(argv));
     const startedAt = Date.now();
-    const result = await indexAll(paths, { force, reporter });
+    const result = await indexAll(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang });
     reporter.done({
       scope: "all",
       phase: "done",
@@ -359,9 +425,11 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-code") {
+    const bitrix = parseBitrixOptions(argv);
+    if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(argv));
     const startedAt = Date.now();
-    const result = await indexCode(paths, { force, reporter });
+    const result = await indexCode(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang });
     reporter.done({
       scope: "code",
       phase: "done",
@@ -393,9 +461,27 @@ async function main(argv: string[]): Promise<void> {
     if (!root) {
       throw new Error("Bitrix root not found. Run from a project containing ./bitrix, pass [root], or set BITRIX_ROOT.");
     }
-    const reporter = createProgressReporter(parseProgressOptions(argv));
     const projectRoot = resolveBitrixProjectRoot(root);
-    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force, reporter });
+    const bitrix = parseBitrixOptions(argv);
+    if (bitrix.full) {
+      console.error("Warning: full Bitrix indexing may take a long time on large projects.");
+    }
+    if (bitrix.modules !== "all") {
+      const { found: foundModules, missing } = await validateBitrixModules(projectRoot, bitrix.modules);
+      for (const moduleName of missing) {
+        console.error(`Warning: Bitrix module "${moduleName}" was requested but not found in ${nodePath.join(projectRoot, "bitrix", "modules", moduleName)}`);
+      }
+      if (foundModules.length === 0) {
+        throw new Error(`None of the requested Bitrix modules were found under ${nodePath.join(projectRoot, "bitrix", "modules")}: ${bitrix.modules.join(", ")}`);
+      }
+    }
+    const resolved = resolveBitrixIndex({ modules: bitrix.modules, includeLang: bitrix.includeLang });
+    if (bitrix.plan) {
+      await printBitrixPlan(projectRoot, resolved, bitrix.modules);
+      return;
+    }
+    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, force, reporter });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }

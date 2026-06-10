@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { indexPath, resolveBitrixProjectRoot, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
-import { buildIndex, DEFAULT_BITRIX_PATTERNS, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
+import { buildIndex, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
 import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
+import { resolveBitrixIndex, type BitrixModuleSelection } from "./bitrixModules.js";
 import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
 import type { ProgressReporter } from "../progress/types.js";
 
@@ -53,6 +54,12 @@ async function fileExists(targetPath: string): Promise<boolean> {
 export interface IndexActionOptions {
   force?: boolean;
   reporter?: ProgressReporter;
+  /** Skip the Bitrix core and install scopes entirely (`--no-bitrix`). */
+  noBitrix?: boolean;
+  /** Which Bitrix core modules to index. Defaults to "all". */
+  bitrixModules?: BitrixModuleSelection;
+  /** Index per-module `lang` message files. Defaults to false. */
+  includeLang?: boolean;
 }
 
 export async function indexCode(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<Omit<IndexAllResult, "docChunks">> {
@@ -62,9 +69,10 @@ export async function indexCode(paths: RuntimePaths, options: IndexActionOptions
 
   let bitrixFiles = 0;
   let installFiles = 0;
-  if (paths.bitrixRoot) {
+  if (paths.bitrixRoot && !options.noBitrix) {
     const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot);
-    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: DEFAULT_BITRIX_PATTERNS, force: options.force, reporter });
+    const bitrix = resolveBitrixIndex({ modules: options.bitrixModules ?? "all", includeLang: options.includeLang });
+    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: bitrix.patterns, ignores: bitrix.ignores, force: options.force, reporter });
     bitrixFiles = bitrixManifest.files.length;
 
     const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter });

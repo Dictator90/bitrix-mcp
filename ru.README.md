@@ -206,6 +206,80 @@ private/*.php
 assets/ignored.js
 ```
 
+## Индексация ядра Bitrix
+
+Ядро Bitrix (`/bitrix/`) большое, поэтому индексация **курируемая и управляемая**.
+
+**Что индексирует scope `bitrix`** (команда `index-bitrix`, а также Bitrix-часть
+`index-code` / `index-all`):
+
+- `bitrix/modules/**/*.php` — PHP модулей (классы, ORM, события, использования API)
+- `bitrix/admin/**/*.php` и `bitrix/tools/**/*.php`
+- `bitrix/js/**` и `local/js/**` — JS ядра (связь фронт ↔ логика)
+- `local/modules/**/*.php` — ваши кастомные модули
+
+**Исключено по умолчанию** (runtime/static — всегда, даже при `--full`):
+
+- runtime/cache/generated: `bitrix/cache`, `managed_cache`, `html_pages`, `upload`, …
+- статика: `bitrix/images`, `themes`, `fonts`, `panel`, …
+- `bitrix/wizards/**`
+- `install/**` модулей (install-ассеты — отдельный scope `index-install`)
+- `lang/**` модулей — файлы переводов (вернуть: `--include-lang` / `--full`)
+
+Компоненты и шаблоны индексирует scope **template** (`bitrix/components`,
+`bitrix/templates` и `local/`-аналоги) — он работает в `index-template`,
+`index-code` и `index-all`.
+
+> Scope **project** (`index-project`) индексирует только код вашего проекта и
+> **никогда** не обходит `/bitrix/` — ядро принадлежит отдельному scope `bitrix`.
+
+### Типовые сценарии
+
+```bash
+# Проиндексировать всё ядро (все модули, без lang). Это поведение по умолчанию.
+npx @mb4it/bitrix-mcp index-bitrix
+
+# Только нужные модули (намного быстрее на реальном проекте)
+npx @mb4it/bitrix-mcp index-bitrix --modules=main,iblock
+
+# Интернет-магазин
+npx @mb4it/bitrix-mcp index-bitrix --modules=main,iblock,sale,catalog,currency
+
+# Полный индекс: все модули + lang (долго; печатает предупреждение)
+npx @mb4it/bitrix-mcp index-bitrix --full
+
+# Сухой прогон: показать план без индексации (found / ignored / queued, топ модулей)
+npx @mb4it/bitrix-mcp index-bitrix --plan --modules=main,iblock
+
+# index-code / index-all: пропустить ядро или сузить его
+npx @mb4it/bitrix-mcp index-all --no-bitrix
+npx @mb4it/bitrix-mcp index-all --bitrix-modules=main,iblock
+```
+
+### Флаги
+
+| Флаг | Где | Эффект |
+| --- | --- | --- |
+| `--modules=main,iblock` | `index-bitrix` | Индексировать только эти модули ядра (по умолчанию `all`). `--modules=all` — все. |
+| `--bitrix-modules=…` | `index-code`, `index-all` | Тот же выбор для Bitrix-части этих команд. |
+| `--full` | `index-bitrix`, `index-code`, `index-all` | Все модули **плюс** `lang/`. Алиас `--modules=all --include-lang`. Печатает предупреждение о длительности. |
+| `--include-lang` | все команды индексации Bitrix | Включить `lang/` модулей (по умолчанию выкл). |
+| `--no-bitrix` | `index-code`, `index-all` | Полностью пропустить scope ядра **и** install. |
+| `--plan` | `index-bitrix` | Напечатать план (found / ignored / queued, топ модулей) и выйти без индексации. |
+
+Неизвестные имена модулей выводят предупреждение (например,
+`module "foo" was requested but not found`) и пропускаются; прогон продолжается,
+если найден хотя бы один из запрошенных модулей.
+
+### Инкрементальная переиндексация
+
+Переиндексация инкрементальная: файл перечитывается только если изменились его
+размер или mtime с прошлого прогона. Неизменённые файлы пропускаются и остаются в
+индексе; удалённые — удаляются. Поэтому долгий только первый `index-bitrix`,
+последующие — быстрые. В итоговом summary видно `indexed` против `skipped` (см. ниже).
+
+Правила `.bitrixmcpignore` применяются поверх встроенных.
+
 ## Прогресс индексации
 
 Индексация полного проекта Bitrix (особенно `index-bitrix` по реальному дереву

@@ -15,14 +15,22 @@ import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRec
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
 const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**"];
+// The project scope indexes the project's own code only. The entire bitrix/
+// core tree is owned by the dedicated bitrix scope (modules/admin/tools/js)
+// and the template scope (components/templates), so it is excluded here to
+// avoid crawling tens of thousands of core files (wizards, admin, js, ...).
 const PROJECT_KIND_IGNORES = [
-  "bitrix/modules/**",
+  "bitrix/**",
   "local/modules/**",
-  "bitrix/templates/**",
   "local/templates/**",
-  "bitrix/components/**",
-  "local/components/**"
+  "local/components/**",
+  "local/js/**",
 ];
+// JS source under bitrix/js carries the core frontend <-> logic bindings.
+const BITRIX_JS_EXTENSIONS = "{js,jsx,ts,tsx}";
+// Structural exclusion only (install assets are a separate scope). The lang
+// policy is owned by the Bitrix policy resolver (resolveBitrixIndex) so that
+// `--include-lang` / `--full` can re-enable it; CLI/actions pass it explicitly.
 const BITRIX_KIND_IGNORES = ["bitrix/modules/*/install/**", "local/modules/*/install/**"];
 export const DEFAULT_TEMPLATE_PATTERNS = [
   `bitrix/templates/**/*.${CODE_EXTENSIONS}`,
@@ -30,7 +38,17 @@ export const DEFAULT_TEMPLATE_PATTERNS = [
   `bitrix/components/**/*.${CODE_EXTENSIONS}`,
   `local/components/**/*.${CODE_EXTENSIONS}`
 ];
-export const DEFAULT_BITRIX_PATTERNS = ["bitrix/modules/**/*.php", "local/modules/**/*.php"];
+// Curated Bitrix core allowlist: module/admin/tools PHP plus core JS. Runtime,
+// static assets, lang, and install are excluded (via patterns + BITRIX_KIND_IGNORES).
+// Components/templates are owned by the template scope.
+export const DEFAULT_BITRIX_PATTERNS = [
+  "bitrix/modules/**/*.php",
+  "bitrix/admin/**/*.php",
+  "bitrix/tools/**/*.php",
+  `bitrix/js/**/*.${BITRIX_JS_EXTENSIONS}`,
+  "local/modules/**/*.php",
+  `local/js/**/*.${BITRIX_JS_EXTENSIONS}`,
+];
 export const DEFAULT_INSTALL_ASSET_PATTERNS = [
   `bitrix/modules/*/install/**/*.${CODE_EXTENSIONS}`,
   `local/modules/*/install/**/*.${CODE_EXTENSIONS}`
@@ -88,36 +106,59 @@ function defaultIgnoresForKind(kind: IndexKind): string[] {
   return [];
 }
 
-export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
-  const startedAt = Date.now();
-  const reporter = options.reporter ?? new NoopProgressReporter();
-  const scope: IndexScope = options.scope ?? options.kind;
-  const root = path.resolve(options.root);
+export interface DiscoverFilesOptions {
+  kind: IndexKind;
+  patterns?: string[];
+  ignores?: string[];
+}
+
+export interface DiscoverFilesResult {
+  /** All files matched by the glob patterns before ignore filtering. */
+  found: string[];
+  /** Files remaining after built-in, kind, .gitignore and .bitrixmcpignore rules. */
+  queued: string[];
+}
+
+/**
+ * Glob + ignore discovery, shared by buildIndex and the `--plan` dry-run so the
+ * plan reflects exactly what would be indexed (same patterns and ignore rules).
+ */
+export async function discoverFiles(root: string, options: DiscoverFilesOptions): Promise<DiscoverFilesResult> {
+  const resolvedRoot = path.resolve(root);
   const patterns = options.patterns ?? defaultPatternsForKind(options.kind);
   const kindIgnores = [...defaultIgnoresForKind(options.kind), ...(options.ignores ?? [])];
-  const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
-  const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
-  const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
-
-  reporter.start({ scope, phase: "discover", status: "start", startedAt });
-  const ig = await loadIgnore(root, {
+  const ig = await loadIgnore(resolvedRoot, {
     useGitignore: options.kind !== "bitrix" && options.kind !== "install",
     extraIgnores: kindIgnores
   });
-  const entries = await fg(patterns, {
-    cwd: root,
+  const found = await fg(patterns, {
+    cwd: resolvedRoot,
     onlyFiles: true,
     dot: true,
     followSymbolicLinks: false,
     ignore: [...DEFAULT_IGNORES, ...kindIgnores]
   });
-  const queued = entries.filter((relativePath) => !ig.ignores(relativePath)).sort();
+  const queued = found.filter((relativePath) => !ig.ignores(relativePath)).sort();
+  return { found, queued };
+}
+
+export async function buildIndex(options: IndexOptions): Promise<IndexManifest> {
+  const startedAt = Date.now();
+  const reporter = options.reporter ?? new NoopProgressReporter();
+  const scope: IndexScope = options.scope ?? options.kind;
+  const root = path.resolve(options.root);
+  const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
+  const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
+  const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
+
+  reporter.start({ scope, phase: "discover", status: "start", startedAt });
+  const { found, queued } = await discoverFiles(root, { kind: options.kind, patterns: options.patterns, ignores: options.ignores });
   reporter.done({
     scope,
     phase: "discover",
     status: "done",
-    foundFiles: entries.length,
-    ignoredFiles: entries.length - queued.length,
+    foundFiles: found.length,
+    ignoredFiles: found.length - queued.length,
     queuedFiles: queued.length
   });
 

@@ -203,6 +203,79 @@ private/*.php
 assets/ignored.js
 ```
 
+## Bitrix core indexing
+
+The Bitrix core (`/bitrix/`) is large, so indexing is **curated and controllable**.
+
+**What the `bitrix` scope indexes** (command `index-bitrix`, and the Bitrix part of
+`index-code` / `index-all`):
+
+- `bitrix/modules/**/*.php` — module PHP (classes, ORM, events, API usages)
+- `bitrix/admin/**/*.php` and `bitrix/tools/**/*.php`
+- `bitrix/js/**` and `local/js/**` — core JS (frontend ↔ logic bindings)
+- `local/modules/**/*.php` — your custom modules
+
+**Excluded by default** (always, even with `--full` for the runtime/static ones):
+
+- runtime/cache/generated: `bitrix/cache`, `managed_cache`, `html_pages`, `upload`, …
+- static assets: `bitrix/images`, `themes`, `fonts`, `panel`, …
+- `bitrix/wizards/**`
+- module `install/**` (install assets are their own `index-install` scope)
+- per-module `lang/**` message files (re-enable with `--include-lang` / `--full`)
+
+Components and templates are indexed by the **template** scope
+(`bitrix/components`, `bitrix/templates`, and the `local/` equivalents), which runs
+in `index-template`, `index-code` and `index-all`.
+
+> The **project** scope (`index-project`) indexes your project's own code only and
+> never crawls `/bitrix/` — the core is owned by the dedicated `bitrix` scope above.
+
+### Common workflows
+
+```bash
+# Index the whole core (all modules, no lang). This is the default.
+npx @mb4it/bitrix-mcp index-bitrix
+
+# Index only specific modules (much faster on a real project)
+npx @mb4it/bitrix-mcp index-bitrix --modules=main,iblock
+
+# Online store
+npx @mb4it/bitrix-mcp index-bitrix --modules=main,iblock,sale,catalog,currency
+
+# Full index: every module + lang files (slow; prints a warning)
+npx @mb4it/bitrix-mcp index-bitrix --full
+
+# Dry run: show what would be indexed (found / ignored / queued, top modules)
+npx @mb4it/bitrix-mcp index-bitrix --plan --modules=main,iblock
+
+# index-code / index-all: skip the core, or narrow it
+npx @mb4it/bitrix-mcp index-all --no-bitrix
+npx @mb4it/bitrix-mcp index-all --bitrix-modules=main,iblock
+```
+
+### Flags
+
+| Flag | Applies to | Effect |
+| --- | --- | --- |
+| `--modules=main,iblock` | `index-bitrix` | Index only these core modules (default: `all`). `--modules=all` for every module. |
+| `--bitrix-modules=…` | `index-code`, `index-all` | Same selection for the Bitrix part of those commands. |
+| `--full` | `index-bitrix`, `index-code`, `index-all` | Every module **plus** `lang/` files. Alias for `--modules=all --include-lang`. Prints a slow-run warning. |
+| `--include-lang` | all Bitrix index commands | Include per-module `lang/` message files (off by default). |
+| `--no-bitrix` | `index-code`, `index-all` | Skip the Bitrix core **and** install scopes entirely. |
+| `--plan` | `index-bitrix` | Print the indexing plan (files found / ignored / queued, top modules) and exit without indexing. |
+
+Unknown module names print a warning (e.g. `module "foo" was requested but not found`)
+and are skipped; the run continues as long as at least one requested module exists.
+
+### Incremental reindex
+
+Reindexing is incremental: a file is re-parsed only when its size or mtime changed
+since the last run. Unchanged files are skipped and stay in the index; deleted files
+are removed. So the first `index-bitrix` is the slow one — subsequent runs are fast.
+The progress summary reports `indexed` vs `skipped` counts (see below).
+
+`.bitrixmcpignore` rules are applied on top of these built-in rules.
+
 ## Indexing progress
 
 Indexing a full Bitrix project (especially `index-bitrix` over a real `/bitrix/`

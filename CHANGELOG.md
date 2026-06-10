@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+### Changed
+
+- **Bitrix core indexing is now curated and controllable.** The `project` scope no longer crawls `/bitrix/` at all (it previously pulled in `bitrix/wizards`, `bitrix/admin`, `bitrix/js`, … — tens of thousands of core files). The dedicated `bitrix` scope now indexes a curated allowlist — `bitrix/modules` + `bitrix/admin` + `bitrix/tools` + `bitrix/js` (and `local/modules`, `local/js`) — and excludes per-module `lang/` message files by default. Runtime, cache, static assets, wizards and install assets remain excluded. Components/templates stay with the `template` scope. This is a default-behaviour change.
+
+### Added
+
+- `index-bitrix --modules=main,iblock` (and `--modules=all`) to index only selected core modules; unknown modules print a warning and are skipped instead of failing.
+- `index-bitrix --full` to index every module plus `lang/` files (alias for `--modules=all --include-lang`, with a slow-run warning), and `--include-lang` to opt lang files back in.
+- `index-bitrix --plan` to print the indexing plan (files found / ignored / queued, top modules) without indexing.
+- `index-code` / `index-all` accept `--no-bitrix` (skip the Bitrix core and install scopes) and `--bitrix-modules=…` / `--full` / `--include-lang`.
+- New `resolveBitrixIndex` / `validateBitrixModules` policy resolver and a shared `discoverFiles` helper.
+
 ## 0.3.3
 
 ### Changed
