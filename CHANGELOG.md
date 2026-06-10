@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+### Added
+
+- `--version` / `-v` flag that prints the installed bitrix-mcp version and exits. The version is read from `package.json` so it works from both the source (`tsx`) and the built `dist/cli.js`.
+
 ## 0.3.0
 
 ### Added
