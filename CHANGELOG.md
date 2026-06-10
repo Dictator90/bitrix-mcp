@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.4
+
+### Changed
+
+- Clearer `init` output so it is obvious when indexing has finished. After all scopes (and docs) are indexed, init now prints `✓ Bitrix MCP is configured and indexing is complete.`; documentation indexing prints a "started" line instead of running silently; and the stdio server start message now explains that the server keeps running and waits for the MCP client (it is not frozen — Ctrl+C to stop, or use `--no-serve`).
+
 ## 0.4.3
 
 ### Fixed

@@ -708,12 +708,16 @@ export async function indexCode(paths: RuntimePaths, reporter?: ProgressReporter
 }
 
 export async function indexDocs(paths: RuntimePaths): Promise<void> {
+  output.write("docs: Indexing documentation (updating sources may take a moment)...\n");
   const docChunks = await indexDocResourcesToSqlite(paths.dataDir, [paths.docsDir], { includeOfficialDocs: paths.officialDocsEnabled });
-  output.write(`Indexed ${docChunks} documentation chunks into ${paths.dataDir}\n`);
+  output.write(`docs: ✓ Indexed ${docChunks} documentation chunks into ${paths.dataDir}\n`);
 }
 
 export async function serve(paths: RuntimePaths, deps: InitDependencies = {}): Promise<void> {
-  output.write("Starting bitrix-mcp over stdio...\n");
+  output.write(
+    "\nStarting the bitrix-mcp MCP server over stdio. It will keep running and wait for your MCP client to connect —\n" +
+    "this is expected, the process is not frozen. Press Ctrl+C to stop. (Re-run `bitrix-mcp init --no-serve` to skip this step.)\n"
+  );
   await (deps.serveStdio ?? serveStdio)(paths);
 }
 
@@ -742,6 +746,10 @@ export async function initAndServe(options: InitOptions = {}, deps: InitDependen
     await indexDocs(paths);
   } else {
     output.write("Skipping documentation indexing because --no-docs was passed.\n");
+  }
+
+  if ((options.index ?? true) || (options.docs ?? true)) {
+    output.write("\n✓ Bitrix MCP is configured and indexing is complete.\n");
   }
 
   if (defaultShouldServe(options)) {
