@@ -4,10 +4,11 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stderr as output } from "node:process";
 import { sqlitePath, type RuntimePaths } from "../config/paths.js";
-import { buildIndex } from "../indexer/indexer.js";
+import { buildIndex, DEFAULT_BITRIX_PATTERNS } from "../indexer/indexer.js";
 import { hasIndexMetadata } from "../indexer/sqliteStore.js";
 import { serveStdio } from "../mcp/server.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
+import { createProgressReporter, detectCi, type ProgressReporter } from "../progress/index.js";
 
 export type Agent =
   | "cursor"
@@ -686,21 +687,21 @@ export async function configureAgents(options: InitOptions = {}): Promise<void> 
   }
 }
 
-export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[]): Promise<void> {
+export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[], reporter?: ProgressReporter): Promise<void> {
   const dbFile = sqlitePath(paths.dataDir);
   if (await hasIndexMetadata(dbFile, kind)) {
     output.write(`Index ${kind} already exists: ${dbFile}\n`);
     return;
   }
-  const manifest = await buildIndex({ root, kind, dbFile, patterns });
+  const manifest = await buildIndex({ root, kind, dbFile, patterns, reporter });
   output.write(`Indexed ${manifest.files.length} ${kind} files into ${dbFile}\n`);
 }
 
-export async function indexCode(paths: RuntimePaths): Promise<void> {
-  await indexIfMissing(paths, "project", paths.workspaceRoot);
-  await indexIfMissing(paths, "template", paths.workspaceRoot);
+export async function indexCode(paths: RuntimePaths, reporter?: ProgressReporter): Promise<void> {
+  await indexIfMissing(paths, "project", paths.workspaceRoot, undefined, reporter);
+  await indexIfMissing(paths, "template", paths.workspaceRoot, undefined, reporter);
   if (paths.bitrixRoot) {
-    await indexIfMissing(paths, "bitrix", paths.bitrixRoot, ["bitrix/modules/**/*.php", "local/modules/**/*.php"]);
+    await indexIfMissing(paths, "bitrix", paths.bitrixRoot, DEFAULT_BITRIX_PATTERNS, reporter);
   } else {
     output.write("Bitrix root was not detected at <projectRoot>/bitrix; skipping Bitrix index.\n");
   }
@@ -731,7 +732,8 @@ export async function initAndServe(options: InitOptions = {}, deps: InitDependen
   }
 
   if (options.index ?? true) {
-    await indexCode(paths);
+    const reporter = createProgressReporter({ stderr: process.stderr, isTty: Boolean(process.stderr.isTTY), isCi: detectCi() });
+    await indexCode(paths, reporter);
   } else {
     output.write("Skipping code indexing because --no-index was passed.\n");
   }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3
+
+### Fixed
+
+- `init` now shows indexing progress. Its indexing ran through a separate code path that never received a progress reporter, so `bitrix-mcp init` indexed silently. A reporter is now wired into the init flow (progress on stderr, same TTY/CI rules as the `index-*` commands).
+- `init` now indexes the Bitrix core through the curated allowlist (modules + admin + tools + js) instead of the old modules-only patterns, matching `index-bitrix` / `index-code`.
+
 ## 0.4.2
 
 ### Changed

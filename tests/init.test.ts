@@ -250,6 +250,40 @@ test("indexIfMissing skips buildIndex when SQLite metadata exists", async () => 
   }
 });
 
+test("indexIfMissing forwards progress events to the reporter", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-init-progress-"));
+  await fs.writeFile(path.join(projectRoot, "index.php"), "<?php\nfunction demo_init(): void {}\n", "utf8");
+  const dataDir = path.join(projectRoot, ".bitrix-mcp");
+  const docsDir = path.join(projectRoot, "docs");
+
+  const calls: string[] = [];
+  const reporter = {
+    start: (event: { phase: string }) => calls.push(`start:${event.phase}`),
+    update: () => {},
+    warn: () => {},
+    error: () => {},
+    done: (event: { phase: string }) => calls.push(`done:${event.phase}`)
+  };
+
+  await indexIfMissing(
+    {
+      workspaceRoot: projectRoot,
+      dataDir,
+      docsDir,
+      docsPaths: [docsDir],
+      embeddingsUrl: "http://127.0.0.1:8765",
+      semanticEnabled: false
+    },
+    "project",
+    projectRoot,
+    undefined,
+    reporter
+  );
+
+  assert.ok(calls.includes("start:discover"), `expected discover start, got: ${calls.join(", ")}`);
+  assert.ok(calls.includes("done:done"), `expected final done event, got: ${calls.join(", ")}`);
+});
+
 test("configureAgents supports non-interactive agent selection", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-configure-agent-"));
   const previousCwd = process.cwd();
