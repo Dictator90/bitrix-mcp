@@ -52,6 +52,14 @@ test("cli help documents embeddings indexing commands", async () => {
   assert.match(stdout, /index-embeddings/);
 });
 
+test("cli --version prints the package version", async () => {
+  const pkg = JSON.parse(await fs.readFile(path.resolve("package.json"), "utf8")) as { version: string };
+  for (const flag of ["--version", "-v"]) {
+    const { stdout } = await execFileAsync(process.execPath, ["--import", tsxLoaderUrl, cliPath, flag], { cwd: fixtureRoot });
+    assert.equal(stdout.trim(), pkg.version, `expected ${flag} to print ${pkg.version}`);
+  }
+});
+
 test("cli config prints resolved runtime paths and MCP config file presence", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-config-"));
   await fs.mkdir(path.join(fixtureRoot, ".cursor"), { recursive: true });

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import nodePath from "node:path";
+import { fileURLToPath } from "node:url";
 import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
 import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
 import { detectChanges, formatDetectChangesText, type DetectChangesOptions } from "./indexer/detectChanges.js";
@@ -14,8 +17,22 @@ import { runBenchmark } from "./benchmark/report.js";
 import { formatModuleUsageSearchResults } from "./mcp/format.js";
 import { createProgressReporter, detectCi, type CreateProgressReporterOptions } from "./progress/index.js";
 
+function readVersion(): string {
+  try {
+    const here = nodePath.dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(nodePath.join(here, "..", "package.json"), "utf8")) as { version?: string };
+    return pkg.version ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
+
+Global options:
+  --version, -v                 Print the installed bitrix-mcp version and exit
+  --help, -h                    Show this help and exit
 
 Commands:
   init [options]                Configure MCP clients, index the project/docs, and start stdio server
@@ -293,6 +310,11 @@ async function main(argv: string[]): Promise<void> {
   const positional = positionalArgs(argv).filter((value) => value !== "-y");
   const [command, arg] = positional;
   const paths = resolveRuntimePaths();
+
+  if (argv.includes("--version") || argv.includes("-v")) {
+    console.log(readVersion());
+    return;
+  }
 
   if (!command || command === "--help" || command === "-h") {
     console.log(usage());
