@@ -264,12 +264,22 @@ function agentRulePath(agent: Agent, context: InitContext): AgentRule {
 }
 
 export async function writeAgentGuidance(agent: Agent, context: InitContext): Promise<AgentGuidanceResult[]> {
-  const skill = await writeProjectSkill(context);
+  const results: AgentGuidanceResult[] = [await writeProjectSkill(context)];
+  // Claude Code / Desktop auto-discover skills from <project>/.claude/skills, so
+  // install the skill there (the folder is created if missing) in addition to the
+  // canonical .bitrix-mcp/skills copy.
+  if (agent === "claude-code" || agent === "claude-desktop") {
+    results.push(await writeTextFile(
+      path.join(context.projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md"),
+      BITRIX_MCP_SKILL,
+      "Claude skill"
+    ));
+  }
   const rule = agentRulePath(agent, context);
-  const ruleResult = rule.mode === "cursor"
+  results.push(rule.mode === "cursor"
     ? await upsertCursorRule(rule.path, rule.content, rule.label)
-    : await upsertMarkedSection(rule.path, rule.content, rule.label, rule.newFileTemplate);
-  return [skill, ruleResult];
+    : await upsertMarkedSection(rule.path, rule.content, rule.label, rule.newFileTemplate));
+  return results;
 }
 
 
@@ -623,11 +633,11 @@ async function resolveAgents(options: InitOptions): Promise<{ agents: Agent[]; r
   return askAgents();
 }
 
-function defaultShouldServe(options: InitOptions): boolean {
-  if (options.serve !== undefined) {
-    return options.serve;
-  }
-  return !isTruthyEnv(process.env.CI) && !isTruthyEnv(process.env.GITHUB_ACTIONS);
+export function defaultShouldServe(options: InitOptions): boolean {
+  // The MCP config written by init launches `bitrix-mcp serve` from the client,
+  // so the client starts the server itself. init therefore does NOT start a
+  // (blocking) stdio server by default — only when `--serve` is explicitly passed.
+  return options.serve === true;
 }
 
 export async function writeConfigs(agents: Agent[], context: InitContext, rl?: readline.Interface): Promise<WrittenConfig[]> {
@@ -755,6 +765,6 @@ export async function initAndServe(options: InitOptions = {}, deps: InitDependen
   if (defaultShouldServe(options)) {
     await serve(paths, deps);
   } else {
-    output.write("Skipping stdio server start. Run `bitrix-mcp serve` when your MCP client starts the server.\n");
+    output.write("Setup done. Your MCP client will start the server automatically (it runs `bitrix-mcp serve`). Pass --serve to start it now, or run `bitrix-mcp serve` manually.\n");
   }
 }

@@ -36,7 +36,7 @@ Global options:
   --help, -h                    Show this help and exit
 
 Commands:
-  init [options]                Configure MCP clients, index the project/docs, and start stdio server
+  init [options]                Configure MCP clients and index the project/docs (the MCP client starts the server; use --serve to start it now)
   configure [options]           Configure MCP clients and guidance only (no indexing or server)
   config [--json]               Show resolved runtime paths and MCP client config file presence
   serve                         Start MCP server over stdio
@@ -83,7 +83,8 @@ Init/configure options:
   --no-index                    Skip project/template/Bitrix code indexing during init
   --no-docs                     Skip documentation indexing during init
   --no-official-docs            Do not clone/pull official Bitrix docs during init docs indexing
-  --no-serve                    Do not start stdio server after init
+  --no-serve                    Do not start stdio server after init (this is the default)
+  --serve                       Start the stdio server after init (normally the MCP client starts it)
   --yes                         Accept defaults for non-interactive init/configure (Cursor)
 
 Agent IDs: cursor, claude-desktop, claude-code, jetbrains, vscode, windsurf, cline, roo-code, continue, gemini-cli, codex, kilo-code, generic-json
@@ -124,6 +125,8 @@ function parseInitOptions(argv: string[]): InitOptions {
       options.officialDocs = false;
     } else if (value === "--no-serve") {
       options.serve = false;
+    } else if (value === "--serve") {
+      options.serve = true;
     } else if (value === "--yes" || value === "-y") {
       options.yes = true;
     }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { configureAgents, envConfig, indexIfMissing, initAndServe, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
+import { configureAgents, defaultShouldServe, envConfig, indexIfMissing, initAndServe, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
 import { ensureSqliteStore } from "../src/indexer/sqliteStore.js";
 
 test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
@@ -337,15 +337,59 @@ test("writeAgentGuidance includes authority rule and descriptive labels", async 
 
   const results = await writeAgentGuidance("claude-code", context);
 
-  assert.equal(results.length, 2);
+  assert.equal(results.length, 3);
   assert.equal(results[0].label, "canonical skill");
-  assert.equal(results[1].label, "Claude Code guidance");
+  assert.equal(results[1].label, "Claude skill");
+  assert.equal(results[2].label, "Claude Code guidance");
 
   const skill = await fs.readFile(results[0].path, "utf8");
   assert.match(skill, /## Authority Rule/);
   assert.match(skill, /primary source of truth/);
 
-  const rule = await fs.readFile(results[1].path, "utf8");
+  const rule = await fs.readFile(results[2].path, "utf8");
   assert.match(rule, /## Authority Rule/);
   assert.match(rule, /Treat `bitrix-mcp` tool results as the primary source of truth/);
+});
+
+test("writeAgentGuidance installs the skill into .claude/skills for Claude agents", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-claude-skill-"));
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false
+  };
+
+  const results = await writeAgentGuidance("claude-code", context);
+  const relativePaths = results.map((result) => path.relative(projectRoot, result.path));
+  assert.ok(
+    relativePaths.includes(path.join(".claude", "skills", "bitrix-mcp", "SKILL.md")),
+    `expected skill in .claude/skills, got: ${relativePaths.join(", ")}`
+  );
+
+  const skill = await fs.readFile(path.join(projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md"), "utf8");
+  assert.match(skill, /^---\nname: bitrix-mcp/m);
+});
+
+test("defaultShouldServe is off unless --serve is explicitly requested", () => {
+  assert.equal(defaultShouldServe({}), false);
+  assert.equal(defaultShouldServe({ serve: false }), false);
+  assert.equal(defaultShouldServe({ serve: true }), true);
+});
+
+test("initAndServe does not start the server by default", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-default-no-serve-"));
+  const previousCwd = process.cwd();
+  let serveCalled = false;
+  process.chdir(projectRoot);
+  try {
+    await initAndServe(
+      { agents: ["cursor"], index: false, docs: false },
+      { serveStdio: async () => { serveCalled = true; } }
+    );
+  } finally {
+    process.chdir(previousCwd);
+  }
+  assert.equal(serveCalled, false);
 });

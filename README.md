@@ -90,7 +90,7 @@ cd /path/to/bitrix/project
 npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 ```
 
-During interactive `init`, select one or more AI agents from the prompt. For non-interactive setup, pass `--agent <id>` (repeat or comma-separate IDs), `--all-agents`, or `--yes` for the default Cursor setup. Bitrix MCP writes or updates the selected agents' MCP configuration, creates reusable guidance/rule files, builds initial indexes, and starts the MCP server over stdio unless `--no-serve` is passed or a CI environment is detected.
+During interactive `init`, select one or more AI agents from the prompt. For non-interactive setup, pass `--agent <id>` (repeat or comma-separate IDs), `--all-agents`, or `--yes` for the default Cursor setup. Bitrix MCP writes or updates the selected agents' MCP configuration, creates reusable guidance/rule files (and installs the skill into `.claude/skills/` for Claude agents), and builds initial indexes. `init` does **not** start the stdio server itself — the MCP config it writes launches `bitrix-mcp serve` from your client, so the client starts the server. Pass `--serve` to start it immediately, or run `bitrix-mcp serve` manually.
 
 After setup, open your AI client and ask it to use Bitrix MCP. A good first prompt is:
 
@@ -456,11 +456,12 @@ Generated rule files are safe to update with repeated `bitrix-mcp init` runs: ne
 - `--no-index` — skip project/template/Bitrix code indexing during `init`.
 - `--no-docs` — skip documentation indexing during `init`.
 - `--no-official-docs` — index only local/registered documentation sources and do not clone or update the official Bitrix Framework docs during `init`.
-- `--no-serve` — write configs and run selected indexing steps without starting the MCP stdio server.
+- `--serve` — start the MCP stdio server after init (by default init does not — the MCP client launches `bitrix-mcp serve` itself).
+- `--no-serve` — explicit no-op for the default behavior (kept for backward compatibility).
 
 Use `bitrix-mcp configure` with the same agent-selection flags when you only want MCP configuration and guidance files. `configure` never indexes code/docs and never starts the server.
 
-After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix index when a local `bitrix/` directory is detected, clones or pulls and indexes documentation sources including the official Bitrix Framework docs repository, and starts the MCP server over stdio by default for local interactive runs. In CI (`CI=1` or `GITHUB_ACTIONS=1`) the server start is skipped automatically; pass `--no-serve` explicitly in scripts to make this behavior obvious.
+After writing the selected configurations, `init` creates `.bitrix-mcp/`, builds missing project/template indexes, builds a Bitrix core index when a local `bitrix/` directory is detected, and clones or pulls and indexes documentation sources including the official Bitrix Framework docs repository. `init` does not start the MCP stdio server by default — the MCP config it writes launches `bitrix-mcp serve` from your client, so the client starts the server when it connects. Pass `--serve` to start the server immediately (e.g. for a manual smoke test), or run `bitrix-mcp serve` yourself.
 
 ## MCP tools
 

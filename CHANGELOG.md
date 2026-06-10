@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.5
+
+### Changed
+
+- `init` no longer starts the MCP stdio server by default. The MCP config it writes already launches `bitrix-mcp serve` from the client, so the client starts the server itself — init starting its own blocking server was redundant and looked like a hang. Pass `--serve` to start it immediately; `--no-serve` is kept as a no-op for compatibility.
+
+### Added
+
+- For Claude Code / Claude Desktop agents, `init` now installs the skill into `<project>/.claude/skills/bitrix-mcp/SKILL.md` (the folder is created if missing) so it is auto-discovered, in addition to the canonical `.bitrix-mcp/skills/` copy. (The `.mcp.json` MCP config was already created/merged, preserving other servers.)
+
 ## 0.4.4
 
 ### Changed
