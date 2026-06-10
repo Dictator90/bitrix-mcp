@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+### Fixed
+
+- Fixed `index-all` / `index-code` appearing to hang for many minutes after a scope finished. `readIndexFromSqlite` runs a `WHERE file_id = ?` query per file against each child table, but those tables had no index on `file_id`, so the post-index readback of a large project (12k+ files / 130k+ symbols) ran as full table scans and took ~9 minutes. Added `file_id` indexes on `symbols`, `module_usages`, `orm_entities`, `orm_usages`, `iblock_usages`, `hlblock_usages`, and `option_usages`, cutting that readback to a few seconds (~190× faster). The indexes are created on store open, so existing databases are upgraded automatically on the next run — no reindex required.
+
 ## 0.3.1
 
 ### Added

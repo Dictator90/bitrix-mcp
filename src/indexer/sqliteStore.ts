@@ -1040,6 +1040,13 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_doc_path ON doc_symbol_refs(doc_path);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_doc_symbol_refs_unique ON doc_symbol_refs(symbol, doc_uri, chunk_index);
       CREATE INDEX IF NOT EXISTS idx_files_kind ON files(kind);
+      CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
+      CREATE INDEX IF NOT EXISTS idx_module_usages_file_id ON module_usages(file_id);
+      CREATE INDEX IF NOT EXISTS idx_orm_entities_file_id ON orm_entities(file_id);
+      CREATE INDEX IF NOT EXISTS idx_orm_usages_file_id ON orm_usages(file_id);
+      CREATE INDEX IF NOT EXISTS idx_iblock_usages_file_id ON iblock_usages(file_id);
+      CREATE INDEX IF NOT EXISTS idx_hlblock_usages_file_id ON hlblock_usages(file_id);
+      CREATE INDEX IF NOT EXISTS idx_option_usages_file_id ON option_usages(file_id);
       CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(type, module, name);
       CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
       CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
