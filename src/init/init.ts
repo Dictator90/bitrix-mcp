@@ -12,7 +12,6 @@ import { createProgressReporter, detectCi, type ProgressReporter } from "../prog
 
 export type Agent =
   | "cursor"
-  | "claude-desktop"
   | "claude-code"
   | "jetbrains"
   | "vscode"
@@ -33,8 +32,7 @@ interface AgentChoice {
 
 export const AGENT_CHOICES: AgentChoice[] = [
   { id: "cursor", label: "Cursor", description: "project config in .cursor/mcp.json" },
-  { id: "claude-desktop", label: "Claude Desktop", description: "global Claude Desktop config" },
-  { id: "claude-code", label: "Claude Code", description: "project config in .mcp.json" },
+  { id: "claude-code", label: "Claude Code", description: "project config in .mcp.json (also used by Claude Desktop)" },
   { id: "jetbrains", label: "PhpStorm / JetBrains", description: "JSON snippet for JetBrains AI Assistant" },
   { id: "vscode", label: "VS Code / GitHub Copilot", description: "project config in .vscode/mcp.json" },
   { id: "windsurf", label: "Windsurf", description: "global config in ~/.codeium/windsurf/mcp_config.json" },
@@ -230,7 +228,7 @@ function agentRulePath(agent: Agent, context: InitContext): AgentRule {
   if (agent === "cursor") {
     return { path: path.join(context.projectRoot, ".cursor", "rules", "bitrix-mcp.mdc"), mode: "cursor", content: BITRIX_MCP_RULES, label: "Cursor rules" };
   }
-  if (agent === "claude-code" || agent === "claude-desktop") {
+  if (agent === "claude-code") {
     return { path: path.join(context.projectRoot, "CLAUDE.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
   }
   if (agent === "vscode") {
@@ -265,10 +263,10 @@ function agentRulePath(agent: Agent, context: InitContext): AgentRule {
 
 export async function writeAgentGuidance(agent: Agent, context: InitContext): Promise<AgentGuidanceResult[]> {
   const results: AgentGuidanceResult[] = [await writeProjectSkill(context)];
-  // Claude Code / Desktop auto-discover skills from <project>/.claude/skills, so
-  // install the skill there (the folder is created if missing) in addition to the
-  // canonical .bitrix-mcp/skills copy.
-  if (agent === "claude-code" || agent === "claude-desktop") {
+  // Claude Code (and Claude Desktop, which reads the same project config) auto-discover
+  // skills from <project>/.claude/skills, so install the skill there (the folder is
+  // created if missing) in addition to the canonical .bitrix-mcp/skills copy.
+  if (agent === "claude-code") {
     results.push(await writeTextFile(
       path.join(context.projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md"),
       BITRIX_MCP_SKILL,
@@ -425,16 +423,6 @@ async function writeCodexConfig(filePath: string, context: InitContext): Promise
   return { label: "OpenAI Codex", path: filePath };
 }
 
-function claudeDesktopConfigPath(): string {
-  if (process.platform === "win32") {
-    return path.join(process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
-  }
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
-  }
-  return path.join(os.homedir(), ".config", "Claude", "claude_desktop_config.json");
-}
-
 function windsurfConfigPath(): string {
   return path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json");
 }
@@ -466,9 +454,6 @@ async function askCustomJsonPath(rl: readline.Interface): Promise<string> {
 async function writeAgentConfig(agent: Agent, context: InitContext, rl: readline.Interface): Promise<WrittenConfig> {
   if (agent === "cursor") {
     return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".cursor", "mcp.json"), context)), label: "Cursor" };
-  }
-  if (agent === "claude-desktop") {
-    return { ...(await writeMcpServersConfig(claudeDesktopConfigPath(), context)), label: "Claude Desktop" };
   }
   if (agent === "claude-code") {
     return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".mcp.json"), context)), label: "Claude Code" };

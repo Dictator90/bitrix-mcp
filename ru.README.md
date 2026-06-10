@@ -354,8 +354,7 @@ bitrix-mcp init
 Команда берет текущую директорию как корень проекта, создает `<projectRoot>/.bitrix-mcp`, задает `BITRIX_MCP_WORKSPACE=<projectRoot>`, `BITRIX_MCP_DATA_DIR=<projectRoot>/.bitrix-mcp` и `BITRIX_MCP_DOCS_DIR=<projectRoot>/docs`. Если существует `<projectRoot>/bitrix`, дополнительно задается `BITRIX_ROOT=<projectRoot>`. В интерактивном режиме команда спрашивает, каких AI-агентов настроить; для неинтерактивного запуска используйте `--agent <id>`, `--all-agents` или `--yes`. Для каждого выбранного клиента создается или обновляется отдельная MCP-конфигурация:
 
 - Cursor — `.cursor/mcp.json`.
-- Claude Desktop — глобальный `claude_desktop_config.json`.
-- Claude Code — проектный `.mcp.json`.
+- Claude Code — проектный `.mcp.json` (его же читает Claude Desktop для проекта).
 - PhpStorm / JetBrains — выводит JSON-фрагмент JetBrains AI Assistant MCP, который нужно вставить в настройки IDE.
 - VS Code / GitHub Copilot — `.vscode/mcp.json` в формате VS Code `servers`.
 - Windsurf — `~/.codeium/windsurf/mcp_config.json`.
@@ -370,7 +369,7 @@ bitrix-mcp init
 Для поддерживаемых JSON-клиентов `init` читает существующий MCP-config и добавляет или обновляет только запись `bitrix-mcp`, сохраняя остальные MCP-серверы и несвязанные настройки. Для каждого выбранного агента `init` также создает reusable-навык Bitrix MCP в `.bitrix-mcp/skills/bitrix-mcp/SKILL.md` и записывает rule-файл, чтобы агент понимал, когда вызывать MCP-инструменты:
 
 - Cursor — `.cursor/rules/bitrix-mcp.mdc`.
-- Claude Desktop / Claude Code — управляемый раздел в `CLAUDE.md`.
+- Claude Code — управляемый раздел в `CLAUDE.md` (плюс скилл в `.claude/skills/bitrix-mcp/SKILL.md`).
 - PhpStorm / JetBrains — управляемый раздел в `.junie/guidelines.md`.
 - VS Code / GitHub Copilot — управляемый раздел в `.github/copilot-instructions.md`.
 - Windsurf — `.windsurf/rules/bitrix-mcp.md`.

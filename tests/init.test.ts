@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { sqlitePath } from "../src/config/paths.js";
-import { configureAgents, defaultShouldServe, envConfig, indexIfMissing, initAndServe, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
+import { AGENT_CHOICES, configureAgents, defaultShouldServe, envConfig, indexIfMissing, initAndServe, parseAgentIds, writeAgentGuidance, writeMcpServersConfig } from "../src/init/init.js";
 import { ensureSqliteStore } from "../src/indexer/sqliteStore.js";
 
 test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
@@ -370,6 +370,13 @@ test("writeAgentGuidance installs the skill into .claude/skills for Claude agent
 
   const skill = await fs.readFile(path.join(projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md"), "utf8");
   assert.match(skill, /^---\nname: bitrix-mcp/m);
+});
+
+test("Claude Desktop (global) is no longer a selectable agent", () => {
+  assert.ok(!AGENT_CHOICES.some((choice) => (choice.id as string) === "claude-desktop"), "claude-desktop must be removed from the agent menu");
+  assert.deepEqual(parseAgentIds(["claude-desktop"]), []);
+  // The `claude` alias still maps to Claude Code (project .mcp.json).
+  assert.deepEqual(parseAgentIds(["claude"]), ["claude-code"]);
 });
 
 test("defaultShouldServe is off unless --serve is explicitly requested", () => {

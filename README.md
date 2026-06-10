@@ -411,8 +411,7 @@ bitrix-mcp init
 The command uses the current working directory as the project root, creates `<projectRoot>/.bitrix-mcp`, sets `BITRIX_MCP_WORKSPACE` to `<projectRoot>`, `BITRIX_MCP_DATA_DIR` to `<projectRoot>/.bitrix-mcp`, and `BITRIX_MCP_DOCS_DIR` to `<projectRoot>/docs`. When `<projectRoot>/bitrix` exists, it also sets `BITRIX_ROOT` to `<projectRoot>`. It then asks which AI agents to configure. You can enter one number or multiple numbers separated by commas; each selected client gets its own MCP configuration created or updated:
 
 - Cursor — `.cursor/mcp.json`.
-- Claude Desktop — global `claude_desktop_config.json`.
-- Claude Code — project `.mcp.json`.
+- Claude Code — project `.mcp.json` (this is also what Claude Desktop reads per project).
 - PhpStorm / JetBrains — prints a JetBrains AI Assistant MCP JSON snippet to paste into the IDE settings.
 - VS Code / GitHub Copilot — `.vscode/mcp.json` using the VS Code `servers` format.
 - Windsurf — `~/.codeium/windsurf/mcp_config.json`.
@@ -427,7 +426,7 @@ The command uses the current working directory as the project root, creates `<pr
 For supported JSON clients, `init` reads the existing MCP config and adds or updates only the `bitrix-mcp` entry, preserving other MCP servers and unrelated settings. For every selected agent, `init` also creates a reusable Bitrix MCP skill at `.bitrix-mcp/skills/bitrix-mcp/SKILL.md` and writes an agent-specific rule file so the agent knows when to call the MCP tools:
 
 - Cursor — managed body section in `.cursor/rules/bitrix-mcp.mdc` while preserving existing `.mdc` frontmatter.
-- Claude Desktop / Claude Code — managed section in `CLAUDE.md`.
+- Claude Code — managed section in `CLAUDE.md` (plus the skill in `.claude/skills/bitrix-mcp/SKILL.md`).
 - PhpStorm / JetBrains — managed section in `.junie/guidelines.md`.
 - VS Code / GitHub Copilot — managed section in `.github/copilot-instructions.md`.
 - Windsurf — managed section in `.windsurf/rules/bitrix-mcp.md`.
@@ -450,7 +449,7 @@ Generated rule files are safe to update with repeated `bitrix-mcp init` runs: ne
 
 ### `init` and `configure` flags
 
-- `--agent <id>` — select agents without a prompt. Repeat it or use commas, for example `--agent cursor,codex`. Supported IDs are `cursor`, `claude-desktop`, `claude-code`, `jetbrains`, `vscode`, `windsurf`, `cline`, `roo-code`, `continue`, `gemini-cli`, `codex`, `kilo-code`, and `generic-json`.
+- `--agent <id>` — select agents without a prompt. Repeat it or use commas, for example `--agent cursor,codex`. Supported IDs are `cursor`, `claude-code`, `jetbrains`, `vscode`, `windsurf`, `cline`, `roo-code`, `continue`, `gemini-cli`, `codex`, `kilo-code`, and `generic-json`. (Claude Desktop reads the project `.mcp.json`, so use `claude-code` for it.)
 - `--all-agents` — configure every built-in agent that does not need an extra custom path prompt.
 - `--yes` / `-y` — accept the default non-interactive agent choice (`cursor`).
 - `--no-index` — skip project/template/Bitrix code indexing during `init`.
@@ -726,7 +725,7 @@ bitrix-mcp serve
 
 ### Troubleshooting runtime configuration
 
-Use `bitrix-mcp config` when an MCP client starts the server from a different directory than expected, writes indexes to an unexpected location, or cannot find documentation/Bitrix sources. The command prints the exact values resolved by `resolveRuntimePaths`: `workspaceRoot`, `dataDir`, `sqlitePath`, `docsPaths`, `bitrixRoot`, `embeddingsUrl`, `semanticEnabled`, and `officialDocsEnabled`. It also reports whether common MCP client config files are present for Cursor, Claude Desktop, Claude Code, VS Code/GitHub Copilot, Windsurf, Cline, Roo Code, Continue, Gemini CLI, OpenAI Codex, and Kilo Code.
+Use `bitrix-mcp config` when an MCP client starts the server from a different directory than expected, writes indexes to an unexpected location, or cannot find documentation/Bitrix sources. The command prints the exact values resolved by `resolveRuntimePaths`: `workspaceRoot`, `dataDir`, `sqlitePath`, `docsPaths`, `bitrixRoot`, `embeddingsUrl`, `semanticEnabled`, and `officialDocsEnabled`. It also reports whether common MCP client config files are present for Cursor, Claude Code, VS Code/GitHub Copilot, Windsurf, Cline, Roo Code, Continue, Gemini CLI, OpenAI Codex, and Kilo Code.
 
 ```bash
 bitrix-mcp config

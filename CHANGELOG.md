@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.6
+
+### Removed
+
+- Removed the "Claude Desktop (global)" init agent. The modern Claude Desktop rewrites its global `claude_desktop_config.json` and does not reliably persist the `mcpServers` entry; the integrated app reads the project `.mcp.json` instead. Use the `claude-code` agent for Claude Desktop (its menu entry notes this). The agent is gone from the init menu, `--agent` IDs, `--all-agents`, and the `config`/`doctor` MCP-config-files report.
+
 ## 0.4.5
 
 ### Changed

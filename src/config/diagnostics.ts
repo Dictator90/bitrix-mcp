@@ -31,16 +31,6 @@ function homePath(...segments: string[]): string {
   return path.join(os.homedir(), ...segments);
 }
 
-function claudeDesktopConfigPath(): string {
-  if (process.platform === "win32") {
-    return path.join(process.env.APPDATA ?? homePath("AppData", "Roaming"), "Claude", "claude_desktop_config.json");
-  }
-  if (process.platform === "darwin") {
-    return homePath("Library", "Application Support", "Claude", "claude_desktop_config.json");
-  }
-  return homePath(".config", "Claude", "claude_desktop_config.json");
-}
-
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     return (await fs.stat(filePath)).isFile();
@@ -65,7 +55,6 @@ export function summarizeRuntimePaths(paths: RuntimePaths): RuntimeConfigSummary
 export async function listMcpConfigFiles(paths: RuntimePaths): Promise<McpConfigFileStatus[]> {
   const candidates: Omit<McpConfigFileStatus, "exists">[] = [
     { client: "Cursor", scope: "project", path: path.join(paths.workspaceRoot, ".cursor", "mcp.json") },
-    { client: "Claude Desktop", scope: "global", path: claudeDesktopConfigPath() },
     { client: "Claude Code", scope: "project", path: path.join(paths.workspaceRoot, ".mcp.json") },
     { client: "VS Code / GitHub Copilot", scope: "project", path: path.join(paths.workspaceRoot, ".vscode", "mcp.json") },
     { client: "Windsurf", scope: "global", path: homePath(".codeium", "windsurf", "mcp_config.json") },

@@ -87,7 +87,7 @@ Init/configure options:
   --serve                       Start the stdio server after init (normally the MCP client starts it)
   --yes                         Accept defaults for non-interactive init/configure (Cursor)
 
-Agent IDs: cursor, claude-desktop, claude-code, jetbrains, vscode, windsurf, cline, roo-code, continue, gemini-cli, codex, kilo-code, generic-json
+Agent IDs: cursor, claude-code, jetbrains, vscode, windsurf, cline, roo-code, continue, gemini-cli, codex, kilo-code, generic-json
 
 Environment:
   BITRIX_MCP_DATA_DIR           Directory for generated indexes
