@@ -328,7 +328,7 @@ function parseBitrixOptions(argv: string[]): BitrixCliOptions {
 }
 
 async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof resolveBitrixIndex>, modules: BitrixModuleSelection): Promise<void> {
-  const { found, queued } = await discoverFiles(projectRoot, { kind: "bitrix", patterns: resolved.patterns, ignores: resolved.ignores });
+  const { found, queued } = await discoverFiles(projectRoot, { kind: "bitrix", patterns: resolved.patterns, ignores: resolved.ignores, includeLang: resolved.includeLang });
   const byModule = new Map<string, number>();
   for (const relativePath of queued) {
     const moduleName = detectBitrixModule(relativePath) ?? "(core: admin/tools/js)";
@@ -443,7 +443,7 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "index-project") {
     const reporter = createProgressReporter(parseProgressOptions(argv));
-    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter });
+    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -451,7 +451,7 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-template") {
     const reporter = createProgressReporter(parseProgressOptions(argv));
     const options = resolveTemplateIndexOptions(paths, arg);
-    const manifest = await buildIndex({ ...options, force, reporter });
+    const manifest = await buildIndex({ ...options, force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
     console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -481,14 +481,14 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const reporter = createProgressReporter(parseProgressOptions(argv));
-    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, force, reporter });
+    const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, force, reporter, includeLang: bitrix.includeLang });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-install") {
     const reporter = createProgressReporter(parseProgressOptions(argv));
-    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter });
+    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
     console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }

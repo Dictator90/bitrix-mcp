@@ -1,6 +1,6 @@
 {
   "name": "@mb4it/bitrix-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
   "type": "module",
   "bin": {

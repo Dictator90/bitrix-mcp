@@ -221,7 +221,7 @@ The Bitrix core (`/bitrix/`) is large, so indexing is **curated and controllable
 - static assets: `bitrix/images`, `themes`, `fonts`, `panel`, …
 - `bitrix/wizards/**`
 - module `install/**` (install assets are their own `index-install` scope)
-- per-module `lang/**` message files (re-enable with `--include-lang` / `--full`)
+- `lang/**` message files — excluded across **all** scopes (modules, components, templates, project), not just here (re-enable with `--include-lang` / `--full`)
 
 Components and templates are indexed by the **template** scope
 (`bitrix/components`, `bitrix/templates`, and the `local/` equivalents), which runs

@@ -60,10 +60,10 @@ export function resolveBitrixIndex(selection: Partial<BitrixIndexSelection> = {}
     `local/js/**/*.${BITRIX_JS_EXTENSIONS}`,
   );
 
+  // Install assets are their own scope. The lang exclusion is applied globally
+  // by the indexer (discoverFiles) for every scope, gated by includeLang, so it
+  // is not duplicated here.
   const ignores = ["bitrix/modules/*/install/**", "local/modules/*/install/**"];
-  if (!includeLang) {
-    ignores.push("bitrix/modules/*/lang/**", "local/modules/*/lang/**");
-  }
 
   return { patterns, ignores, modules, includeLang };
 }

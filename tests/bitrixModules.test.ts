@@ -32,12 +32,9 @@ test("resolveBitrixIndex with all modules globs every module", () => {
   assert.ok(resolved.patterns.includes("bitrix/modules/**/*.php"));
 });
 
-test("resolveBitrixIndex excludes lang by default and keeps it with includeLang", () => {
-  const fast = resolveBitrixIndex({ modules: "all" });
-  assert.ok(fast.ignores.some((rule) => rule.includes("/lang/")), "lang excluded by default");
-
-  const full = resolveBitrixIndex({ modules: "all", includeLang: true });
-  assert.ok(!full.ignores.some((rule) => rule.includes("/lang/")), "lang kept with includeLang");
+test("resolveBitrixIndex tracks includeLang (lang exclusion is applied globally by the indexer)", () => {
+  assert.equal(resolveBitrixIndex({ modules: "all" }).includeLang, false);
+  assert.equal(resolveBitrixIndex({ modules: "all", includeLang: true }).includeLang, true);
 });
 
 test("validateBitrixModules reports missing modules without throwing", async () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+### Fixed
+
+- `lang/` message-file directories are now excluded from **every** index scope by default, not just the Bitrix modules scope. Previously `index-template` / `index-code` / `index-all` still indexed `lang/` under components and templates (e.g. `bitrix/components/**/lang/**`, `local/templates/**/lang/**`). Lang exclusion is now applied globally in file discovery and re-enabled everywhere with `--include-lang` / `--full`.
+
 ## 0.4.0
 
 ### Changed

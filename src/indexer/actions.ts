@@ -64,18 +64,19 @@ export interface IndexActionOptions {
 
 export async function indexCode(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<Omit<IndexAllResult, "docChunks">> {
   const reporter = options.reporter;
-  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force: options.force, reporter });
-  const templateManifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force: options.force, reporter });
+  const includeLang = options.includeLang;
+  const projectManifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force: options.force, reporter, includeLang });
+  const templateManifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force: options.force, reporter, includeLang });
 
   let bitrixFiles = 0;
   let installFiles = 0;
   if (paths.bitrixRoot && !options.noBitrix) {
     const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot);
-    const bitrix = resolveBitrixIndex({ modules: options.bitrixModules ?? "all", includeLang: options.includeLang });
-    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: bitrix.patterns, ignores: bitrix.ignores, force: options.force, reporter });
+    const bitrix = resolveBitrixIndex({ modules: options.bitrixModules ?? "all", includeLang });
+    const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: bitrix.patterns, ignores: bitrix.ignores, force: options.force, reporter, includeLang });
     bitrixFiles = bitrixManifest.files.length;
 
-    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter });
+    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter, includeLang });
     installFiles = installManifest.files.length;
   }
 

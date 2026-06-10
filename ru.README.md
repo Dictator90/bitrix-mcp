@@ -224,7 +224,7 @@ assets/ignored.js
 - статика: `bitrix/images`, `themes`, `fonts`, `panel`, …
 - `bitrix/wizards/**`
 - `install/**` модулей (install-ассеты — отдельный scope `index-install`)
-- `lang/**` модулей — файлы переводов (вернуть: `--include-lang` / `--full`)
+- `lang/**` — файлы переводов; исключены во **всех** scope (модули, компоненты, шаблоны, проект), а не только здесь (вернуть: `--include-lang` / `--full`)
 
 Компоненты и шаблоны индексирует scope **template** (`bitrix/components`,
 `bitrix/templates` и `local/`-аналоги) — он работает в `index-template`,

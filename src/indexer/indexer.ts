@@ -65,7 +65,14 @@ export interface IndexOptions {
   reporter?: ProgressReporter;
   /** Progress scope label; defaults to the index kind. */
   scope?: IndexScope;
+  /** Index `lang/` message-file directories. Defaults to false (excluded). */
+  includeLang?: boolean;
 }
+
+// Bitrix i18n message files live in `lang/` directories across modules,
+// components and templates. They are huge and rarely useful for code search,
+// so they are excluded from every scope by default (override with --include-lang).
+const LANG_IGNORES = ["**/lang/**"];
 
 /** Extract the Bitrix module name from a path like `bitrix/modules/iblock/lib/...`. */
 function detectModule(relativePath: string): string | undefined {
@@ -110,6 +117,7 @@ export interface DiscoverFilesOptions {
   kind: IndexKind;
   patterns?: string[];
   ignores?: string[];
+  includeLang?: boolean;
 }
 
 export interface DiscoverFilesResult {
@@ -126,7 +134,11 @@ export interface DiscoverFilesResult {
 export async function discoverFiles(root: string, options: DiscoverFilesOptions): Promise<DiscoverFilesResult> {
   const resolvedRoot = path.resolve(root);
   const patterns = options.patterns ?? defaultPatternsForKind(options.kind);
-  const kindIgnores = [...defaultIgnoresForKind(options.kind), ...(options.ignores ?? [])];
+  const kindIgnores = [
+    ...defaultIgnoresForKind(options.kind),
+    ...(options.includeLang ? [] : LANG_IGNORES),
+    ...(options.ignores ?? [])
+  ];
   const ig = await loadIgnore(resolvedRoot, {
     useGitignore: options.kind !== "bitrix" && options.kind !== "install",
     extraIgnores: kindIgnores
@@ -152,7 +164,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
   const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
 
   reporter.start({ scope, phase: "discover", status: "start", startedAt });
-  const { found, queued } = await discoverFiles(root, { kind: options.kind, patterns: options.patterns, ignores: options.ignores });
+  const { found, queued } = await discoverFiles(root, { kind: options.kind, patterns: options.patterns, ignores: options.ignores, includeLang: options.includeLang });
   reporter.done({
     scope,
     phase: "discover",
