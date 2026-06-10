@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createMcpServer } from "../src/mcp/server.js";
-import { sqlitePath, type RuntimePaths } from "../src/config/paths.js";
+import { indexPath, sqlitePath, type RuntimePaths } from "../src/config/paths.js";
+import { buildIndex, DEFAULT_INSTALL_ASSET_PATTERNS } from "../src/indexer/indexer.js";
 import { readIndexFromSqlite, writeBitrixRelations, writeIndexToSqlite } from "../src/indexer/sqliteStore.js";
 import { addPathDocSource } from "../src/resources/docs.js";
 
@@ -596,6 +597,9 @@ CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400)
 
   assert.ok(tools.bitrix_agent_search);
   await tools.bitrix_index_all.handler({});
+  // Install assets are opt-in (not indexed by bitrix_index_all by default), so
+  // index the install scope explicitly to exercise install-agent search.
+  await buildIndex({ root, kind: "install", outFile: indexPath(dataDir, "install"), patterns: DEFAULT_INSTALL_ASSET_PATTERNS, force: true });
   const result = await tools.bitrix_agent_search.handler({ query: "Agent::run", module: "vendor.module", kind: "install", limit: 5 });
   const compact = JSON.parse(result.content[0].text) as Array<{ name: string; module: string; periodic: string; interval: number; kind: string; file: string; line: number; signature: string }>;
 

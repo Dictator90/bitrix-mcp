@@ -40,6 +40,8 @@ export class TtyProgressReporter implements ProgressReporter {
   private lineActive = false;
   private lastRenderAt = Number.NEGATIVE_INFINITY;
   private phaseStartedAt = 0;
+  private lastCurrent: number | undefined;
+  private lastTotal: number | undefined;
 
   constructor(options: TtyProgressReporterOptions) {
     this.stream = options.stream;
@@ -66,15 +68,32 @@ export class TtyProgressReporter implements ProgressReporter {
     return text.length > max ? `${text.slice(0, max - 1)}…` : text;
   }
 
+  private renderStatusLine(line: string): void {
+    const truncated = this.truncate(line);
+    if (this.isTty) {
+      this.stream.write(`\r${CLEAR_LINE}${truncated}`);
+      this.lineActive = true;
+    } else {
+      this.stream.write(`${truncated}\n`);
+    }
+  }
+
   start(event: IndexProgressEvent): void {
     this.finishLine();
     this.phaseStartedAt = this.now();
     this.lastRenderAt = Number.NEGATIVE_INFINITY;
+    this.lastCurrent = undefined;
+    this.lastTotal = undefined;
     const label = event.message ?? PHASE_LABELS[event.phase] ?? event.phase;
     this.stream.write(`${event.scope}: ${label}\n`);
   }
 
   update(event: IndexProgressEvent): void {
+    // Track the latest counts regardless of throttling so phase completion can
+    // flush the final state even if the last update was throttled away.
+    if (event.current !== undefined) this.lastCurrent = event.current;
+    if (event.total !== undefined) this.lastTotal = event.total;
+
     const timestamp = this.now();
     if (timestamp - this.lastRenderAt < this.intervalMs) {
       return;
@@ -103,14 +122,7 @@ export class TtyProgressReporter implements ProgressReporter {
     if (event.file) {
       line += this.dim(` ${event.file}`);
     }
-    line = this.truncate(line);
-
-    if (this.isTty) {
-      this.stream.write(`\r${CLEAR_LINE}${line}`);
-      this.lineActive = true;
-    } else {
-      this.stream.write(`${line}\n`);
-    }
+    this.renderStatusLine(line);
   }
 
   warn(message: string, _event?: Partial<IndexProgressEvent>): void {
@@ -126,10 +138,19 @@ export class TtyProgressReporter implements ProgressReporter {
   }
 
   done(event: IndexProgressEvent): void {
-    this.finishLine();
     if (event.phase !== "done") {
+      // Flush the final state of this phase so the last visible line shows
+      // completion (e.g. 74/74 | 100%) instead of a stale throttled value.
+      if (this.lastTotal !== undefined && this.lastTotal > 0) {
+        const elapsed = this.now() - this.phaseStartedAt;
+        this.renderStatusLine(`  ${formatNumber(this.lastTotal)}/${formatNumber(this.lastTotal)} | 100% | ${formatDuration(elapsed)} elapsed`);
+      }
+      this.finishLine();
+      this.lastCurrent = undefined;
+      this.lastTotal = undefined;
       return;
     }
+    this.finishLine();
     const parts: string[] = [];
     if (event.elapsedMs !== undefined) {
       parts.push(`Done in ${formatDuration(event.elapsedMs)}`);

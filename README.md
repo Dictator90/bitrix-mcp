@@ -259,8 +259,9 @@ npx @mb4it/bitrix-mcp index-all --bitrix-modules=main,iblock
 | --- | --- | --- |
 | `--modules=main,iblock` | `index-bitrix` | Index only these core modules (default: `all`). `--modules=all` for every module. |
 | `--bitrix-modules=…` | `index-code`, `index-all` | Same selection for the Bitrix part of those commands. |
-| `--full` | `index-bitrix`, `index-code`, `index-all` | Every module **plus** `lang/` files. Alias for `--modules=all --include-lang`. Prints a slow-run warning. |
-| `--include-lang` | all Bitrix index commands | Include per-module `lang/` message files (off by default). |
+| `--full` | `index-bitrix`, `index-code`, `index-all` | Every module **plus** `lang/` and install assets. Alias for `--modules=all --include-lang --install`. Prints a slow-run warning. |
+| `--include-lang` | all Bitrix index commands | Include `lang/` message files (off by default in every scope). |
+| `--install` | `index-code`, `index-all` | Also index module `install/` assets (off by default — install is its own `index-install` scope). |
 | `--no-bitrix` | `index-code`, `index-all` | Skip the Bitrix core **and** install scopes entirely. |
 | `--plan` | `index-bitrix` | Print the indexing plan (files found / ignored / queued, top modules) and exit without indexing. |
 

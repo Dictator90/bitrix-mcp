@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.2
+
+### Changed
+
+- `index-code` / `index-all` no longer index module `install/` assets by default. Install assets (install components, scripts, etc. — tens of thousands of files on a real project) are now opt-in via `--install` or `--full`, or the dedicated `index-install` command. `--no-bitrix` still skips them too. The MCP `bitrix_index_all` tool follows the same default.
+
+### Fixed
+
+- TTY progress no longer looks "stuck": when a phase finishes it now flushes the final `N/N | 100%` state instead of leaving a stale throttled value (e.g. `1/74 | 1%`) on screen. On fast/incremental scopes the last frame was often never rendered, making it unclear whether indexing had finished.
+
 ## 0.4.1
 
 ### Fixed

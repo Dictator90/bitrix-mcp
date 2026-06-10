@@ -262,8 +262,9 @@ npx @mb4it/bitrix-mcp index-all --bitrix-modules=main,iblock
 | --- | --- | --- |
 | `--modules=main,iblock` | `index-bitrix` | Индексировать только эти модули ядра (по умолчанию `all`). `--modules=all` — все. |
 | `--bitrix-modules=…` | `index-code`, `index-all` | Тот же выбор для Bitrix-части этих команд. |
-| `--full` | `index-bitrix`, `index-code`, `index-all` | Все модули **плюс** `lang/`. Алиас `--modules=all --include-lang`. Печатает предупреждение о длительности. |
-| `--include-lang` | все команды индексации Bitrix | Включить `lang/` модулей (по умолчанию выкл). |
+| `--full` | `index-bitrix`, `index-code`, `index-all` | Все модули **плюс** `lang/` и install-ассеты. Алиас `--modules=all --include-lang --install`. Печатает предупреждение о длительности. |
+| `--include-lang` | все команды индексации Bitrix | Включить `lang/` во всех scope (по умолчанию выкл). |
+| `--install` | `index-code`, `index-all` | Также индексировать `install/`-ассеты модулей (по умолчанию выкл — install это отдельный scope `index-install`). |
 | `--no-bitrix` | `index-code`, `index-all` | Полностью пропустить scope ядра **и** install. |
 | `--plan` | `index-bitrix` | Напечатать план (found / ignored / queued, топ модулей) и выйти без индексации. |
 

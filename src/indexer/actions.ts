@@ -60,6 +60,8 @@ export interface IndexActionOptions {
   bitrixModules?: BitrixModuleSelection;
   /** Index per-module `lang` message files. Defaults to false. */
   includeLang?: boolean;
+  /** Index module `install/` assets. Defaults to false (use `--install` / `--full`). */
+  includeInstall?: boolean;
 }
 
 export async function indexCode(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<Omit<IndexAllResult, "docChunks">> {
@@ -76,8 +78,10 @@ export async function indexCode(paths: RuntimePaths, options: IndexActionOptions
     const bitrixManifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: bitrix.patterns, ignores: bitrix.ignores, force: options.force, reporter, includeLang });
     bitrixFiles = bitrixManifest.files.length;
 
-    const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter, includeLang });
-    installFiles = installManifest.files.length;
+    if (options.includeInstall) {
+      const installManifest = await buildIndex({ root: projectRoot, kind: "install", outFile: indexPath(paths.dataDir, "install"), patterns: INSTALL_ASSET_PATTERNS, force: options.force, reporter, includeLang });
+      installFiles = installManifest.files.length;
+    }
   }
 
   return {

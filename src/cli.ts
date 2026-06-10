@@ -59,10 +59,11 @@ Commands:
   impact-radius [file ...] [--base <ref>] [--depth <n>] [--json] Analyze Bitrix graph impact radius
   benchmark [--force]           Generate .bitrix-mcp/benchmark.json and benchmark.md
 
-Bitrix indexing options (index-bitrix; index-code/index-all accept --no-bitrix, --modules, --include-lang, --full):
+Bitrix indexing options (index-bitrix; index-code/index-all accept --no-bitrix, --modules, --include-lang, --install, --full):
   --modules=main,iblock         Index only these Bitrix core modules (default: all). Use --modules=all for every module
-  --full                        Index every module plus lang files (slow). Alias for --modules=all --include-lang
-  --include-lang                Include per-module lang/ message files (excluded by default)
+  --full                        Index every module plus lang and install assets (slow). Alias for --modules=all --include-lang --install
+  --include-lang                Include lang/ message files (excluded by default in every scope)
+  --install                     index-code/index-all only: also index module install/ assets (excluded by default)
   --no-bitrix                   index-code/index-all only: skip the Bitrix core and install scopes entirely
   --plan                        index-bitrix only: print what would be indexed (files found/ignored/queued) without indexing
                                 The Bitrix core scope indexes modules + admin + tools + js; runtime, static assets,
@@ -306,6 +307,7 @@ function flagValue(argv: string[], name: string): string | undefined {
 interface BitrixCliOptions {
   modules: BitrixModuleSelection;
   includeLang: boolean;
+  includeInstall: boolean;
   full: boolean;
   plan: boolean;
   noBitrix: boolean;
@@ -319,12 +321,14 @@ function parseBitrixOptions(argv: string[]): BitrixCliOptions {
   if (argv.includes("--exclude-lang")) {
     includeLang = false;
   }
+  let includeInstall = argv.includes("--install");
   let modules: BitrixModuleSelection = parseModuleSelection(flagValue(argv, "--modules") ?? flagValue(argv, "--bitrix-modules")) ?? "all";
   if (full) {
     modules = "all";
     includeLang = true;
+    includeInstall = true;
   }
-  return { modules, includeLang, full, plan, noBitrix };
+  return { modules, includeLang, includeInstall, full, plan, noBitrix };
 }
 
 async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof resolveBitrixIndex>, modules: BitrixModuleSelection): Promise<void> {
@@ -411,7 +415,7 @@ async function main(argv: string[]): Promise<void> {
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(argv));
     const startedAt = Date.now();
-    const result = await indexAll(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang });
+    const result = await indexAll(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
       scope: "all",
       phase: "done",
@@ -429,7 +433,7 @@ async function main(argv: string[]): Promise<void> {
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(argv));
     const startedAt = Date.now();
-    const result = await indexCode(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang });
+    const result = await indexCode(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
       scope: "code",
       phase: "done",

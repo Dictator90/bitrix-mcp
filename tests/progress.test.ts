@@ -193,6 +193,20 @@ test("TtyProgressReporter shows phase, counts and summary", () => {
   assert.ok(text.includes("07:43"), "expected summary duration");
 });
 
+test("TtyProgressReporter flushes a completed status line when a phase finishes", () => {
+  const stream = makeStream(true);
+  const c = clock();
+  const reporter = new TtyProgressReporter({ stream, isTty: true, now: c.now, intervalMs: 1000, useColor: false });
+  reporter.start({ scope: "project", phase: "parse", status: "start" });
+  reporter.update({ scope: "project", phase: "parse", current: 1, total: 74 }); // renders 1/74
+  reporter.update({ scope: "project", phase: "parse", current: 74, total: 74 }); // throttled, not rendered
+  reporter.done({ scope: "project", phase: "parse", status: "done" });
+
+  const text = stream.text();
+  assert.ok(text.includes("74/74"), `phase completion must show the final count, got ${JSON.stringify(text)}`);
+  assert.ok(text.includes("100%"), `phase completion must show 100%, got ${JSON.stringify(text)}`);
+});
+
 test("TtyProgressReporter throttles intra-phase updates", () => {
   const stream = makeStream(true);
   const c = clock();
