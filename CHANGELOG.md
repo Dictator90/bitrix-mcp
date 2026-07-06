@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.8
+
+### Fixed
+
+- **`typescript` is now a runtime dependency instead of a dev dependency.** The LiveAPI indexer (`liveapi/jsParser`) imports the TypeScript compiler to parse JS/TS symbols, so it is required at runtime. With it under `devDependencies`, a global/production install (`npm install -g`, `npx`) did not pull it in, and the first indexing pass crashed with `Cannot find module 'typescript'` — most visible on clean Windows machines with no globally installed TypeScript. It now ships as a regular dependency and installs out of the box.
+
+### Documentation
+
+- Added a Windows / PowerShell troubleshooting note (README, ru.README, `docs/cli.md`) for the `bitrix-mcp.ps1 cannot be loaded because running scripts is disabled on this system` (`PSSecurityException`) error. This is the Windows script execution policy blocking npm's PowerShell shim, not a package fault; documented the `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` fix and the `npx` / `bitrix-mcp.cmd` alternatives.
+
+## 0.4.7
+
+### Added
+
+- `init`/`configure` now writes agent hooks that actively push a "use bitrix-mcp first" directive, so the server is used automatically instead of waiting to be asked. Passive skill/rule guidance is not always enough — Claude Code in particular defers MCP tools behind its `ToolSearch` mechanism. Hooks are written for every agent that supports prompt/session context injection, using each agent's verified schema and an agent-appropriate directive (only Claude Code gets a `ToolSearch` step; every other agent exposes MCP tools directly):
+  - **Claude Code** — `<project>/.claude/settings.json`: `UserPromptSubmit` (main thread) and `SubagentStart` (spawned subagents).
+  - **Gemini CLI** — `<project>/.gemini/settings.json`: `BeforeAgent` (Gemini has no subagent-start event).
+  - **Cursor** — `<project>/.cursor/hooks.json`: `sessionStart` via `additional_context` (Cursor's `beforeSubmitPrompt` cannot inject context).
+  - **OpenAI Codex** — `<project>/.codex/hooks.json`: `SessionStart` via `hookSpecificOutput.additionalContext`.
+  - **GitHub Copilot / VS Code** — `<project>/.github/hooks/bitrix-mcp.json` (auto-loaded): `SessionStart` via `hookSpecificOutput.additionalContext`.
+  - **Cline** — `<project>/.clinerules/hooks/UserPromptSubmit`: an executable `bash` script emitting `{"contextModification": ...}` (Cline's hook mechanism is script files, macOS/Linux only).
+  - Agents that do **not** expose a prompt/session context-injection hook keep relying on their always-applied rule files (which `init` already writes): **Windsurf** (hooks only block actions via exit codes), **Roo Code** (prompt hooks not yet available), **Kilo Code** (hooks are code plugins, not declarative config), **Continue** (rules + context providers only), and **JetBrains / Junie** (no declarative hooks).
+
+  JSON hook writes merge into any existing config (user settings and other hooks/servers are preserved) and are idempotent — managed hooks carry a `bitrix-mcp:auto-directive` marker and are replaced in place on re-runs.
+
 ## 0.4.6
 
 ### Removed

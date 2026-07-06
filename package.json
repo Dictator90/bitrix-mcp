@@ -1,6 +1,6 @@
 {
   "name": "@mb4it/bitrix-mcp",
-  "version": "0.4.6",
+  "version": "0.4.8",
   "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
   "type": "module",
   "bin": {
@@ -30,12 +30,12 @@
     "fast-glob": "^3.3.3",
     "ignore": "^7.0.5",
     "php-parser": "^3.5.1",
+    "typescript": "^5.8.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
-    "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "tsx": "^4.19.4"
   },
   "engines": {
     "node": ">=22.12.0"
