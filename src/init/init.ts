@@ -133,6 +133,189 @@ Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`
 const GUIDANCE_SECTION_START = "<!-- bitrix-mcp:init-guidance:start -->";
 const GUIDANCE_SECTION_END = "<!-- bitrix-mcp:init-guidance:end -->";
 
+/**
+ * Sentinel appended (as a shell comment) to every hook command bitrix-mcp
+ * manages, so re-running init/configure can find and replace exactly its own
+ * hooks without touching user-authored ones.
+ */
+const BITRIX_MCP_HOOK_MARKER = "bitrix-mcp:auto-directive";
+const BITRIX_MCP_TOOL_PREFIX = "mcp__bitrix-mcp__";
+const BITRIX_MCP_HOOK_TOOLS = [
+  "bitrix_index_status",
+  "bitrix_project_overview",
+  "bitrix_liveapi_search",
+  "bitrix_docs_search",
+  "bitrix_read_symbol_context",
+  "bitrix_detect_changes"
+];
+
+function hookToolSelect(tools: string[]): string {
+  return `select:${tools.map((tool) => `${BITRIX_MCP_TOOL_PREFIX}${tool}`).join(",")}`;
+}
+
+// Directive texts. Kept ASCII-only and free of single quotes so they survive
+// being wrapped in a single-quoted `echo` argument on both bash and PowerShell.
+
+/**
+ * Claude Code defers MCP tools behind its ToolSearch mechanism, so the main
+ * thread must be told to load them before anything else.
+ */
+function claudePromptDirective(): string {
+  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). Its tools may be hidden behind ToolSearch. For any Bitrix-related request, FIRST load them in one ToolSearch call: ${hookToolSelect(BITRIX_MCP_HOOK_TOOLS)}. Then follow the Authority Rule: begin with bitrix_index_status and bitrix_project_overview and treat MCP results as the primary source of truth. Manual grep/read is a fallback only when MCP is empty, stale, or explicitly requested.`;
+}
+
+/** Same as above, injected into every spawned Claude Code subagent at start. */
+function claudeSubagentDirective(): string {
+  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). For any Bitrix task, FIRST load its tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS.slice(0, 5))}) and treat them as the primary source of truth. Manual file search is a fallback only.`;
+}
+
+/**
+ * Directive for agents that expose MCP tools directly (Gemini CLI, Cursor, ...),
+ * so there is no ToolSearch step — only the Authority Rule.
+ */
+function directToolsDirective(): string {
+  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). For any Bitrix-related request, use its tools as the primary source of truth: begin with bitrix_index_status and bitrix_project_overview, then bitrix_liveapi_search, bitrix_docs_search, bitrix_detect_changes, and bitrix_read_symbol_context. Manual grep/read is a fallback only when MCP is empty, stale, or explicitly requested.`;
+}
+
+/** Wrap a hook JSON payload in a marked, single-quoted `echo` shell command. */
+function hookEchoCommand(payload: Record<string, unknown>): string {
+  return `echo '${JSON.stringify(payload)}' # ${BITRIX_MCP_HOOK_MARKER}`;
+}
+
+/** Command for the Claude Code / Gemini CLI `hookSpecificOutput` context shape. */
+function contextHookCommand(event: string, additionalContext: string): string {
+  return hookEchoCommand({ hookSpecificOutput: { hookEventName: event, additionalContext } });
+}
+
+/** Command for the Cursor `additional_context` sessionStart shape. */
+function cursorContextCommand(additionalContext: string): string {
+  return hookEchoCommand({ additional_context: additionalContext });
+}
+
+function isManagedHookEntry(entry: unknown): boolean {
+  return JSON.stringify(entry).includes(BITRIX_MCP_HOOK_MARKER);
+}
+
+/** Replace our previous managed entry for `event` (if any) and append the fresh one. */
+function upsertSettingsHook(hooks: Record<string, unknown>, event: string, entry: Record<string, unknown>): void {
+  const existing = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+  hooks[event] = [...existing.filter((item) => !isManagedHookEntry(item)), entry];
+}
+
+/**
+ * Claude Code hooks (`.claude/settings.json`): UserPromptSubmit for the main
+ * thread and SubagentStart for spawned agents. Merges into any existing config,
+ * preserving user settings/hooks, and is idempotent across re-runs.
+ */
+export async function writeClaudeCodeHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".claude", "settings.json");
+  const config = await readJsonObject(filePath);
+  const hooks = ensureObject(config, "hooks");
+  upsertSettingsHook(hooks, "UserPromptSubmit", {
+    hooks: [{ type: "command", command: contextHookCommand("UserPromptSubmit", claudePromptDirective()), statusMessage: "bitrix-mcp directive" }]
+  });
+  upsertSettingsHook(hooks, "SubagentStart", {
+    hooks: [{ type: "command", command: contextHookCommand("SubagentStart", claudeSubagentDirective()), statusMessage: "bitrix-mcp directive" }]
+  });
+  await writeJsonObject(filePath, config);
+  return { label: "Claude Code hooks", path: filePath };
+}
+
+/**
+ * Gemini CLI hooks (`.gemini/settings.json`): the BeforeAgent event injects
+ * context before each agent turn (Gemini has no subagent-start event). Shares
+ * the file with the MCP server config and merges non-destructively.
+ */
+export async function writeGeminiHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".gemini", "settings.json");
+  const config = await readJsonObject(filePath);
+  const hooks = ensureObject(config, "hooks");
+  upsertSettingsHook(hooks, "BeforeAgent", {
+    matcher: "*",
+    hooks: [{ type: "command", name: "bitrix-mcp-directive", command: contextHookCommand("BeforeAgent", directToolsDirective()) }]
+  });
+  await writeJsonObject(filePath, config);
+  return { label: "Gemini CLI hooks", path: filePath };
+}
+
+/**
+ * Cursor hooks (`.cursor/hooks.json`): context injection is only supported on
+ * the sessionStart event (via `additional_context`); beforeSubmitPrompt cannot
+ * inject context. Requires a top-level `version` field.
+ */
+export async function writeCursorHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".cursor", "hooks.json");
+  const config = await readJsonObject(filePath);
+  if (typeof config.version !== "number") {
+    config.version = 1;
+  }
+  const hooks = ensureObject(config, "hooks");
+  upsertSettingsHook(hooks, "sessionStart", { command: cursorContextCommand(directToolsDirective()) });
+  await writeJsonObject(filePath, config);
+  return { label: "Cursor hooks", path: filePath };
+}
+
+/**
+ * Codex hooks (`.codex/hooks.json`): the SessionStart event injects developer
+ * context. Same `hookSpecificOutput.additionalContext` shape as Claude Code.
+ * Merges non-destructively; project-local hooks load once the `.codex/` layer
+ * is trusted.
+ */
+export async function writeCodexHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".codex", "hooks.json");
+  const config = await readJsonObject(filePath);
+  const hooks = ensureObject(config, "hooks");
+  upsertSettingsHook(hooks, "SessionStart", {
+    matcher: "startup|resume",
+    hooks: [{ type: "command", command: contextHookCommand("SessionStart", directToolsDirective()) }]
+  });
+  await writeJsonObject(filePath, config);
+  return { label: "Codex hooks", path: filePath };
+}
+
+/**
+ * GitHub Copilot / VS Code agent hooks. VS Code auto-loads every `.json` under
+ * `.github/hooks/`, so bitrix-mcp owns a dedicated file and overwrites it. The
+ * SessionStart event injects context via `hookSpecificOutput.additionalContext`.
+ */
+export async function writeCopilotHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".github", "hooks", "bitrix-mcp.json");
+  await writeJsonObject(filePath, {
+    hooks: {
+      SessionStart: [
+        { type: "command", command: contextHookCommand("SessionStart", directToolsDirective()) }
+      ]
+    }
+  });
+  return { label: "Copilot hooks", path: filePath };
+}
+
+/**
+ * Cline hooks are executable scripts named exactly after the hook type (no
+ * extension) under `.clinerules/hooks/`. The UserPromptSubmit script emits
+ * `{"contextModification": ...}` to inject context. Cline runs hooks on
+ * macOS/Linux only, so the file is a `bash` script marked executable.
+ */
+export async function writeClineHooks(context: InitContext): Promise<AgentGuidanceResult> {
+  const filePath = path.join(context.projectRoot, ".clinerules", "hooks", "UserPromptSubmit");
+  const payload = JSON.stringify({ contextModification: directToolsDirective() });
+  const script = `#!/usr/bin/env bash\n# ${BITRIX_MCP_HOOK_MARKER}\ncat <<'BITRIX_MCP_JSON'\n${payload}\nBITRIX_MCP_JSON\n`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, script, "utf8");
+  await fs.chmod(filePath, 0o755);
+  return { label: "Cline hooks", path: filePath };
+}
+
+/** Agents that support context-injection hooks, mapped to their hook writer. */
+const HOOK_WRITERS: Partial<Record<Agent, (context: InitContext) => Promise<AgentGuidanceResult>>> = {
+  "claude-code": writeClaudeCodeHooks,
+  "gemini-cli": writeGeminiHooks,
+  cursor: writeCursorHooks,
+  codex: writeCodexHooks,
+  vscode: writeCopilotHooks,
+  cline: writeClineHooks
+};
+
 async function writeTextFile(filePath: string, value: string, label = "Bitrix MCP guidance"): Promise<AgentGuidanceResult> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, value.endsWith("\n") ? value : `${value}\n`, "utf8");
@@ -277,6 +460,13 @@ export async function writeAgentGuidance(agent: Agent, context: InitContext): Pr
   results.push(rule.mode === "cursor"
     ? await upsertCursorRule(rule.path, rule.content, rule.label)
     : await upsertMarkedSection(rule.path, rule.content, rule.label, rule.newFileTemplate));
+  // Passive rules are not always enough (Claude Code defers MCP tools behind
+  // ToolSearch). For agents that support context-injection hooks, also write a
+  // hook that actively pushes the "use bitrix-mcp first" directive.
+  const hookWriter = HOOK_WRITERS[agent];
+  if (hookWriter) {
+    results.push(await hookWriter(context));
+  }
   return results;
 }
 
@@ -330,10 +520,23 @@ export function envConfig(context: InitContext): Record<string, string> {
   };
 }
 
+/**
+ * How MCP clients should spawn the server. On Windows the global install is a
+ * set of npm shims (`bitrix-mcp.cmd` / `.ps1`), not a real executable: clients
+ * that spawn without a shell cannot resolve the bare `bitrix-mcp` name (ENOENT),
+ * and PowerShell additionally prefers the `.ps1` shim, which the default
+ * execution policy blocks. Routing through `cmd /c` makes the client launch the
+ * policy-immune `.cmd` shim via PATHEXT, so the server starts out of the box.
+ */
+export function serverInvocation(): { command: string; args: string[] } {
+  return process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "bitrix-mcp", "serve"] }
+    : { command: "bitrix-mcp", args: ["serve"] };
+}
+
 function mcpServerConfig(context: InitContext): StdioServerConfig {
   return {
-    command: "bitrix-mcp",
-    args: ["serve"],
+    ...serverInvocation(),
     env: envConfig(context)
   };
 }
@@ -382,13 +585,14 @@ function escapeTomlString(value: string): string {
 }
 
 function codexTomlBlock(context: InitContext): string {
+  const { command, args } = serverInvocation();
   const env = Object.entries(envConfig(context))
     .map(([key, value]) => `${key} = ${escapeTomlString(value)}`)
     .join(", ");
   return [
     "[mcp_servers.bitrix-mcp]",
-    'command = "bitrix-mcp"',
-    'args = ["serve"]',
+    `command = ${escapeTomlString(command)}`,
+    `args = [${args.map((arg) => escapeTomlString(arg)).join(", ")}]`,
     `env = { ${env} }`
   ].join("\n");
 }
