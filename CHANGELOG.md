@@ -2,9 +2,18 @@
 
 ## 0.4.8
 
+### Added
+
+- **`status` now breaks files and symbols down by scope and language.** `bitrix-mcp status` (and the JSON it emits, plus the `bitrix_index_status` MCP tool) previously reported only aggregate totals, so a scope that indexed zero JavaScript was invisible behind a single `Files: N`. It now also prints `by scope` (project/template/bitrix/install) and `by language` (php/javascript/typescript/…) tallies for files, and a `by language` tally for symbols — making JS/TS coverage (or its absence on a stale index) obvious at a glance.
+
 ### Fixed
 
 - **`typescript` is now a runtime dependency instead of a dev dependency.** The LiveAPI indexer (`liveapi/jsParser`) imports the TypeScript compiler to parse JS/TS symbols, so it is required at runtime. With it under `devDependencies`, a global/production install (`npm install -g`, `npx`) did not pull it in, and the first indexing pass crashed with `Cannot find module 'typescript'` — most visible on clean Windows machines with no globally installed TypeScript. It now ships as a regular dependency and installs out of the box.
+- **Windows: generated MCP configs launch the server through `cmd /c`.** On Windows the global install is a set of npm shims (`bitrix-mcp.cmd` / `.ps1`), not a real executable. MCP clients that spawn without a shell could not resolve the bare `bitrix-mcp` command (`ENOENT`), and PowerShell prefers the `.ps1` shim, which the default execution policy blocks. `init`/`configure` now write `command: "cmd", args: ["/c", "bitrix-mcp", "serve", …]` on `win32` (all clients, including the Codex TOML block), so the client launches the policy-immune `.cmd` shim via PATHEXT. macOS/Linux configs are unchanged (`command: "bitrix-mcp"`).
+
+### Changed
+
+- **Indexing exclusions tightened for JS-heavy Bitrix trees.** `test/**` directories and `*.test.js` files are now excluded from every scope (test scaffolding, not API surface), and the `index-install` scope skips `install/js/**` because a module's install JS is copied verbatim into the published `bitrix/js` tree on install — indexing both duplicated the same symbols under two kinds. Authored `src/**` next to a `dist/**` bundle is still indexed (the transpiled bundle yields no usable class symbols, so `dist/` stays excluded as before). Re-run `bitrix-mcp index-bitrix --force` to pick up core JS (e.g. `bitrix/js/ui/entity-selector/src/**`) on indexes built before `bitrix/js` coverage existed.
 
 ### Documentation
 

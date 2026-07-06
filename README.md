@@ -49,6 +49,10 @@ npx @mb4it/bitrix-mcp init
 bitrix-mcp.cmd init
 ```
 
+This only affects the one-time `init` you type yourself. The MCP server config
+that `init` writes already launches the server through `cmd /c` on Windows, so
+your MCP client (Cursor, Claude Code, …) starts it without any policy change.
+
 ## Quick start
 
 From the root of your Bitrix project:

@@ -30,7 +30,7 @@ Run `bitrix-mcp --help` for the built-in summary.
 | `index-docs [--force] [--embeddings]` | Index registered docs into SQLite, optionally into embeddings. |
 | `index-embeddings` | Send SQLite doc chunks to the embeddings service. See [embeddings.md](./embeddings.md). |
 | `search-modules <module>` | Search indexed Bitrix module include/check API usages. |
-| `status` | Show the SQLite DB path and index counters. |
+| `status` | Show the SQLite DB path and index counters, broken down by scope (project/template/bitrix/install) and language (php/javascript/typescript/…). |
 | `doctor [--json] [--verbose]` | Health check for workspace, Bitrix root, SQLite, docs, ignore file, and embeddings. |
 | `detect-changes [--base <ref>] [--json] [--depth <n>]` | Analyze Git-changed Bitrix files, indexed entities, and impact. |
 | `graph-neighbors <type> <name> [--direction out\|in\|both] [--relation-type <t>] [--depth <n>] [--json]` | Query the dependency graph. See [graph.md](./graph.md). |
@@ -56,7 +56,11 @@ Excluded by default (always):
 - static assets: `bitrix/images`, `themes`, `fonts`, `panel`, …
 - `bitrix/wizards/**`
 - module `install/**` (that is the separate `index-install` scope)
+- `dist/**` built bundles — the transpiled bundle yields no usable class symbols; the authored `src/` next to it (e.g. `bitrix/js/ui/entity-selector/src/**`) is indexed instead
+- `test/**` directories and `*.test.js` files — test scaffolding, not API surface (excluded across **all** scopes)
 - `lang/**` message files — excluded across **all** scopes (re-enable with `--include-lang` / `--full`)
+
+The `index-install` scope additionally skips `install/js/**`: a module's install JS is copied verbatim into the published `bitrix/js` tree when it installs, so it is already covered by the bitrix scope and indexing it again would duplicate the same symbols under two kinds.
 
 Components and templates belong to the **template** scope (`bitrix/components`, `bitrix/templates`, and `local/` equivalents). The **project** scope (`index-project`) indexes your own code only and never crawls `/bitrix/`.
 
