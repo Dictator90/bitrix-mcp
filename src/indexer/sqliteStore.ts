@@ -2546,10 +2546,19 @@ export async function readIndexFromSqlite(dbFile: string, kind: IndexKind): Prom
 }
 
 
+/** A `GROUP BY` tally (e.g. files per scope, symbols per language). */
+export interface StatusBreakdown {
+  label: string;
+  count: number;
+}
+
 export interface IndexStatus {
   dbFile: string;
   files: number;
+  filesByKind: StatusBreakdown[];
+  filesByLanguage: StatusBreakdown[];
   symbols: number;
+  symbolsByLanguage: StatusBreakdown[];
   events: number;
   moduleUsages: number;
   hlblockUsages: number;
@@ -2570,6 +2579,14 @@ export interface IndexStatus {
 function countRows(db: DatabaseSync, table: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
   return row.count;
+}
+
+/** Run a `SELECT <col> AS label, COUNT(*) AS count ... GROUP BY` query into a breakdown list. */
+function groupCounts(db: DatabaseSync, sql: string): StatusBreakdown[] {
+  return (db.prepare(sql).all() as Array<{ label: string | null; count: number }>).map((row) => ({
+    label: row.label ?? "unknown",
+    count: Number(row.count)
+  }));
 }
 
 function countPhpParseFallbackFiles(db: DatabaseSync): number {
@@ -2598,7 +2615,10 @@ export async function getIndexStatus(dbFile: string): Promise<IndexStatus> {
     return {
       dbFile,
       files: countRows(db, "files"),
+      filesByKind: groupCounts(db, "SELECT kind AS label, COUNT(*) AS count FROM files GROUP BY kind ORDER BY count DESC, label ASC"),
+      filesByLanguage: groupCounts(db, "SELECT language AS label, COUNT(*) AS count FROM files GROUP BY language ORDER BY count DESC, label ASC"),
       symbols: countRows(db, "symbols"),
+      symbolsByLanguage: groupCounts(db, "SELECT language AS label, COUNT(*) AS count FROM symbols GROUP BY language ORDER BY count DESC, label ASC"),
       events: countRows(db, "events"),
       moduleUsages: countRows(db, "module_usages"),
       hlblockUsages: countRows(db, "hlblock_usages"),

@@ -14,7 +14,11 @@ import type { IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRec
 
 const CODE_EXTENSIONS = "{php,js,jsx,ts,tsx,css,scss,sass,less,html,htm,xml,json,md,txt}";
 export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
-const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**"];
+// `dist/` is built bundle output (transpiled IIFE bundles yield no usable class
+// symbols); the authored `src/` next to it is indexed instead. `test/` dirs and
+// `*.test.js` are test scaffolding, not API surface, so they are excluded from
+// every scope.
+const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**", "**/test/**", "**/*.test.js"];
 // The project scope indexes the project's own code only. The entire bitrix/
 // core tree is owned by the dedicated bitrix scope (modules/admin/tools/js)
 // and the template scope (components/templates), so it is excluded here to
@@ -32,6 +36,11 @@ const BITRIX_JS_EXTENSIONS = "{js,jsx,ts,tsx}";
 // policy is owned by the Bitrix policy resolver (resolveBitrixIndex) so that
 // `--include-lang` / `--full` can re-enable it; CLI/actions pass it explicitly.
 const BITRIX_KIND_IGNORES = ["bitrix/modules/*/install/**", "local/modules/*/install/**"];
+// Extension JS under a module's `install/js` is copied verbatim into the
+// published `bitrix/js` tree when the module installs, so it duplicates what the
+// bitrix scope already indexes. Skip it in the install-assets scope to avoid
+// double-indexing the same symbols under two kinds.
+const INSTALL_KIND_IGNORES = ["bitrix/modules/*/install/js/**", "local/modules/*/install/js/**"];
 export const DEFAULT_TEMPLATE_PATTERNS = [
   `bitrix/templates/**/*.${CODE_EXTENSIONS}`,
   `local/templates/**/*.${CODE_EXTENSIONS}`,
@@ -110,6 +119,7 @@ function defaultPatternsForKind(kind: IndexKind): string[] {
 function defaultIgnoresForKind(kind: IndexKind): string[] {
   if (kind === "project") return PROJECT_KIND_IGNORES;
   if (kind === "bitrix") return BITRIX_KIND_IGNORES;
+  if (kind === "install") return INSTALL_KIND_IGNORES;
   return [];
 }
 

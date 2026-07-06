@@ -319,6 +319,26 @@ test("buildIndex records PHP parse fallback diagnostics", async () => {
   assert.match(phpParseCheck?.message ?? "", /1 PHP file/);
 });
 
+test("getIndexStatus breaks files and symbols down by scope and language", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-status-breakdown-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-status-data-"));
+  await fs.writeFile(path.join(root, "index.php"), "<?php class StatusPhp {}\n", "utf8");
+  await fs.writeFile(path.join(root, "app.js"), "export class StatusJs {}\n", "utf8");
+
+  await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+
+  const status = await getIndexStatus(sqlitePath(dataDir));
+  const kindMap = Object.fromEntries(status.filesByKind.map((entry) => [entry.label, entry.count]));
+  const langMap = Object.fromEntries(status.filesByLanguage.map((entry) => [entry.label, entry.count]));
+  const symLangMap = Object.fromEntries(status.symbolsByLanguage.map((entry) => [entry.label, entry.count]));
+  assert.equal(kindMap.project, 2);
+  assert.equal(langMap.php, 1);
+  assert.equal(langMap.javascript, 1);
+  assert.ok((symLangMap.php ?? 0) >= 1, `expected php symbols: ${JSON.stringify(status.symbolsByLanguage)}`);
+  assert.ok((symLangMap.javascript ?? 0) >= 1, `expected js symbols: ${JSON.stringify(status.symbolsByLanguage)}`);
+  assert.deepEqual([...status.filesByLanguage].sort((a, b) => b.count - a.count), status.filesByLanguage);
+});
+
 test("buildIndex indexes project PHP symbols", async () => {
   const root = fixtureRoot;
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-project-"));
@@ -377,10 +397,10 @@ test("LiveAPI search filters by kind arrays and prefers local results", async ()
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-kind-root-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-kind-filter-"));
   await fs.mkdir(path.join(root, "bitrix/modules/main/lib"), { recursive: true });
-  await fs.mkdir(path.join(root, "local/modules/vendor.module/install/js/admin"), { recursive: true });
+  await fs.mkdir(path.join(root, "local/modules/vendor.module/install/admin"), { recursive: true });
   await fs.writeFile(path.join(root, "index.php"), "<?php\nfunction duplicate_boost_target(): void {}\nAddEventHandler('main', 'OnKindFilter', ['ProjectKindHandler', 'run']);\n", "utf8");
   await fs.writeFile(path.join(root, "bitrix/modules/main/lib/core.php"), "<?php\nfunction duplicate_boost_target(): void {}\nAddEventHandler('main', 'OnKindFilter', ['BitrixKindHandler', 'run']);\n", "utf8");
-  await fs.writeFile(path.join(root, "local/modules/vendor.module/install/js/admin/widget.ts"), "export class InstallKindWidget {}\n", "utf8");
+  await fs.writeFile(path.join(root, "local/modules/vendor.module/install/admin/widget.ts"), "export class InstallKindWidget {}\n", "utf8");
 
   await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
   await buildIndex({ root, kind: "bitrix", outFile: path.join(dataDir, "bitrix-index.json"), patterns: ["bitrix/modules/**/*.php"] });
@@ -699,11 +719,11 @@ test("bitrix and install indexes include downloaded core ignored by project .git
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-gitignored-core-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-gitignored-data-"));
 
-  await fs.mkdir(path.join(root, "bitrix/modules/main/install/js/admin"), { recursive: true });
+  await fs.mkdir(path.join(root, "bitrix/modules/main/install/admin"), { recursive: true });
   await fs.writeFile(path.join(root, ".gitignore"), "/bitrix/\n", "utf8");
   await fs.writeFile(path.join(root, "index.php"), "<?php function visible_project(): void {}\n", "utf8");
   await fs.writeFile(path.join(root, "bitrix/modules/main/include.php"), "<?php class GitignoredCoreClass {}\n", "utf8");
-  await fs.writeFile(path.join(root, "bitrix/modules/main/install/js/admin/panel.ts"), "export class GitignoredInstallPanel {}\n", "utf8");
+  await fs.writeFile(path.join(root, "bitrix/modules/main/install/admin/panel.ts"), "export class GitignoredInstallPanel {}\n", "utf8");
 
   const projectManifest = await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
   assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["index.php"]);
@@ -712,7 +732,33 @@ test("bitrix and install indexes include downloaded core ignored by project .git
   assert.deepEqual(bitrixManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/include.php"]);
 
   const installManifest = await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json"), patterns: ["bitrix/modules/*/install/**/*.{js,ts}"] });
-  assert.deepEqual(installManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/install/js/admin/panel.ts"]);
+  assert.deepEqual(installManifest.files.map((file) => file.relativePath), ["bitrix/modules/main/install/admin/panel.ts"]);
+});
+
+test("install scope skips install/js (already published under bitrix/js)", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-install-js-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-install-js-data-"));
+  await fs.mkdir(path.join(root, "local/modules/vendor.module/install/js/admin"), { recursive: true });
+  await fs.mkdir(path.join(root, "local/modules/vendor.module/install/admin"), { recursive: true });
+  await fs.writeFile(path.join(root, "local/modules/vendor.module/install/js/admin/dup.js"), "export class DuplicatedInstallJs {}\n", "utf8");
+  await fs.writeFile(path.join(root, "local/modules/vendor.module/install/admin/keep.php"), "<?php class KeptInstallAsset {}\n", "utf8");
+
+  const manifest = await buildIndex({ root, kind: "install", outFile: path.join(dataDir, "install-index.json") });
+  const paths = manifest.files.map((file) => file.relativePath);
+  assert.ok(!paths.some((relativePath) => relativePath.includes("install/js/")), `install/js must be excluded: ${paths.join(", ")}`);
+  assert.ok(paths.includes("local/modules/vendor.module/install/admin/keep.php"), `non-js install asset must stay indexed: ${paths.join(", ")}`);
+});
+
+test("buildIndex skips test/ directories and *.test.js files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-test-ignore-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-test-ignore-data-"));
+  await fs.mkdir(path.join(root, "test"), { recursive: true });
+  await fs.writeFile(path.join(root, "keep.js"), "export class KeptModule {}\n", "utf8");
+  await fs.writeFile(path.join(root, "keep.test.js"), "export class KeptTestFile {}\n", "utf8");
+  await fs.writeFile(path.join(root, "test/inside.js"), "export class InsideTestDir {}\n", "utf8");
+
+  const manifest = await buildIndex({ root, kind: "project", outFile: path.join(dataDir, "project-index.json") });
+  assert.deepEqual(manifest.files.map((file) => file.relativePath), ["keep.js"]);
 });
 
 
@@ -732,7 +778,7 @@ test("kind-specific indexes do not duplicate fixture files", async () => {
 
   assert.deepEqual(projectManifest.files.map((file) => file.relativePath), ["docs/framework/markdown-headings.md", "docs/framework/search.md", "index.php"]);
   assert.deepEqual(indexedByRelativePath.get("index.php"), ["project"]);
-  assert.deepEqual(indexedByRelativePath.get("local/modules/vendor.module/install/js/admin/widget.ts"), ["install"]);
+  assert.deepEqual(indexedByRelativePath.get("local/modules/vendor.module/install/admin/widget.ts"), ["install"]);
   assert.deepEqual(indexedByRelativePath.get("local/templates/main/components/bitrix/news.list/.default/template.php"), ["template"]);
   assert.ok([...indexedByRelativePath.values()].every((kinds) => kinds.length === 1));
 

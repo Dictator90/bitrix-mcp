@@ -3,7 +3,7 @@ import path from "node:path";
 import { indexPath, resolveBitrixProjectRoot, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { buildIndex, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
-import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus } from "./sqliteStore.js";
+import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus, type StatusBreakdown } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
 import { resolveBitrixIndex, type BitrixModuleSelection } from "./bitrixModules.js";
 import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
@@ -198,11 +198,17 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
   return checks;
 }
 
+function formatBreakdown(items: StatusBreakdown[]): string {
+  return items.map((item) => `${item.label} ${item.count}`).join(", ");
+}
+
 export function formatIndexStatus(status: IndexStatus): string {
-  return [
-    `SQLite DB: ${status.dbFile}`,
-    `Files: ${status.files}`,
-    `Symbols: ${status.symbols}`,
+  const lines = [`SQLite DB: ${status.dbFile}`, `Files: ${status.files}`];
+  if (status.filesByKind.length) lines.push(`  by scope: ${formatBreakdown(status.filesByKind)}`);
+  if (status.filesByLanguage.length) lines.push(`  by language: ${formatBreakdown(status.filesByLanguage)}`);
+  lines.push(`Symbols: ${status.symbols}`);
+  if (status.symbolsByLanguage.length) lines.push(`  by language: ${formatBreakdown(status.symbolsByLanguage)}`);
+  lines.push(
     `Events: ${status.events}`,
     `Relations: ${status.relations}`,
     `Components: ${status.components}`,
@@ -215,7 +221,8 @@ export function formatIndexStatus(status: IndexStatus): string {
     `Documentation chunks: ${status.docChunks}`,
     `PHP parse fallback/errors: ${status.phpParseFallbackFiles}`,
     `Last indexed: ${status.lastIndexedAt ?? "never"}`
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 export function formatIndexAllResult(result: IndexAllResult): string {

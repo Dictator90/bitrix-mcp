@@ -25,7 +25,7 @@ async function createStandardArchive(workDir: string): Promise<string> {
   const archivePath = path.join(workDir, "start_encode_php5.tar.gz");
 
   await fs.mkdir(path.join(payloadDir, "bitrix/modules/main/lib"), { recursive: true });
-  await fs.mkdir(path.join(payloadDir, "bitrix/modules/main/install/js/standard"), { recursive: true });
+  await fs.mkdir(path.join(payloadDir, "bitrix/modules/main/install/admin/standard"), { recursive: true });
   await fs.mkdir(path.join(payloadDir, "bitrix/modules/catalog/lib"), { recursive: true });
 
   await fs.writeFile(
@@ -64,7 +64,7 @@ class ProductTable
     "utf8"
   );
   await fs.writeFile(
-    path.join(payloadDir, "bitrix/modules/main/install/js/standard/admin.ts"),
+    path.join(payloadDir, "bitrix/modules/main/install/admin/standard/admin.ts"),
     `export class StandardAdminPanel {
   render(): string { return 'standard'; }
 }
