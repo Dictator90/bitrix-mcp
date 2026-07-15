@@ -16,7 +16,11 @@ test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
     docsDir: path.join(projectRoot, "docs"),
     bitrixRoot: projectRoot,
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   });
 
   assert.equal(config.BITRIX_MCP_WORKSPACE, projectRoot);
@@ -24,6 +28,27 @@ test("envConfig writes per-project MCP paths and detected BITRIX_ROOT", () => {
   assert.equal(config.BITRIX_MCP_DOCS_DIR, path.join(projectRoot, "docs"));
   assert.equal(config.BITRIX_ROOT, projectRoot);
   assert.equal(config.BITRIX_MCP_SEMANTIC_ENABLED, "0");
+});
+
+test("envConfig emits BITRIX_MCP_PHP_BIN only when tinker is enabled", () => {
+  const base = {
+    projectRoot: "/p",
+    dataDir: "/p/.bitrix-mcp",
+    docsDir: "/p/docs",
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    phpBin: "C:/herd/bin/php.bat"
+  };
+
+  const off = envConfig({ ...base, tinkerEnabled: false });
+  assert.equal(off.BITRIX_MCP_TINKER_ENABLED, "0");
+  assert.equal("BITRIX_MCP_PHP_BIN" in off, false);
+
+  const on = envConfig({ ...base, tinkerEnabled: true });
+  assert.equal(on.BITRIX_MCP_TINKER_ENABLED, "1");
+  assert.equal(on.BITRIX_MCP_PHP_BIN, "C:/herd/bin/php.bat");
 });
 
 test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers", async () => {
@@ -58,7 +83,11 @@ test("writeMcpServersConfig updates only bitrix-mcp and keeps other MCP servers"
     docsDir: path.join(projectRoot, "docs"),
     bitrixRoot: projectRoot,
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   });
 
   const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
@@ -84,7 +113,11 @@ test("writeAgentGuidance creates a project skill and Cursor rule", async () => {
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const results = await writeAgentGuidance("cursor", context);
@@ -115,7 +148,11 @@ test("writeAgentGuidance upserts append-style rules without deleting user conten
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("codex", context);
@@ -153,7 +190,11 @@ test("writeAgentGuidance preserves custom text around managed markdown sections"
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("windsurf", context);
@@ -198,7 +239,11 @@ test("writeAgentGuidance preserves Cursor frontmatter and custom body text", asy
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("cursor", context);
@@ -236,7 +281,11 @@ test("indexIfMissing skips buildIndex when SQLite metadata exists", async () => 
       docsDir,
       docsPaths: [docsDir],
       embeddingsUrl: "http://127.0.0.1:8765",
-      semanticEnabled: false
+      semanticEnabled: false,
+      dbEnabled: false,
+      dbAllowWrite: false,
+      tinkerEnabled: false,
+      phpBin: "php"
     },
     "project",
     path.join(projectRoot, "missing-root")
@@ -276,7 +325,11 @@ test("indexIfMissing forwards progress events to the reporter", async () => {
       docsDir,
       docsPaths: [docsDir],
       embeddingsUrl: "http://127.0.0.1:8765",
-      semanticEnabled: false
+      semanticEnabled: false,
+      dbEnabled: false,
+      dbAllowWrite: false,
+      tinkerEnabled: false,
+      phpBin: "php"
     },
     "project",
     projectRoot,
@@ -336,7 +389,11 @@ test("writeAgentGuidance includes authority rule and descriptive labels", async 
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const results = await writeAgentGuidance("claude-code", context);
@@ -377,7 +434,11 @@ test("writeAgentGuidance writes idempotent Claude Code hooks that load bitrix-mc
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("claude-code", context);
@@ -411,7 +472,11 @@ test("writeAgentGuidance writes Gemini CLI BeforeAgent hooks without a ToolSearc
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("gemini-cli", context);
@@ -438,7 +503,11 @@ test("writeAgentGuidance writes Cursor sessionStart hooks with additional_contex
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("cursor", context);
@@ -462,7 +531,11 @@ test("writeAgentGuidance writes Codex SessionStart hooks in .codex/hooks.json", 
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("codex", context);
@@ -485,7 +558,11 @@ test("writeAgentGuidance writes Copilot hooks in .github/hooks", async () => {
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   await writeAgentGuidance("vscode", context);
@@ -505,7 +582,11 @@ test("writeAgentGuidance writes an executable Cline UserPromptSubmit hook script
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const results = await writeAgentGuidance("cline", context);
@@ -527,7 +608,11 @@ test("writeAgentGuidance installs the skill into .claude/skills for Claude agent
     dataDir: path.join(projectRoot, ".bitrix-mcp"),
     docsDir: path.join(projectRoot, "docs"),
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const results = await writeAgentGuidance("claude-code", context);

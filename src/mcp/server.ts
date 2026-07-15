@@ -800,6 +800,62 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     );
   }
 
+  if (paths.dbEnabled) {
+    server.tool(
+      "bitrix_db_connections",
+      "List Bitrix database connections parsed from bitrix/.settings.php. Passwords are redacted (only hasPassword is reported). Requires BITRIX_MCP_DB_ENABLED=1.",
+      {},
+      async () => runWorkerTask("bitrix_db_connections", { name: "dbConnections", paths, query: {} })
+    );
+
+    server.tool(
+      "bitrix_db_schema",
+      "Introspect project database tables and columns from information_schema for a connection. Filter by table or prefix to bound output.",
+      {
+        table: z.string().optional().describe("Exact table name to describe."),
+        prefix: z.string().optional().describe("Return only tables whose name starts with this prefix, e.g. b_iblock."),
+        connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\"."),
+        limit: z.number().int().min(1).max(2000).optional().describe("Maximum number of tables to return; default 200.")
+      },
+      async ({ table, prefix, connection, limit }) => runWorkerTask("bitrix_db_schema", { name: "dbSchema", paths, query: { table, prefix, connection, limit } })
+    );
+
+    server.tool(
+      "bitrix_db_query",
+      "Run a read-only SQL query (SELECT/SHOW/EXPLAIN/DESCRIBE/WITH only) against the project database. Results are row-limited.",
+      {
+        sql: z.string().min(1).describe("Read-only SQL statement. Only SELECT/SHOW/EXPLAIN/DESCRIBE/WITH are permitted."),
+        connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\"."),
+        limit: z.number().int().min(1).max(10000).optional().describe("Maximum rows to return; default 500.")
+      },
+      async ({ sql, connection, limit }) => runWorkerTask("bitrix_db_query", { name: "dbQuery", paths, query: { sql, connection, limit } })
+    );
+
+    if (paths.dbAllowWrite) {
+      server.tool(
+        "bitrix_db_execute",
+        "Run a write SQL statement (INSERT/UPDATE/DELETE/...) against the project database. Registered only when BITRIX_MCP_DB_ALLOW_WRITE=1. Use with care on a local dev database.",
+        {
+          sql: z.string().min(1).describe("Write SQL statement to execute."),
+          connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\".")
+        },
+        async ({ sql, connection }) => runWorkerTask("bitrix_db_execute", { name: "dbExecute", paths, query: { sql, connection } })
+      );
+    }
+  }
+
+  if (paths.tinkerEnabled) {
+    server.tool(
+      "bitrix_tinker",
+      "Execute arbitrary PHP with the Bitrix kernel bootstrapped (D7 API, ORM, Loader::includeModule, Option::get, etc.), like Laravel Tinker. Return a value with a top-level `return <expr>;`. DANGEROUS: full code execution and write access on the local dev environment. Requires BITRIX_MCP_TINKER_ENABLED=1.",
+      {
+        code: z.string().min(1).describe("PHP code to run with Bitrix loaded. Use `return <expr>;` to get a serialized value back; echoed output is captured separately. A leading <?php tag is optional."),
+        timeoutMs: z.number().int().min(1000).max(600000).optional().describe("Max execution time in milliseconds; default 30000.")
+      },
+      async ({ code, timeoutMs }) => runWorkerTask("bitrix_tinker", { name: "tinker", paths, query: { code, timeoutMs } })
+    );
+  }
+
   server.resource(
     "bitrix-docs-index",
     "bitrix-docs://index",

@@ -85,6 +85,10 @@ Init/configure options:
   --no-official-docs            Do not clone/pull official Bitrix docs during init docs indexing
   --no-serve                    Do not start stdio server after init (this is the default)
   --serve                       Start the stdio server after init (normally the MCP client starts it)
+  --no-db                       Disable project DB access (read is enabled by default)
+  --db-allow-write              Allow DB writes (INSERT/UPDATE/DELETE) in addition to read access
+  --tinker                      Enable bitrix_tinker (arbitrary PHP execution with the Bitrix kernel) in the generated config, default off
+  --php-bin <path>              PHP CLI binary for bitrix_tinker (auto-detected when omitted; Herd/Laragon/XAMPP/OpenServer/PATH)
   --yes                         Accept defaults for non-interactive init/configure (Cursor)
 
 Agent IDs: cursor, claude-code, jetbrains, vscode, windsurf, cline, roo-code, continue, gemini-cli, codex, kilo-code, generic-json
@@ -127,6 +131,21 @@ function parseInitOptions(argv: string[]): InitOptions {
       options.serve = false;
     } else if (value === "--serve") {
       options.serve = true;
+    } else if (value === "--no-db") {
+      options.db = false;
+    } else if (value === "--db-allow-write") {
+      options.dbAllowWrite = true;
+    } else if (value === "--tinker") {
+      options.tinker = true;
+    } else if (value === "--php-bin") {
+      const next = argv[index + 1];
+      if (!next || next.startsWith("--")) {
+        throw new Error("--php-bin requires a path to the PHP CLI binary.");
+      }
+      options.phpBin = next;
+      index += 1;
+    } else if (value.startsWith("--php-bin=")) {
+      options.phpBin = value.slice("--php-bin=".length);
     } else if (value === "--yes" || value === "-y") {
       options.yes = true;
     }

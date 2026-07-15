@@ -312,6 +312,10 @@ test("buildIndex records PHP parse fallback diagnostics", async () => {
     docsPaths: [],
     embeddingsUrl: "http://127.0.0.1:9",
     semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php",
     officialDocsEnabled: false
   });
   const phpParseCheck = checks.find((check) => check.name === "phpParse");
@@ -498,6 +502,10 @@ test("doctor warns when semantic mode is enabled and embeddings document count d
       docsPaths: [path.join(fixtureRoot, "docs")],
       embeddingsUrl: `http://127.0.0.1:${address.port}`,
       semanticEnabled: true,
+      dbEnabled: false,
+      dbAllowWrite: false,
+      tinkerEnabled: false,
+      phpBin: "php",
       officialDocsEnabled: false
     });
 
@@ -536,6 +544,10 @@ test("doctor skips embeddings health check when semantic mode is disabled", asyn
       docsPaths: [path.join(fixtureRoot, "docs")],
       embeddingsUrl: `http://127.0.0.1:${address.port}`,
       semanticEnabled: false,
+      dbEnabled: false,
+      dbAllowWrite: false,
+      tinkerEnabled: false,
+      phpBin: "php",
       officialDocsEnabled: false
     });
 

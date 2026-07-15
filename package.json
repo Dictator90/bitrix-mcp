@@ -1,6 +1,6 @@
 {
   "name": "@mb4it/bitrix-mcp",
-  "version": "0.4.8",
+  "version": "0.6.0",
   "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
   "type": "module",
   "bin": {
@@ -29,6 +29,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "fast-glob": "^3.3.3",
     "ignore": "^7.0.5",
+    "mysql2": "^3.11.0",
     "php-parser": "^3.5.1",
     "typescript": "^5.8.3",
     "zod": "^3.25.76"

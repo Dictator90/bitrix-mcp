@@ -12,6 +12,10 @@ export interface RuntimeConfigSummary {
   embeddingsUrl: string;
   semanticEnabled: boolean;
   officialDocsEnabled?: boolean;
+  dbEnabled: boolean;
+  dbAllowWrite: boolean;
+  tinkerEnabled: boolean;
+  phpBin: string;
 }
 
 export interface McpConfigFileStatus {
@@ -48,7 +52,11 @@ export function summarizeRuntimePaths(paths: RuntimePaths): RuntimeConfigSummary
     bitrixRoot: paths.bitrixRoot,
     embeddingsUrl: paths.embeddingsUrl,
     semanticEnabled: paths.semanticEnabled,
-    officialDocsEnabled: paths.officialDocsEnabled
+    officialDocsEnabled: paths.officialDocsEnabled,
+    dbEnabled: paths.dbEnabled,
+    dbAllowWrite: paths.dbAllowWrite,
+    tinkerEnabled: paths.tinkerEnabled,
+    phpBin: paths.phpBin
   };
 }
 
@@ -91,7 +99,11 @@ export function formatConfigDiagnostics(diagnostics: ConfigDiagnostics): string 
     `  bitrixRoot: ${runtime.bitrixRoot ?? "(not detected)"}`,
     `  embeddingsUrl: ${runtime.embeddingsUrl}`,
     `  semanticEnabled: ${runtime.semanticEnabled}`,
-    `  officialDocsEnabled: ${runtime.officialDocsEnabled}`
+    `  officialDocsEnabled: ${runtime.officialDocsEnabled}`,
+    `  dbEnabled: ${runtime.dbEnabled}`,
+    `  dbAllowWrite: ${runtime.dbAllowWrite}`,
+    `  tinkerEnabled: ${runtime.tinkerEnabled}`,
+    `  phpBin: ${runtime.phpBin}`
   ];
   const configLines = diagnostics.mcpConfigFiles.map((entry) => {
     const status = entry.exists ? "present" : "missing";

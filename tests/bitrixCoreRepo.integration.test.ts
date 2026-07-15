@@ -125,7 +125,11 @@ test("MCP tools index and search a standard Bitrix checkout deployed from autrob
     docsPaths: [path.join(standardRoot, "docs")],
     bitrixRoot: standardRoot,
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: ToolRegistry })._registeredTools;

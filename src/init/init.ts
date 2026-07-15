@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { stdin as input, stderr as output } from "node:process";
+import fg from "fast-glob";
 import { sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, DEFAULT_BITRIX_PATTERNS } from "../indexer/indexer.js";
 import { hasIndexMetadata } from "../indexer/sqliteStore.js";
@@ -52,6 +55,10 @@ export interface InitContext {
   bitrixRoot?: string;
   embeddingsUrl: string;
   semanticEnabled: boolean;
+  dbEnabled: boolean;
+  dbAllowWrite: boolean;
+  tinkerEnabled: boolean;
+  phpBin: string;
 }
 
 export interface WrittenConfig {
@@ -97,6 +104,8 @@ If a Bitrix MCP tool returns a successful, non-empty result, use it as the prima
 3. **Search**: Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, or \`bitrix_docs_search\` to find symbols, handlers, or documentation.
 4. **Inspection**: Use \`bitrix_read_symbol_context\` or \`bitrix_read_file_context\` after a search returns a file and line number.
 5. **Direct search**: Use manual file search/grep only as a fallback when MCP tools are insufficient or the index is stale.
+6. **Live DB (optional)**: When \`BITRIX_MCP_DB_ENABLED=1\`, after static search you can inspect real data via \`bitrix_db_connections\` → \`bitrix_db_schema\` → \`bitrix_db_query\` (read-only; use \`bitrix_db_execute\` for writes only when \`BITRIX_MCP_DB_ALLOW_WRITE=1\`).
+7. **Live PHP (optional, local dev only)**: When \`BITRIX_MCP_TINKER_ENABLED=1\`, you can run arbitrary PHP against the loaded Bitrix kernel via \`bitrix_tinker\` (return a value with \`return <expr>;\`) — powerful for runtime checks, but it executes real code and can write to the local dev machine.
 
 ## Stale Indexes
 
@@ -114,7 +123,7 @@ If MCP returns no result for something that should exist:
 const BITRIX_MCP_RULES = `# Bitrix MCP rules
 
 ## Authority Rule
-Treat \`bitrix-mcp\` tool results as the primary source of truth for Bitrix Framework and project indexed data. Do not manually scan files if MCP returned a successful result unless it is empty, stale, or manual search was explicitly requested.
+Treat \`bitrix-mcp\` tool results as the primary source of truth for Bitrix Framework and project indexed data. Do not manually scan files if MCP returned a successful result unless it is empty, stale, or manual search was explicitly requested. When DB access is enabled, real project data comes from \`bitrix_db_*\` tools rather than guesses. When tinker is enabled, \`bitrix_tinker\` can execute PHP with the Bitrix kernel loaded for runtime checks.
 
 ## Recommended Workflow
 1. Call \`bitrix_index_status\` and \`bitrix_project_overview\` first.
@@ -516,7 +525,11 @@ export function envConfig(context: InitContext): Record<string, string> {
     ...(context.bitrixRoot ? { BITRIX_ROOT: context.bitrixRoot } : {}),
     BITRIX_MCP_EMBEDDINGS_URL: context.embeddingsUrl,
     BITRIX_MCP_SEMANTIC_ENABLED: context.semanticEnabled ? "1" : "0",
-    BITRIX_MCP_OFFICIAL_DOCS_ENABLED: "1"
+    BITRIX_MCP_OFFICIAL_DOCS_ENABLED: "1",
+    BITRIX_MCP_DB_ENABLED: context.dbEnabled ? "1" : "0",
+    BITRIX_MCP_DB_ALLOW_WRITE: context.dbAllowWrite ? "1" : "0",
+    BITRIX_MCP_TINKER_ENABLED: context.tinkerEnabled ? "1" : "0",
+    ...(context.tinkerEnabled ? { BITRIX_MCP_PHP_BIN: context.phpBin } : {})
   };
 }
 
@@ -725,6 +738,106 @@ async function askAgents(): Promise<{ agents: Agent[]; rl: readline.Interface }>
   return { agents, rl };
 }
 
+/**
+ * Interactive prompt for project DB access: read access defaults to enabled,
+ * write access defaults to disabled. Mirrors `askAgents`' readline usage and
+ * reuses the caller's `rl` instance instead of opening a second one.
+ */
+async function askDbAccess(rl: readline.Interface): Promise<{ dbEnabled: boolean; dbAllowWrite: boolean }> {
+  const enableAnswer = (await rl.question("Включить доступ к БД проекта (чтение данных из bitrix/.settings.php)? [Y/n]: ")).trim().toLowerCase();
+  const dbEnabled = enableAnswer === "" || ["y", "yes", "да", "д"].includes(enableAnswer);
+  if (!dbEnabled) {
+    return { dbEnabled: false, dbAllowWrite: false };
+  }
+  const writeAnswer = (await rl.question("Разрешить запись в БД (INSERT/UPDATE/DELETE)? [y/N]: ")).trim().toLowerCase();
+  const dbAllowWrite = ["y", "yes", "да", "д"].includes(writeAnswer);
+  return { dbEnabled, dbAllowWrite };
+}
+
+/**
+ * Interactive prompt for `bitrix_tinker` (arbitrary PHP execution with the
+ * Bitrix kernel loaded): defaults to disabled, reusing the caller's `rl`.
+ */
+async function askTinker(rl: readline.Interface): Promise<boolean> {
+  const answer = (await rl.question("Включить bitrix_tinker — выполнение произвольного PHP с ядром Bitrix? ОПАСНО: полный доступ к коду и записи. [y/N]: ")).trim().toLowerCase();
+  return ["y", "yes", "да", "д"].includes(answer);
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Resolves a command name to an absolute path via the platform PATH lookup
+ * (`where` on Windows, `which` elsewhere). Returns undefined when not found.
+ */
+async function resolveOnPath(command: string): Promise<string | undefined> {
+  const finder = process.platform === "win32" ? "where" : "which";
+  try {
+    const { stdout } = await execFileAsync(finder, [command]);
+    return stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Returns the first existing path for a candidate, expanding glob patterns used
+ * for versioned install directories and preferring the highest-sorted match.
+ */
+async function firstExistingPath(candidate: string): Promise<string | undefined> {
+  if (candidate.includes("*")) {
+    const matches = await fg(candidate, { onlyFiles: true, caseSensitiveMatch: false, suppressErrors: true });
+    return matches.length > 0 ? matches.sort().at(-1) : undefined;
+  }
+  return (await pathExists(candidate)) ? candidate : undefined;
+}
+
+/**
+ * Detects a PHP CLI binary for `bitrix_tinker`. Honors an explicit
+ * BITRIX_MCP_PHP_BIN, then the PATH, then common local dev stacks (Herd,
+ * Laragon, XAMPP, OpenServer). Falls back to the bare `php` command.
+ */
+async function detectPhpBin(): Promise<string> {
+  const fromEnv = process.env.BITRIX_MCP_PHP_BIN?.trim();
+  if (fromEnv) return fromEnv;
+
+  const pathCandidates = process.platform === "win32" ? ["php.bat", "php.cmd", "php.exe", "php"] : ["php"];
+  for (const candidate of pathCandidates) {
+    const resolved = await resolveOnPath(candidate);
+    if (resolved) return resolved;
+  }
+
+  const home = os.homedir().replace(/\\/gu, "/");
+  const knownLocations = process.platform === "win32"
+    ? [
+        `${home}/.config/herd/bin/php.bat`,
+        "C:/laragon/bin/php/*/php.exe",
+        "C:/xampp/php/php.exe",
+        "C:/OSPanel/modules/PHP/*/php.exe",
+        "C:/OpenServer/modules/php/*/php.exe"
+      ]
+    : [
+        `${home}/Library/Application Support/Herd/bin/php`,
+        "/opt/homebrew/bin/php",
+        "/usr/local/bin/php",
+        "/usr/bin/php"
+      ];
+  for (const location of knownLocations) {
+    const hit = await firstExistingPath(location);
+    if (hit) return hit;
+  }
+
+  return "php";
+}
+
+/**
+ * Interactive confirmation of the PHP CLI path used by `bitrix_tinker`,
+ * offering the detected binary as the default.
+ */
+async function askPhpBin(rl: readline.Interface, detected: string): Promise<string> {
+  const answer = (await rl.question(`Путь к PHP CLI для bitrix_tinker [${detected}]: `)).trim();
+  return answer || detected;
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -768,6 +881,10 @@ export interface InitOptions {
   docs?: boolean;
   officialDocs?: boolean;
   serve?: boolean;
+  db?: boolean;
+  dbAllowWrite?: boolean;
+  tinker?: boolean;
+  phpBin?: string;
 }
 
 export interface InitDependencies {
@@ -783,6 +900,10 @@ export async function createInitContext(projectRoot = process.cwd()): Promise<In
   const docsDir = path.join(projectRoot, "docs");
   const embeddingsUrl = process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
   const semanticEnabled = isTruthyEnv(process.env.BITRIX_MCP_SEMANTIC_ENABLED);
+  const dbEnabled = process.env.BITRIX_MCP_DB_ENABLED === undefined ? true : isTruthyEnv(process.env.BITRIX_MCP_DB_ENABLED);
+  const dbAllowWrite = isTruthyEnv(process.env.BITRIX_MCP_DB_ALLOW_WRITE);
+  const tinkerEnabled = isTruthyEnv(process.env.BITRIX_MCP_TINKER_ENABLED);
+  const phpBin = await detectPhpBin();
   const bitrixRoot = (await pathExists(path.join(projectRoot, "bitrix"))) ? projectRoot : undefined;
 
   process.env.BITRIX_MCP_DATA_DIR = dataDir;
@@ -793,7 +914,7 @@ export async function createInitContext(projectRoot = process.cwd()): Promise<In
   }
 
   await fs.mkdir(dataDir, { recursive: true });
-  return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled };
+  return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled, dbEnabled, dbAllowWrite, tinkerEnabled, phpBin };
 }
 
 function runtimePathsFromContext(context: InitContext, officialDocsEnabled: boolean): RuntimePaths {
@@ -805,7 +926,11 @@ function runtimePathsFromContext(context: InitContext, officialDocsEnabled: bool
     bitrixRoot: context.bitrixRoot,
     embeddingsUrl: context.embeddingsUrl,
     semanticEnabled: context.semanticEnabled,
-    officialDocsEnabled
+    officialDocsEnabled,
+    dbEnabled: context.dbEnabled,
+    dbAllowWrite: context.dbAllowWrite,
+    tinkerEnabled: context.tinkerEnabled,
+    phpBin: context.phpBin
   };
 }
 
@@ -820,6 +945,35 @@ async function resolveAgents(options: InitOptions): Promise<{ agents: Agent[]; r
     return { agents: ["cursor"] };
   }
   return askAgents();
+}
+
+/** Whether init/configure runs interactively, using the same signal as `resolveAgents`. */
+function isInteractiveInit(options: InitOptions): boolean {
+  return !options.yes && !options.allAgents && !options.agents?.length;
+}
+
+/**
+ * Resolves project DB access settings: prompts interactively (reusing the
+ * shared `rl`) when running interactively, otherwise derives the answer from
+ * `InitOptions` (`--no-db` / `--db-allow-write`) without prompting.
+ */
+async function resolveDbAccess(options: InitOptions, rl?: readline.Interface): Promise<{ dbEnabled: boolean; dbAllowWrite: boolean }> {
+  if (isInteractiveInit(options) && rl) {
+    return askDbAccess(rl);
+  }
+  return { dbEnabled: options.db !== false, dbAllowWrite: options.dbAllowWrite === true };
+}
+
+/**
+ * Resolves `bitrix_tinker` access: prompts interactively (reusing the shared
+ * `rl`) when running interactively, otherwise derives the answer from
+ * `InitOptions` (`--tinker`) without prompting. Defaults to disabled.
+ */
+async function resolveTinkerAccess(options: InitOptions, rl?: readline.Interface): Promise<boolean> {
+  if (isInteractiveInit(options) && rl) {
+    return askTinker(rl);
+  }
+  return options.tinker === true;
 }
 
 export function defaultShouldServe(options: InitOptions): boolean {
@@ -923,16 +1077,30 @@ export async function serve(paths: RuntimePaths, deps: InitDependencies = {}): P
 export async function initAndServe(options: InitOptions = {}, deps: InitDependencies = {}): Promise<void> {
   const context = await createInitContext();
   const includeOfficialDocs = options.officialDocs ?? true;
-  const paths = runtimePathsFromContext(context, includeOfficialDocs);
 
   const { agents, rl } = await resolveAgents(options);
   try {
+    const dbAccess = await resolveDbAccess(options, rl);
+    context.dbEnabled = dbAccess.dbEnabled;
+    context.dbAllowWrite = dbAccess.dbAllowWrite;
+
+    context.tinkerEnabled = await resolveTinkerAccess(options, rl);
+    if (context.tinkerEnabled) {
+      if (options.phpBin) {
+        context.phpBin = options.phpBin;
+      } else if (isInteractiveInit(options) && rl) {
+        context.phpBin = await askPhpBin(rl, context.phpBin);
+      }
+    }
+
     const configResults = await writeConfigs(agents, context, rl);
     const guidanceResults = await writeGuidance(agents, context);
     printConfigureResults(configResults, guidanceResults);
   } finally {
     rl?.close();
   }
+
+  const paths = runtimePathsFromContext(context, includeOfficialDocs);
 
   if (options.index ?? true) {
     const reporter = createProgressReporter({ stderr: process.stderr, isTty: Boolean(process.stderr.isTTY), isCi: detectCi() });

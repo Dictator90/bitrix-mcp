@@ -9,8 +9,9 @@ Recommended AI workflow:
 - Bitrix events: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
 - ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
 - Components: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.
+- Live data (when `BITRIX_MCP_DB_ENABLED=1`): `bitrix_iblock_usage_search` / `bitrix_orm_search` in code → `bitrix_db_connections` → `bitrix_db_schema` → `bitrix_db_query` to inspect real rows.
 
-Implemented tool groups: index/status, project overview, LiveAPI search, event search, module usage search, agents, mail events, components, ORM, IBlock/Highloadblock/options, relations, graph neighbors/traverse, impact radius, detect changes, autoload, docs search, docs for symbol / API usage explanation, file/symbol context, inheritance search, and CLI benchmarks.
+Implemented tool groups: index/status, project overview, LiveAPI search, event search, module usage search, agents, mail events, components, ORM, IBlock/Highloadblock/options, relations, graph neighbors/traverse, impact radius, detect changes, autoload, docs search, docs for symbol / API usage explanation, file/symbol context, inheritance search, live project database access (connections, schema, query, execute), `bitrix_tinker` runtime PHP execution, and CLI benchmarks.
 
 ## Tool results authority
 
@@ -273,3 +274,43 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Recommended prompt: "Use Bitrix MCP to find autoload mapping for App\\."
 - Use when: debugging class loading or package dependencies.
 - Limitations: reflects Composer/bootstrap files present during indexing.
+
+### `bitrix_db_connections`
+- Purpose: list Bitrix DB connections parsed from `bitrix/.settings.php` (passwords redacted).
+- Parameters: none.
+- Example response: `{ "connections": [{ "name": "default", "host": "localhost", "database": "sitemanager", "login": "root", "hasPassword": true }], "source": ".../bitrix/.settings.php" }`.
+- Recommended prompt: "Use Bitrix MCP to list the project database connections."
+- Use when: before running a DB query, to confirm the target connection.
+- Limitations: requires `BITRIX_MCP_DB_ENABLED=1`; never returns passwords.
+
+### `bitrix_db_schema`
+- Purpose: introspect tables and columns from `information_schema` for a connection.
+- Parameters: `table`, `prefix`, `connection`, `limit`.
+- Example response: `{ "database": "sitemanager", "tables": [{ "name": "b_iblock", "columns": [{ "name": "ID", "type": "int" }] }] }`.
+- Recommended prompt: "Use Bitrix MCP to show the schema of tables starting with b_iblock."
+- Use when: exploring real table structure to write accurate queries.
+- Limitations: requires `BITRIX_MCP_DB_ENABLED=1`; filter by `prefix`/`table` to avoid large output.
+
+### `bitrix_db_query`
+- Purpose: run a read-only SQL query against the project database.
+- Parameters: `sql` (required), `connection`, `limit`.
+- Example response: `{ "columns": ["ID", "NAME"], "rows": [{ "ID": 1, "NAME": "Catalog" }], "rowCount": 1, "truncated": false }`.
+- Recommended prompt: "Use Bitrix MCP to query the first 5 iblocks."
+- Use when: verifying real project data alongside static code search.
+- Limitations: requires `BITRIX_MCP_DB_ENABLED=1`; only `SELECT/SHOW/EXPLAIN/DESCRIBE/WITH`; results are row-limited.
+
+### `bitrix_db_execute`
+- Purpose: run a write SQL statement (INSERT/UPDATE/DELETE) against the project database.
+- Parameters: `sql` (required), `connection`.
+- Example response: `{ "affectedRows": 1 }`.
+- Recommended prompt: "Use Bitrix MCP to update a single test record."
+- Use when: intentional data changes on a local dev database.
+- Limitations: registered only when `BITRIX_MCP_DB_ALLOW_WRITE=1` (which requires `BITRIX_MCP_DB_ENABLED=1`); use with care.
+
+### `bitrix_tinker`
+- Purpose: execute arbitrary PHP with the Bitrix kernel bootstrapped (like Laravel Tinker).
+- Parameters: `code` (required PHP; use `return <expr>;` to return a value), `timeoutMs`.
+- Example response: `{ "ok": true, "returnValue": [{ "ID": 4, "NAME": "Каталог" }], "output": "", "durationMs": 420 }`.
+- Recommended prompt: "Use Bitrix MCP tinker to list the first 3 iblocks via IblockTable::getList."
+- Use when: verifying real runtime behavior, ORM queries, options, or module APIs.
+- Limitations: requires `BITRIX_MCP_TINKER_ENABLED=1`; full code execution and write access — local trusted dev only; a snippet with no explicit `return` reports the PHP `include` value `1`.

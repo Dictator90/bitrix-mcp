@@ -195,3 +195,50 @@ test("resolveRuntimePaths enables official docs indexing by default and supports
     assert.equal(resolveRuntimePaths({ workspaceRoot }).officialDocsEnabled, false);
   });
 });
+
+function withDbEnv<T>(vars: Record<string, string | undefined>, callback: () => T): T {
+  const keys = Object.keys(vars);
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) {
+    if (vars[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = vars[key];
+    }
+  }
+
+  try {
+    return callback();
+  } finally {
+    for (const key of keys) {
+      const value = previous.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+test("resolveRuntimePaths gates DB access behind BITRIX_MCP_DB_ENABLED and BITRIX_MCP_DB_ALLOW_WRITE", () => {
+  const workspaceRoot = tempWorkspace();
+
+  withDbEnv({ BITRIX_MCP_DB_ENABLED: undefined, BITRIX_MCP_DB_ALLOW_WRITE: undefined }, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+    assert.equal(paths.dbEnabled, false);
+    assert.equal(paths.dbAllowWrite, false);
+  });
+
+  withDbEnv({ BITRIX_MCP_DB_ENABLED: "1", BITRIX_MCP_DB_ALLOW_WRITE: undefined }, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+    assert.equal(paths.dbEnabled, true);
+    assert.equal(paths.dbAllowWrite, false);
+  });
+
+  withDbEnv({ BITRIX_MCP_DB_ENABLED: "true", BITRIX_MCP_DB_ALLOW_WRITE: "yes" }, () => {
+    const paths = resolveRuntimePaths({ workspaceRoot });
+    assert.equal(paths.dbEnabled, true);
+    assert.equal(paths.dbAllowWrite, true);
+  });
+});

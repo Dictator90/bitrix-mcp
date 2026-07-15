@@ -34,7 +34,11 @@ async function createGitWorkspace(): Promise<{ workspaceRoot: string; dataDir: s
     docsDir: path.join(workspaceRoot, "docs"),
     docsPaths: [path.join(workspaceRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   return { workspaceRoot, dataDir, paths };
 }
@@ -196,7 +200,11 @@ test("detect changes returns a warning instead of crashing outside git", async (
     docsDir: path.join(workspaceRoot, "docs"),
     docsPaths: [],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const result = await detectChanges(paths);
@@ -208,7 +216,7 @@ test("detect changes returns a warning instead of crashing outside git", async (
 
 test("MCP registers bitrix_detect_changes", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-detect-server-"));
-  const server = createMcpServer({ workspaceRoot: fixtureRoot, dataDir, docsDir: path.join(fixtureRoot, "docs"), docsPaths: [], embeddingsUrl: "http://127.0.0.1:8765", semanticEnabled: false });
+  const server = createMcpServer({ workspaceRoot: fixtureRoot, dataDir, docsDir: path.join(fixtureRoot, "docs"), docsPaths: [], embeddingsUrl: "http://127.0.0.1:8765", semanticEnabled: false, dbEnabled: false, dbAllowWrite: false, tinkerEnabled: false, phpBin: "php" });
   const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
   assert.ok(tools.bitrix_detect_changes);
 });

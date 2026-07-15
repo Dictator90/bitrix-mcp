@@ -11,6 +11,10 @@ export interface RuntimePaths {
   embeddingsUrl: string;
   semanticEnabled: boolean;
   officialDocsEnabled?: boolean;
+  dbEnabled: boolean;
+  dbAllowWrite: boolean;
+  tinkerEnabled: boolean;
+  phpBin: string;
 }
 
 export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): RuntimePaths {
@@ -24,6 +28,10 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
   const embeddingsUrl = overrides.embeddingsUrl ?? process.env.BITRIX_MCP_EMBEDDINGS_URL ?? "http://127.0.0.1:8765";
   const semanticEnabled = overrides.semanticEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_SEMANTIC_ENABLED);
   const officialDocsEnabled = overrides.officialDocsEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_OFFICIAL_DOCS_ENABLED, true);
+  const dbEnabled = overrides.dbEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_DB_ENABLED);
+  const dbAllowWrite = overrides.dbAllowWrite ?? parseBooleanEnv(process.env.BITRIX_MCP_DB_ALLOW_WRITE);
+  const tinkerEnabled = overrides.tinkerEnabled ?? parseBooleanEnv(process.env.BITRIX_MCP_TINKER_ENABLED);
+  const phpBin = overrides.phpBin ?? process.env.BITRIX_MCP_PHP_BIN ?? "php";
 
   return {
     workspaceRoot,
@@ -33,7 +41,11 @@ export function resolveRuntimePaths(overrides: Partial<RuntimePaths> = {}): Runt
     bitrixRoot: bitrixRoot ? resolveBitrixProjectRoot(bitrixRoot) : undefined,
     embeddingsUrl,
     semanticEnabled,
-    officialDocsEnabled
+    officialDocsEnabled,
+    dbEnabled,
+    dbAllowWrite,
+    tinkerEnabled,
+    phpBin
   };
 }
 

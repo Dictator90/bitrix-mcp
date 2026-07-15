@@ -13,6 +13,10 @@
 | `BITRIX_MCP_EMBEDDINGS_URL` | Python embeddings service URL (default `http://127.0.0.1:8765`). |
 | `BITRIX_MCP_SEMANTIC_ENABLED` | Enable the optional `bitrix_semantic_docs_search` tool (`1`/`true`/`yes`/`on`). Off by default. |
 | `BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE` | Allow MCP indexing of paths outside the workspace when set to `1`. |
+| `BITRIX_MCP_DB_ENABLED` | Enable live project DB access tools (`bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`). Reads credentials from `bitrix/.settings.php`. Off by default. |
+| `BITRIX_MCP_DB_ALLOW_WRITE` | Additionally register `bitrix_db_execute` for write SQL (INSERT/UPDATE/DELETE). Requires `BITRIX_MCP_DB_ENABLED`. Off by default. |
+| `BITRIX_MCP_TINKER_ENABLED` | Enable the `bitrix_tinker` tool (runs arbitrary PHP with the Bitrix kernel loaded). Off by default. Full code execution — local trusted dev only. |
+| `BITRIX_MCP_PHP_BIN` | Path to the PHP CLI binary used by `bitrix_tinker`. `init` auto-detects it (PATH, Herd, Laragon, XAMPP, OpenServer) and writes it into the config only when tinker is enabled; falls back to `php`. Should match the site's PHP version/extensions. |
 
 ## `bitrix-mcp init`
 
@@ -54,6 +58,10 @@ Claude Desktop reads the project `.mcp.json`, so use `claude-code` for it.
 - `--yes` / `-y` — accept the default non-interactive choice (`cursor`).
 - `--no-index` — skip code indexing during `init`.
 - `--no-docs` — skip documentation indexing during `init`.
+- `--no-db` — disable live project DB access in the generated config (default: enabled).
+- `--db-allow-write` — allow write SQL (`bitrix_db_execute`) in the generated config (default: read-only).
+- `--tinker` — enable the `bitrix_tinker` tool (arbitrary PHP execution) in the generated config (default: disabled).
+- `--php-bin <path>` — PHP CLI binary for `bitrix_tinker` (auto-detected when omitted). When `--tinker` is enabled, `init` detects PHP from the PATH and common local stacks (Herd/Laragon/XAMPP/OpenServer) and, in interactive mode, lets you confirm or override the detected path.
 - `--no-official-docs` — index only local/registered docs (don't clone the official repo).
 - `--serve` — start the stdio server after init (default: don't).
 - `--no-serve` — explicit no-op for the default behavior.
@@ -77,7 +85,10 @@ For a project at `/var/www/site`, `init` writes a per-project config like this (
         "BITRIX_MCP_DOCS_DIR": "/var/www/site/docs",
         "BITRIX_ROOT": "/var/www/site",
         "BITRIX_MCP_EMBEDDINGS_URL": "http://127.0.0.1:8765",
-        "BITRIX_MCP_SEMANTIC_ENABLED": "0"
+        "BITRIX_MCP_SEMANTIC_ENABLED": "0",
+        "BITRIX_MCP_DB_ENABLED": "1",
+        "BITRIX_MCP_DB_ALLOW_WRITE": "0",
+        "BITRIX_MCP_TINKER_ENABLED": "0"
       }
     }
   }
@@ -86,7 +97,7 @@ For a project at `/var/www/site`, `init` writes a per-project config like this (
 
 ## Troubleshooting
 
-Use `bitrix-mcp config` when an MCP client starts the server from an unexpected directory, writes indexes to an unexpected location, or can't find docs/Bitrix sources. It prints the resolved `workspaceRoot`, `dataDir`, `sqlitePath`, `docsPaths`, `bitrixRoot`, `embeddingsUrl`, `semanticEnabled`, and `officialDocsEnabled`, plus which client config files are present.
+Use `bitrix-mcp config` when an MCP client starts the server from an unexpected directory, writes indexes to an unexpected location, or can't find docs/Bitrix sources. It prints the resolved `workspaceRoot`, `dataDir`, `sqlitePath`, `docsPaths`, `bitrixRoot`, `embeddingsUrl`, `semanticEnabled`, `officialDocsEnabled`, `dbEnabled`, `dbAllowWrite`, `tinkerEnabled`, and `phpBin`, plus which client config files are present.
 
 ```bash
 bitrix-mcp config            # or --json

@@ -9,6 +9,9 @@ import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type AutoloadSearchFormatOptions, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { readBitrixConnections, redactConnection, resolveConnection } from "../liveapi/settingsPhpParser.js";
+import { runQuery, getSchema } from "../db/mysqlClient.js";
+import { runTinker } from "../php/tinker.js";
 
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
@@ -37,7 +40,12 @@ type WorkerTask =
   | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions }
   | { name: "graphNeighbors"; paths: RuntimePaths; query: { nodeType: string; nodeName: string } & GraphNeighborsOptions }
   | { name: "graphTraverse"; paths: RuntimePaths; query: { startType: string; startName: string } & GraphTraverseOptions }
-  | { name: "impactRadius"; paths: RuntimePaths; query: ImpactRadiusOptions };
+  | { name: "impactRadius"; paths: RuntimePaths; query: ImpactRadiusOptions }
+  | { name: "dbConnections"; paths: RuntimePaths; query: Record<string, never> }
+  | { name: "dbSchema"; paths: RuntimePaths; query: { connection?: string; table?: string; prefix?: string; limit?: number } }
+  | { name: "dbQuery"; paths: RuntimePaths; query: { sql: string; connection?: string; limit?: number } }
+  | { name: "dbExecute"; paths: RuntimePaths; query: { sql: string; connection?: string } }
+  | { name: "tinker"; paths: RuntimePaths; query: { code: string; timeoutMs?: number } };
 
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
@@ -179,6 +187,42 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     }
     case "impactRadius": {
       const result = await getImpactRadiusForPaths(task.paths, task.query);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "dbConnections": {
+      const { connections, source, error } = await readBitrixConnections(task.paths);
+      const result = { connections: connections.map((connection) => redactConnection(connection, source)), source, ...(error ? { error } : {}) };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "dbSchema": {
+      const conn = await resolveConnection(task.paths, task.query.connection);
+      if (!conn) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+      }
+      const schema = await getSchema(conn, { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit });
+      return { content: [{ type: "text", text: JSON.stringify(schema, null, 2) }] };
+    }
+    case "dbQuery": {
+      const conn = await resolveConnection(task.paths, task.query.connection);
+      if (!conn) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+      }
+      const result = await runQuery(conn, task.query.sql, { readOnly: true, rowLimit: task.query.limit });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "dbExecute": {
+      if (!task.paths.dbAllowWrite) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, null, 2) }] };
+      }
+      const conn = await resolveConnection(task.paths, task.query.connection);
+      if (!conn) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+      }
+      const result = await runQuery(conn, task.query.sql, { readOnly: false });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    }
+    case "tinker": {
+      const result = await runTinker(task.paths, task.query.code, { timeoutMs: task.query.timeoutMs });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }

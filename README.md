@@ -127,6 +127,28 @@ BITRIX_MCP_SEMANTIC_ENABLED       # 1 to enable semantic docs search
 
 → All variables, the per-client config table, `init`/`configure` flags, and troubleshooting: **[docs/configuration.md](./docs/configuration.md)**.
 
+## Live database access (opt-in)
+
+Query your project's MySQL database directly via MCP tools — read connection info, explore schema, and run `SELECT` queries. Credentials are parsed from `bitrix/.settings.php`; no separate auth needed.
+
+```bash
+BITRIX_MCP_DB_ENABLED=1         # enable database tools (default off)
+BITRIX_MCP_DB_ALLOW_WRITE=1     # additionally allow INSERT/UPDATE/DELETE (default off)
+```
+
+Tools: `bitrix_db_connections` (list active connections, passwords redacted), `bitrix_db_schema` (tables and columns), `bitrix_db_query` (read-only SQL). Writes are opt-in: `bitrix_db_execute` (INSERT/UPDATE/DELETE) when `BITRIX_MCP_DB_ALLOW_WRITE=1`. Passwords are never returned. Intended for local development only. `init` prompts whether to enable DB access (default yes) and writes (default no); use `--no-db` and `--db-allow-write` to control it non-interactively.
+
+## Runtime PHP execution (opt-in)
+
+Execute arbitrary PHP with the Bitrix kernel fully loaded via the `bitrix_tinker` tool — an MCP analog of Laravel Tinker. Get real runtime behavior, ORM queries, options, and module APIs instead of static analysis.
+
+```bash
+BITRIX_MCP_TINKER_ENABLED=1     # enable the tool (default off)
+BITRIX_MCP_PHP_BIN=php          # path to PHP CLI binary (default php; should match site PHP version)
+```
+
+`bitrix_tinker` runs a PHP CLI subprocess that bootstraps `bitrix/modules/main/include/prolog_before.php`, so the full D7 API, ORM, `Loader::includeModule`, `Option::get`, and all Bitrix runtime context is available. Return a value with `return <expr>;`; echoed output and thrown exceptions are captured structurally. **This is full code execution and write access on the local machine and bypasses the read-only guard of `bitrix_db_query` entirely.** Enable it only on a trusted local development environment — never on shared or production machines. `init` prompts whether to enable it (default no); use `--tinker` to enable it non-interactively.
+
 ## Documentation
 
 - **[CLI reference](./docs/cli.md)** — every command, Bitrix core indexing, flags, progress.

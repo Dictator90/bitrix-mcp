@@ -145,7 +145,7 @@ function addUseAliases(node: PhpNode, context: ParserContext): void {
   }
 }
 
-function literalString(node: unknown, context: ParserContext): string | undefined {
+export function literalString(node: unknown, context: ParserContext): string | undefined {
   if (typeof node === "string") return node;
   if (!isNode(node)) return undefined;
 
@@ -171,7 +171,7 @@ function literalString(node: unknown, context: ParserContext): string | undefine
 
 
 
-function literalValue(node: unknown, context: ParserContext): unknown {
+export function literalValue(node: unknown, context: ParserContext): unknown {
   if (!isNode(node)) return undefined;
   if (node.kind === "string") return typeof node.value === "string" ? node.value : undefined;
   if (node.kind === "number") return numericLiteral(node);
@@ -506,7 +506,7 @@ function maybeOrmUsage(source: string, filePath: string, module: string | undefi
   return undefined;
 }
 
-function numericLiteral(node: unknown): number | undefined {
+export function numericLiteral(node: unknown): number | undefined {
   if (!isNode(node)) return undefined;
   if (node.kind !== "number") return undefined;
   const value = typeof node.value === "number" ? node.value : Number(node.value);
@@ -1076,4 +1076,8 @@ export function parsePhpWithAst(source: string, filePath: string): PhpAstParseRe
 
 export function parsePhpSymbolsWithAst(source: string, filePath: string): SymbolRecord[] {
   return parsePhpWithAst(source, filePath).symbols;
+}
+
+export function parsePhpToAst(source: string, filePath: string): PhpNode {
+  return parser.parseCode(source, filePath) as unknown as PhpNode;
 }

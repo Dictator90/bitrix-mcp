@@ -24,7 +24,11 @@ async function makeProject(): Promise<{ paths: RuntimePaths; root: string }> {
     docsPaths: [],
     bitrixRoot: root,
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   return { paths, root };
 }

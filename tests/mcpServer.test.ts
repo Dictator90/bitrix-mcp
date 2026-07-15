@@ -22,7 +22,11 @@ function runtimePaths(dataDir: string, workspaceRoot = fixtureRoot): RuntimePath
     docsDir: path.join(workspaceRoot, "docs"),
     docsPaths: [path.join(workspaceRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 }
 
@@ -207,7 +211,11 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
     docsDir: path.join(fixtureRoot, "docs"),
     docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   const server = createMcpServer(paths);
   const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
@@ -229,7 +237,11 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
     docsDir: path.join(fixtureRoot, "docs"),
     docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   const server = createMcpServer(paths);
   const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
@@ -379,7 +391,11 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
     docsDir: path.join(fixtureRoot, "docs"),
     docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
@@ -415,7 +431,11 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
     docsDir: path.join(fixtureRoot, "docs"),
     docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
   await addPathDocSource(dataDir, paths.docsDir);
   const server = createMcpServer(paths);
@@ -546,7 +566,11 @@ test("MCP semantic docs search tool is optional", async () => {
     docsDir: path.join(fixtureRoot, "docs"),
     docsPaths: [path.join(fixtureRoot, "docs")],
     embeddingsUrl: "http://127.0.0.1:8765",
-    semanticEnabled: false
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
   };
 
   const disabledServer = createMcpServer(basePaths);

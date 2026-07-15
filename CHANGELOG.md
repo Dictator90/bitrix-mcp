@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **`bitrix_tinker` — run PHP with the Bitrix kernel loaded (opt-in).** A new MCP tool that bootstraps `bitrix/modules/main/include/prolog_before.php` in a PHP CLI subprocess and executes arbitrary PHP with full D7 API, ORM, `Loader::includeModule`, and `Option::get` available — the runtime analog of Laravel Tinker. Return a value with a top-level `return <expr>;`; echoed output, thrown exceptions, and PHP fatal errors are captured structurally. Gated behind `BITRIX_MCP_TINKER_ENABLED=1` (off by default) with `BITRIX_MCP_PHP_BIN` selecting the PHP binary (default `php`; should match the site's PHP version and extensions). This is full code execution and write access on the local machine and bypasses the `bitrix_db_query` read-only guard entirely — intended for a trusted local development environment only. `init` asks whether to enable it (default no); `--tinker` enables it non-interactively. When tinker is enabled, `init` auto-detects the PHP CLI binary (PATH, then Herd/Laragon/XAMPP/OpenServer), lets you confirm or override it interactively or via `--php-bin <path>`, and writes `BITRIX_MCP_PHP_BIN` into the config only for tinker-enabled setups.
+
+## 0.5.0
+
+### Added
+
+- **Live project database access (opt-in).** New MCP tools query the running project's MySQL database, reading connection credentials from `bitrix/.settings.php`: `bitrix_db_connections` (lists connections with passwords redacted), `bitrix_db_schema` (tables/columns via `information_schema`), and `bitrix_db_query` (read-only SQL — only `SELECT`/`SHOW`/`EXPLAIN`/`DESCRIBE`/`WITH`, multi-statement rejected, results row-limited). All are gated behind `BITRIX_MCP_DB_ENABLED=1` and off by default. Writes are a separate opt-in: `BITRIX_MCP_DB_ALLOW_WRITE=1` additionally registers `bitrix_db_execute` for `INSERT`/`UPDATE`/`DELETE`. Passwords are never returned by any tool. Intended for a local development database. `init` now asks whether to enable DB access (default yes) and whether to allow writes (default no); `--no-db` and `--db-allow-write` control it non-interactively.
+
 ## 0.4.8
 
 ### Added
