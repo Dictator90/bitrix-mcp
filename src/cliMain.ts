@@ -9,7 +9,9 @@ import { resolveBitrixIndex, parseModuleSelection, validateBitrixModules, detect
 import { searchModuleUsages } from "./indexer/sqliteStore.js";
 import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
 import { resolveTemplateIndexOptions } from "./indexer/template.js";
-import { configureAgents, initAndServe, parseAgentIds, type InitOptions } from "./init/init.js";
+import { AGENT_CHOICES, configureAgents, initAndServe, parseAgentIds, type Agent, type InitOptions } from "./init/init.js";
+import { runUninstall } from "./init/uninstall.js";
+import { commandHelp, flag, integerOption, listOption, parseCli, stringOption, UsageError, type OptionValues } from "./cli/args.js";
 import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
 import { serveStdio } from "./mcp/server.js";
 import { runBenchmark } from "./benchmark/report.js";
@@ -21,11 +23,14 @@ function usage(): string {
 
 Global options:
   --version, -v                 Print the installed bitrix-mcp version and exit
-  --help, -h                    Show this help and exit
+  --help, -h                    Show this help and exit (bitrix-mcp <command> --help for one command)
+  --debug                       Print the stack trace when a command fails
 
 Commands:
   init [options]                Configure MCP clients and index the project/docs (the MCP client starts the server; use --serve to start it now)
   configure [options]           Configure MCP clients and guidance only (no indexing or server)
+  uninstall [--agent <id>] [--all-agents] [--dry-run]
+                                Remove MCP config entries, hooks, guidance sections, and skills written by init/configure
   config [--json]               Show resolved runtime paths and MCP client config file presence
   serve                         Start MCP server over stdio
   index-all [--force]           Index project, templates, Bitrix modules, and docs (add --install for install assets)
@@ -77,7 +82,14 @@ Init/configure options:
   --db-allow-write              Allow DB writes (INSERT/UPDATE/DELETE) in addition to read access
   --tinker                      Enable bitrix_tinker (arbitrary PHP execution with the Bitrix kernel) in the generated config, default off
   --php-bin <path>              PHP CLI binary for bitrix_tinker (auto-detected when omitted; Herd/Laragon/XAMPP/OpenServer/PATH)
-  --yes                         Accept defaults for non-interactive init/configure (Cursor)
+  --no-hooks                    Do not write agent context-injection hooks (Claude Code, Cursor, Gemini, Codex, Copilot, Cline)
+  --yes, -y                     Accept defaults for non-interactive init/configure (configures Cursor unless --agent is given)
+
+Uninstall options:
+  --agent <id> / --all-agents   Limit removal to these agents (default: all agents)
+  --dry-run                     Print what would change without changing anything
+
+Value options accept both "--name value" and "--name=value". Unknown options are an error (exit code 2).
 
 Agent IDs: cursor, claude-code, jetbrains, vscode, windsurf, cline, roo-code, continue, gemini-cli, codex, kilo-code, generic-json
 
@@ -89,229 +101,120 @@ Environment:
   BITRIX_MCP_SEMANTIC_ENABLED   Enable optional semantic MCP tool (1/true/yes/on)
   BITRIX_MCP_OFFICIAL_DOCS_ENABLED Auto-register/update official Bitrix docs during docs indexing (default on)
   BITRIX_ROOT                   Bitrix project root for LiveAPI indexing
+  BITRIX_MCP_HOME_DIR           Override the home directory used for global client configs (Windsurf, Cline, Codex, Kilo Code)
 `;
 }
 
-function parseInitOptions(argv: string[]): InitOptions {
-  const agentValues: string[] = [];
+function parseInitOptions(values: OptionValues): InitOptions {
   const options: InitOptions = {};
+  if (flag(values, "all-agents")) options.allAgents = true;
+  if (flag(values, "no-index")) options.index = false;
+  if (flag(values, "no-docs")) options.docs = false;
+  if (flag(values, "no-official-docs")) options.officialDocs = false;
+  if (flag(values, "no-serve")) options.serve = false;
+  if (flag(values, "serve")) options.serve = true;
+  if (flag(values, "no-db")) options.db = false;
+  if (flag(values, "db-allow-write")) options.dbAllowWrite = true;
+  if (flag(values, "tinker")) options.tinker = true;
+  if (flag(values, "yes")) options.yes = true;
+  if (flag(values, "no-hooks")) options.hooks = false;
+  const phpBin = stringOption(values, "php-bin");
+  if (phpBin !== undefined) options.phpBin = phpBin;
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--agent") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) {
-        throw new Error("--agent requires an agent id.");
-      }
-      agentValues.push(next);
-      index += 1;
-    } else if (value.startsWith("--agent=")) {
-      agentValues.push(value.slice("--agent=".length));
-    } else if (value === "--all-agents") {
-      options.allAgents = true;
-    } else if (value === "--no-index") {
-      options.index = false;
-    } else if (value === "--no-docs") {
-      options.docs = false;
-    } else if (value === "--no-official-docs") {
-      options.officialDocs = false;
-    } else if (value === "--no-serve") {
-      options.serve = false;
-    } else if (value === "--serve") {
-      options.serve = true;
-    } else if (value === "--no-db") {
-      options.db = false;
-    } else if (value === "--db-allow-write") {
-      options.dbAllowWrite = true;
-    } else if (value === "--tinker") {
-      options.tinker = true;
-    } else if (value === "--php-bin") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) {
-        throw new Error("--php-bin requires a path to the PHP CLI binary.");
-      }
-      options.phpBin = next;
-      index += 1;
-    } else if (value.startsWith("--php-bin=")) {
-      options.phpBin = value.slice("--php-bin=".length);
-    } else if (value === "--yes" || value === "-y") {
-      options.yes = true;
-    }
-  }
-
-  if (agentValues.length > 0) {
-    const agents = parseAgentIds(agentValues);
-    if (agents.length === 0) {
-      throw new Error(`Unknown agent id for --agent: ${agentValues.join(", ")}`);
-    }
-    options.agents = agents;
-  }
-
+  const agents = parseAgentOption(values);
+  if (agents) options.agents = agents;
   return options;
 }
 
-function parseDetectChangesOptions(argv: string[]): DetectChangesOptions {
-  const options: DetectChangesOptions = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--base") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--base requires a git ref.");
-      options.base = next;
-      index += 1;
-    } else if (value.startsWith("--base=")) {
-      options.base = value.slice("--base=".length);
-    } else if (value === "--kind") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--kind requires a file kind.");
-      options.kind = next.split(",").map((item) => item.trim()).filter(Boolean);
-      index += 1;
-    } else if (value.startsWith("--kind=")) {
-      options.kind = value.slice("--kind=".length).split(",").map((item) => item.trim()).filter(Boolean);
-    } else if (value === "--include-source") {
-      options.includeSource = true;
-    } else if (value === "--no-relations") {
-      options.includeRelations = false;
-    } else if (value === "--no-impact") {
-      options.includeImpact = false;
-    } else if (value === "--no-risk") {
-      options.includeRisk = false;
-    } else if (value === "--depth") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
-      options.maxDepth = Number(next);
-      index += 1;
-    } else if (value.startsWith("--depth=")) {
-      options.maxDepth = Number(value.slice("--depth=".length));
-    } else if (value === "--max-files") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--max-files requires a number.");
-      options.maxFiles = Number(next);
-      index += 1;
-    } else if (value.startsWith("--max-files=")) {
-      options.maxFiles = Number(value.slice("--max-files=".length));
-    } else if (value === "--max-items") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--max-items requires a number.");
-      options.maxItems = Number(next);
-      index += 1;
-    } else if (value.startsWith("--max-items=")) {
-      options.maxItems = Number(value.slice("--max-items=".length));
-    } else if (value === "--full") {
-      options.format = "full";
-    }
+function parseAgentOption(values: OptionValues): Agent[] | undefined {
+  const agentValues = listOption(values, "agent");
+  if (agentValues.length === 0) {
+    return undefined;
   }
+  const agents = parseAgentIds(agentValues);
+  const unknown = agentValues.filter((value) => parseAgentIds([value]).length === 0);
+  if (unknown.length > 0) {
+    throw new UsageError(`Unknown agent id for --agent: ${unknown.join(", ")}. Known ids: ${AGENT_CHOICES.map((choice) => choice.id).join(", ")}`);
+  }
+  return agents;
+}
+
+function parseDirection(values: OptionValues): GraphNeighborsOptions["direction"] {
+  const direction = stringOption(values, "direction");
+  if (direction === undefined) return undefined;
+  if (direction !== "out" && direction !== "in" && direction !== "both") {
+    throw new UsageError("--direction must be out, in, or both.");
+  }
+  return direction;
+}
+
+function formatOption(values: OptionValues): { format?: "full" } {
+  return flag(values, "full") ? { format: "full" } : {};
+}
+
+function parseDetectChangesOptions(values: OptionValues): DetectChangesOptions {
+  const options: DetectChangesOptions = { ...formatOption(values) };
+  const base = stringOption(values, "base");
+  if (base !== undefined) options.base = base;
+  if (values.kind !== undefined) options.kind = listOption(values, "kind");
+  if (flag(values, "include-source")) options.includeSource = true;
+  if (flag(values, "no-relations")) options.includeRelations = false;
+  if (flag(values, "no-impact")) options.includeImpact = false;
+  if (flag(values, "no-risk")) options.includeRisk = false;
+  const maxDepth = integerOption(values, "depth", 0);
+  if (maxDepth !== undefined) options.maxDepth = maxDepth;
+  const maxFiles = integerOption(values, "max-files", 1);
+  if (maxFiles !== undefined) options.maxFiles = maxFiles;
+  const maxItems = integerOption(values, "max-items", 1);
+  if (maxItems !== undefined) options.maxItems = maxItems;
   return options;
 }
 
-function parseGraphNeighborsOptions(argv: string[]): GraphNeighborsOptions {
-  const options: GraphNeighborsOptions = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--direction") {
-      const next = argv[index + 1];
-      if (next !== "out" && next !== "in" && next !== "both") throw new Error("--direction must be out, in, or both.");
-      options.direction = next;
-      index += 1;
-    } else if (value.startsWith("--direction=")) {
-      const next = value.slice("--direction=".length);
-      if (next !== "out" && next !== "in" && next !== "both") throw new Error("--direction must be out, in, or both.");
-      options.direction = next;
-    } else if (value === "--relation-type") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--relation-type requires a value.");
-      options.relationType = next;
-      index += 1;
-    } else if (value.startsWith("--relation-type=")) {
-      options.relationType = value.slice("--relation-type=".length);
-    } else if (value === "--depth") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
-      options.depth = Number(next);
-      index += 1;
-    } else if (value.startsWith("--depth=")) {
-      options.depth = Number(value.slice("--depth=".length));
-    } else if (value === "--limit") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--limit requires a number.");
-      options.limit = Number(next);
-      index += 1;
-    } else if (value.startsWith("--limit=")) {
-      options.limit = Number(value.slice("--limit=".length));
-    } else if (value === "--full") {
-      options.format = "full";
-    }
-  }
+function parseGraphNeighborsOptions(values: OptionValues): GraphNeighborsOptions {
+  const options: GraphNeighborsOptions = { ...formatOption(values) };
+  const direction = parseDirection(values);
+  if (direction) options.direction = direction;
+  const relationType = stringOption(values, "relation-type");
+  if (relationType !== undefined) options.relationType = relationType;
+  const depth = integerOption(values, "depth", 0);
+  if (depth !== undefined) options.depth = depth;
+  const limit = integerOption(values, "limit", 1);
+  if (limit !== undefined) options.limit = limit;
   return options;
 }
 
-function parseImpactRadiusOptions(argv: string[], files: string[]): ImpactRadiusOptions {
-  const options: ImpactRadiusOptions = { files: files.length > 0 ? files : undefined };
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value === "--base") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--base requires a git ref.");
-      options.base = next;
-      index += 1;
-    } else if (value.startsWith("--base=")) {
-      options.base = value.slice("--base=".length);
-    } else if (value === "--depth") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--depth requires a number.");
-      options.maxDepth = Number(next);
-      index += 1;
-    } else if (value.startsWith("--depth=")) {
-      options.maxDepth = Number(value.slice("--depth=".length));
-    } else if (value === "--relation-types") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--relation-types requires a comma-separated list.");
-      options.relationTypes = next.split(",").map((item) => item.trim()).filter(Boolean);
-      index += 1;
-    } else if (value.startsWith("--relation-types=")) {
-      options.relationTypes = value.slice("--relation-types=".length).split(",").map((item) => item.trim()).filter(Boolean);
-    } else if (value === "--no-symbols") {
-      options.includeChangedSymbols = false;
-    } else if (value === "--no-risk") {
-      options.includeRisk = false;
-    } else if (value === "--limit") {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) throw new Error("--limit requires a number.");
-      options.limit = Number(next);
-      index += 1;
-    } else if (value.startsWith("--limit=")) {
-      options.limit = Number(value.slice("--limit=".length));
-    } else if (value === "--full") {
-      options.format = "full";
-    }
-  }
+function parseImpactRadiusOptions(values: OptionValues, files: string[]): ImpactRadiusOptions {
+  const options: ImpactRadiusOptions = { files: files.length > 0 ? files : undefined, ...formatOption(values) };
+  const base = stringOption(values, "base");
+  if (base !== undefined) options.base = base;
+  const maxDepth = integerOption(values, "depth", 0);
+  if (maxDepth !== undefined) options.maxDepth = maxDepth;
+  if (values["relation-types"] !== undefined) options.relationTypes = listOption(values, "relation-types");
+  if (flag(values, "no-symbols")) options.includeChangedSymbols = false;
+  if (flag(values, "no-risk")) options.includeRisk = false;
+  const limit = integerOption(values, "limit", 1);
+  if (limit !== undefined) options.limit = limit;
   return options;
 }
 
-function parseProgressOptions(argv: string[]): CreateProgressReporterOptions {
+function parseProgressOptions(values: OptionValues): CreateProgressReporterOptions {
   const options: CreateProgressReporterOptions = {
     stderr: process.stderr,
     isTty: Boolean(process.stderr.isTTY),
     isCi: detectCi()
   };
-  if (argv.includes("--no-progress")) {
+  if (flag(values, "no-progress")) {
     options.progress = false;
-  } else if (argv.includes("--progress")) {
+  } else if (flag(values, "progress")) {
     options.progress = true;
   }
-  if (argv.includes("--compact")) {
+  if (flag(values, "compact")) {
     options.compact = true;
   }
-  if (argv.includes("--json-progress")) {
+  if (flag(values, "json-progress")) {
     options.jsonProgress = true;
   }
   return options;
-}
-
-function flagValue(argv: string[], name: string): string | undefined {
-  const prefix = `${name}=`;
-  const hit = argv.find((value) => value.startsWith(prefix));
-  return hit?.slice(prefix.length);
 }
 
 interface BitrixCliOptions {
@@ -323,16 +226,16 @@ interface BitrixCliOptions {
   noBitrix: boolean;
 }
 
-function parseBitrixOptions(argv: string[]): BitrixCliOptions {
-  const full = argv.includes("--full");
-  const plan = argv.includes("--plan");
-  const noBitrix = argv.includes("--no-bitrix");
-  let includeLang = argv.includes("--include-lang");
-  if (argv.includes("--exclude-lang")) {
+function parseBitrixOptions(values: OptionValues): BitrixCliOptions {
+  const full = flag(values, "full");
+  const plan = flag(values, "plan");
+  const noBitrix = flag(values, "no-bitrix");
+  let includeLang = flag(values, "include-lang");
+  if (flag(values, "exclude-lang")) {
     includeLang = false;
   }
-  let includeInstall = argv.includes("--install");
-  let modules: BitrixModuleSelection = parseModuleSelection(flagValue(argv, "--modules") ?? flagValue(argv, "--bitrix-modules")) ?? "all";
+  let includeInstall = flag(values, "install");
+  let modules: BitrixModuleSelection = parseModuleSelection(stringOption(values, "modules") ?? stringOption(values, "bitrix-modules")) ?? "all";
   if (full) {
     modules = "all";
     includeLang = true;
@@ -365,53 +268,45 @@ async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof 
   ].join("\n"));
 }
 
-function positionalArgs(argv: string[]): string[] {
-  const result: string[] = [];
-  const optionsWithValues = new Set(["--agent", "--base", "--kind", "--max-files", "--max-items", "--direction", "--relation-type", "--depth", "--limit", "--relation-types"]);
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (optionsWithValues.has(value)) {
-      index += 1;
-      continue;
-    }
-    if (value.startsWith("--")) {
-      continue;
-    }
-    result.push(value);
-  }
-  return result;
-}
-
 async function main(argv: string[]): Promise<void> {
-  const force = argv.includes("--force");
-  const embeddings = argv.includes("--embeddings");
-  const positional = positionalArgs(argv).filter((value) => value !== "-y");
-  const [command, arg] = positional;
-  const paths = resolveRuntimePaths();
-
-  if (argv.includes("--version") || argv.includes("-v")) {
+  const parsed = parseCli(argv);
+  if (parsed.kind === "version") {
     console.log(readPackageVersion());
     return;
   }
-
-  if (!command || command === "--help" || command === "-h") {
+  if (parsed.kind === "usage") {
     console.log(usage());
     return;
   }
+  if (parsed.kind === "help") {
+    console.log(commandHelp(parsed.command));
+    return;
+  }
+
+  const { command, values, positionals } = parsed;
+  const [arg] = positionals;
+  const force = flag(values, "force");
+  const embeddings = flag(values, "embeddings");
+  const paths = resolveRuntimePaths();
 
   if (command === "init") {
-    await initAndServe(parseInitOptions(argv.slice(1)));
+    await initAndServe(parseInitOptions(values));
     return;
   }
 
   if (command === "configure") {
-    await configureAgents(parseInitOptions(argv.slice(1)));
+    await configureAgents(parseInitOptions(values));
+    return;
+  }
+
+  if (command === "uninstall") {
+    await runUninstall({ agents: parseAgentOption(values), allAgents: flag(values, "all-agents"), dryRun: flag(values, "dry-run") });
     return;
   }
 
   if (command === "config") {
     const diagnostics = await collectConfigDiagnostics(paths);
-    console.log(argv.includes("--json") ? JSON.stringify(diagnostics, null, 2) : formatConfigDiagnostics(diagnostics));
+    console.log(flag(values, "json") ? JSON.stringify(diagnostics, null, 2) : formatConfigDiagnostics(diagnostics));
     return;
   }
 
@@ -421,9 +316,9 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-all") {
-    const bitrix = parseBitrixOptions(argv);
+    const bitrix = parseBitrixOptions(values);
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
-    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
     const result = await indexAll(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
@@ -439,9 +334,9 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-code") {
-    const bitrix = parseBitrixOptions(argv);
+    const bitrix = parseBitrixOptions(values);
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
-    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
     const result = await indexCode(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
@@ -456,16 +351,16 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-project") {
-    const reporter = createProgressReporter(parseProgressOptions(argv));
-    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
+    const reporter = createProgressReporter(parseProgressOptions(values));
+    const manifest = await buildIndex({ root: arg ?? paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter, includeLang: parseBitrixOptions(values).includeLang });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-template") {
-    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const reporter = createProgressReporter(parseProgressOptions(values));
     const options = resolveTemplateIndexOptions(paths, arg);
-    const manifest = await buildIndex({ ...options, force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
+    const manifest = await buildIndex({ ...options, force, reporter, includeLang: parseBitrixOptions(values).includeLang });
     console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -476,7 +371,7 @@ async function main(argv: string[]): Promise<void> {
       throw new Error("Bitrix root not found. Run from a project containing ./bitrix, pass [root], or set BITRIX_ROOT.");
     }
     const projectRoot = resolveBitrixProjectRoot(root);
-    const bitrix = parseBitrixOptions(argv);
+    const bitrix = parseBitrixOptions(values);
     if (bitrix.full) {
       console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     }
@@ -494,15 +389,15 @@ async function main(argv: string[]): Promise<void> {
       await printBitrixPlan(projectRoot, resolved, bitrix.modules);
       return;
     }
-    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const reporter = createProgressReporter(parseProgressOptions(values));
     const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, force, reporter, includeLang: bitrix.includeLang });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "index-install") {
-    const reporter = createProgressReporter(parseProgressOptions(argv));
-    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter, includeLang: parseBitrixOptions(argv).includeLang });
+    const reporter = createProgressReporter(parseProgressOptions(values));
+    const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter, includeLang: parseBitrixOptions(values).includeLang });
     console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
@@ -529,7 +424,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index-docs") {
-    const reporter = createProgressReporter(parseProgressOptions(argv));
+    const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
     reporter.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
     const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force });
@@ -557,18 +452,17 @@ async function main(argv: string[]): Promise<void> {
 
 
   if (command === "graph-neighbors") {
-    const [, nodeType, nodeName] = positional;
+    const [nodeType, nodeName] = positionals;
     if (!nodeType || !nodeName) {
       throw new Error("graph-neighbors requires <type> <name>.");
     }
-    const result = await getGraphNeighbors(sqlitePath(paths.dataDir), { type: nodeType, name: nodeName }, parseGraphNeighborsOptions(argv.slice(1)));
+    const result = await getGraphNeighbors(sqlitePath(paths.dataDir), { type: nodeType, name: nodeName }, parseGraphNeighborsOptions(values));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "impact-radius") {
-    const files = positional.slice(1);
-    const result = await getImpactRadiusForPaths(paths, parseImpactRadiusOptions(argv.slice(1), files));
+    const result = await getImpactRadiusForPaths(paths, parseImpactRadiusOptions(values, positionals));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -579,8 +473,8 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "detect-changes") {
-    const result = await detectChanges(paths, parseDetectChangesOptions(argv.slice(1)));
-    console.log(argv.includes("--json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
+    const result = await detectChanges(paths, parseDetectChangesOptions(values));
+    console.log(flag(values, "json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
     return;
   }
 
@@ -593,10 +487,10 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "doctor") {
     const checks = await runDoctor(paths);
-    if (argv.includes("--json")) {
+    if (flag(values, "json")) {
       const diagnostics = await collectConfigDiagnostics(paths);
       console.log(JSON.stringify({ ...diagnostics, checks }, null, 2));
-    } else if (argv.includes("--verbose")) {
+    } else if (flag(values, "verbose")) {
       console.log(`${formatDoctor(checks)}\n\n${formatConfigDiagnostics(await collectConfigDiagnostics(paths))}`);
     } else {
       console.log(formatDoctor(checks));
@@ -607,10 +501,23 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  throw new Error(`Unknown command: ${command}\n${usage()}`);
+  throw new UsageError(`Unknown command: ${command}`);
 }
 
-main(process.argv.slice(2)).catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
+const cliArgv = process.argv.slice(2);
+main(cliArgv).catch((error) => {
+  const debug = cliArgv.includes("--debug");
+  if (error instanceof Error) {
+    console.error(debug && error.stack ? error.stack : `Error: ${error.message}`);
+  } else {
+    console.error(`Error: ${String(error)}`);
+  }
+  if (error instanceof UsageError) {
+    if (!error.message.includes("--help")) {
+      console.error("Run \"bitrix-mcp --help\" for usage.");
+    }
+    process.exitCode = 2;
+  } else {
+    process.exitCode = 1;
+  }
 });

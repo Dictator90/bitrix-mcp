@@ -70,6 +70,16 @@ test("index-bitrix --modules indexes only the selected modules and skips lang", 
   assert.ok(paths.some((p) => p === "bitrix/js/main/core.js"), `expected js: ${paths.join(", ")}`);
 });
 
+test("index-bitrix accepts the space-separated --modules form", async () => {
+  const root = await makeBitrixFixture();
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-cli-modules-space-"));
+
+  // Previously "main,iblock" was silently taken as the positional root.
+  const { stdout } = await runCli(["index-bitrix", root, "--plan", "--modules", "main,iblock"], dataDir);
+  assert.match(stdout, /Modules: main, iblock/);
+  assert.ok(stdout.includes(`Root: ${path.join(root, "bitrix")}`), stdout);
+});
+
 test("index-bitrix warns about unknown modules but proceeds when at least one exists", async () => {
   const root = await makeBitrixFixture();
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-cli-unknown-"));
