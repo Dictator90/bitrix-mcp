@@ -226,12 +226,14 @@ const inheritanceRelationSchema = z.enum(["extends", "implements", "uses_trait",
 const changedFileKindSchema = z.enum(["project", "template", "component", "bitrix", "install", "docs", "asset", "unknown"]);
 const changedFileKindFilterSchema = z.union([changedFileKindSchema, z.array(changedFileKindSchema).min(1).max(8)]);
 
-function compactInheritanceRelation(relation: { sourceName: string; targetName: string; relationType: string; targetType: string; file: string; line: number; module?: string; kind?: string; signature?: string }): Record<string, unknown> {
+function compactInheritanceRelation(relation: { sourceName: string; targetName: string; relationType: string; targetType: string; file: string; line: number; module?: string; kind?: string; signature?: string; metadata?: Record<string, unknown> }): Record<string, unknown> {
   return {
     className: relation.sourceName,
     relation: relation.relationType,
     targetType: relation.targetType,
     targetName: relation.targetName,
+    targetKind: relation.metadata?.targetKind,
+    depth: relation.metadata?.depth,
     module: relation.module,
     kind: relation.kind,
     file: relation.file,
@@ -332,18 +334,20 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix_inheritance_search",
     "Find indexed PHP classes that extend a parent class, implement an interface, or use a trait using stored Bitrix relation rows.",
     {
-      target: z.string().min(1).describe("Parent class, interface, or trait name. Fully qualified and short names are both supported where possible."),
+      target: z.string().min(1).describe("Parent class, interface, or trait name. A name with a backslash is matched as an exact FQN; a short name matches the last namespace segment exactly. Case-insensitive."),
       relation: inheritanceRelationSchema.default("any"),
       kind: searchKindSchema.optional().describe("Restrict relation lookup to one kind or an array of kinds: project, template, bitrix, or install."),
       module: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(20),
+      transitive: z.boolean().optional().describe("Also return indirect descendants (subclasses of matching classes), breadth-first and cycle-safe; each result carries depth."),
+      maxDepth: z.number().int().min(1).max(10).optional().describe("Transitive depth; defaults to 5."),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ target, relation, kind, module, limit, format }, extra) => {
+    async ({ target, relation, kind, module, limit, transitive, maxDepth, format }, extra) => {
       return withMcpToolGuard("bitrix_inheritance_search", async () => {
-        const relations = await searchInheritanceRelations(sqlitePath(paths.dataDir), { target, relation, kind, module, limit }) ?? [];
+        const relations = await searchInheritanceRelations(sqlitePath(paths.dataDir), { target, relation, kind, module, limit, transitive, maxDepth }) ?? [];
         const result = {
-          query: { target, relation, kind, module },
+          query: { target, relation, kind, module, transitive, maxDepth },
           count: relations.length,
           results: format === "full" ? relations : relations.map(compactInheritanceRelation)
         };
@@ -622,10 +626,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       relationType: z.string().optional(),
       depth: z.number().int().min(1).max(5).optional(),
       limit: z.number().int().min(1).max(1000).default(100),
+      maxEdgesPerNode: z.number().int().min(1).max(1000).optional().describe("Maximum edges read per node and direction (hub protection); defaults to limit. Capped nodes are listed in truncatedNodes."),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ nodeType, nodeName, direction, relationType, depth, limit, format }, extra) => {
-      return runWorkerTask("bitrix_graph_neighbors", { name: "graphNeighbors", paths, query: { nodeType, nodeName, direction, relationType, depth, limit, format } }, extra);
+    async ({ nodeType, nodeName, direction, relationType, depth, limit, maxEdgesPerNode, format }, extra) => {
+      return runWorkerTask("bitrix_graph_neighbors", { name: "graphNeighbors", paths, query: { nodeType, nodeName, direction, relationType, depth, limit, maxEdgesPerNode, format } }, extra);
     }
   );
 
@@ -639,10 +644,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       maxDepth: z.number().int().min(0).max(8).optional(),
       relationTypes: z.array(z.string().min(1)).max(25).optional(),
       limit: z.number().int().min(1).max(1000).default(100),
+      maxEdgesPerNode: z.number().int().min(1).max(1000).optional().describe("Maximum edges read per node and direction (hub protection); defaults to limit. Capped nodes are listed in truncatedNodes."),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ startType, startName, direction, maxDepth, relationTypes, limit, format }, extra) => {
-      return runWorkerTask("bitrix_graph_traverse", { name: "graphTraverse", paths, query: { startType, startName, direction, maxDepth, relationTypes, limit, format } }, extra);
+    async ({ startType, startName, direction, maxDepth, relationTypes, limit, maxEdgesPerNode, format }, extra) => {
+      return runWorkerTask("bitrix_graph_traverse", { name: "graphTraverse", paths, query: { startType, startName, direction, maxDepth, relationTypes, limit, maxEdgesPerNode, format } }, extra);
     }
   );
 
@@ -657,31 +663,34 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       includeChangedSymbols: z.boolean().optional(),
       includeRisk: z.boolean().optional(),
       limit: z.number().int().min(1).max(1000).default(100),
+      maxEdgesPerNode: z.number().int().min(1).max(1000).optional().describe("Maximum edges read per node and direction (hub protection); defaults to limit. Capped nodes are listed in truncatedNodes."),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format }, extra) => {
-      return runWorkerTask("bitrix_impact_radius", { name: "impactRadius", paths, query: { files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format } }, extra);
+    async ({ files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, maxEdgesPerNode, format }, extra) => {
+      return runWorkerTask("bitrix_impact_radius", { name: "impactRadius", paths, query: { files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, maxEdgesPerNode, format } }, extra);
     }
   );
 
 
   server.tool(
     "bitrix_detect_changes",
-    "Analyze Git-changed Bitrix files against the SQLite index and graph impact, returning changed symbols, events, module usages, agents, mail events, components, ORM/IBlock/HLBlock/options, relations, risk, and recommendations.",
+    "Analyze Git-changed (including untracked and deleted) Bitrix files against the SQLite index and graph impact, returning a symbol-level diff (added/removed/changed symbols), deleted files with their symbols, changed symbols, events, module usages, agents, mail events, components, ORM/IBlock/HLBlock/options, relations, risk, and recommendations.",
     {
-      base: z.string().optional().describe("Git base ref for git diff --name-only <base> --; defaults to HEAD~1."),
+      base: z.string().optional().describe("Git base ref for git diff <base> -- (working tree vs base) plus untracked files; defaults to HEAD~1."),
       kind: changedFileKindFilterSchema.optional().describe("Restrict changed files by detected kind: project, template, component, bitrix, install, docs, asset, or unknown."),
       includeSource: z.boolean().optional().describe("Include compact source signatures when available."),
       includeRelations: z.boolean().optional().describe("Include related relation rows; enabled by default."),
       includeImpact: z.boolean().optional().describe("Include graph impact radius; enabled by default."),
       includeRisk: z.boolean().optional().describe("Include merged file/entity/graph risk; enabled by default."),
+      symbolDiff: z.boolean().optional().describe("Include the symbol-level diff of changed PHP/JS/TS files; enabled by default."),
+      diffBaseline: z.enum(["auto", "index", "git"]).optional().describe("Before state for the symbol diff: index (the SQLite index), git (parse of the file at base), or auto (index when it is older than the working tree, else git; default)."),
       maxDepth: z.number().int().min(0).max(8).optional().describe("Graph impact traversal depth; defaults to 2."),
       maxFiles: z.number().int().min(1).max(1000).optional(),
       maxItems: z.number().int().min(1).max(1000).optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format }, extra) => {
-      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format } }, extra);
+    async ({ base, kind, includeSource, includeRelations, includeImpact, includeRisk, symbolDiff, diffBaseline, maxDepth, maxFiles, maxItems, format }, extra) => {
+      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, includeImpact, includeRisk, symbolDiff, diffBaseline, maxDepth, maxFiles, maxItems, format } }, extra);
     }
   );
 

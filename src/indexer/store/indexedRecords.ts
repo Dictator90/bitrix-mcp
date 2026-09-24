@@ -5,6 +5,7 @@ import type { BitrixRelationRecord, HlblockUsageRecord, IblockUsageRecord, Modul
 import { normalizeSlashes, normalizedFileLookupCandidates, rowToBitrixRelation, rowToHlblockUsage, rowToIblockUsage, rowToModuleUsage, rowToOptionUsage, rowToOrmEntity, rowToOrmUsage, rowToSymbol } from "./rows.js";
 import type { BitrixRelationRow, HlblockUsageRow, IblockUsageRow, ModuleUsageRow, OptionUsageRow, OrmEntityRow, OrmUsageRow, SymbolRow } from "./rows.js";
 import { ensureSqliteStore } from "./schema.js";
+import { normalizeStoredRelation } from "./relations.js";
 
 export interface IndexedRecordsForFiles {
   symbols: SymbolRecord[];
@@ -15,10 +16,20 @@ export interface IndexedRecordsForFiles {
   hlblockUsages: HlblockUsageRecord[];
   optionUsages: OptionUsageRecord[];
   relations: BitrixRelationRecord[];
+  /** Index rows of the matched files (slash-normalized), e.g. to tell whether the index is older than the working tree. */
+  files: IndexedFileInfo[];
+}
+
+export interface IndexedFileInfo {
+  path: string;
+  relativePath: string;
+  size: number;
+  mtimeMs: number;
+  indexedAt: string;
 }
 
 function emptyIndexedRecordsForFiles(): IndexedRecordsForFiles {
-  return { symbols: [], moduleUsages: [], ormEntities: [], ormUsages: [], iblockUsages: [], hlblockUsages: [], optionUsages: [], relations: [] };
+  return { symbols: [], moduleUsages: [], ormEntities: [], ormUsages: [], iblockUsages: [], hlblockUsages: [], optionUsages: [], relations: [], files: [] };
 }
 
 export async function readIndexedRecordsForFiles(dbFile: string, files: string[], options: { includeRelations?: boolean } = {}): Promise<IndexedRecordsForFiles> {
@@ -40,17 +51,18 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
 
     const inputPlaceholders = inputCandidates.map(() => "?").join(", ");
     const matchedFiles = db.prepare(`
-      SELECT path, relative_path
+      SELECT path, relative_path, size, mtime_ms, indexed_at
       FROM files
       WHERE replace(path, char(92), '/') IN (${inputPlaceholders}) OR replace(relative_path, char(92), '/') IN (${inputPlaceholders})
-    `).all(...inputCandidates, ...inputCandidates) as Array<{ path: string; relative_path: string }>;
+    `).all(...inputCandidates, ...inputCandidates) as Array<{ path: string; relative_path: string; size: number; mtime_ms: number; indexed_at: string }>;
     const normalized = Array.from(new Set([
       ...inputCandidates,
       ...matchedFiles.flatMap((file) => [normalizeSlashes(file.path), normalizeSlashes(file.relative_path)])
     ]));
     const placeholders = normalized.map(() => "?").join(", ");
     const symbolRows = db.prepare(`
-      SELECT s.kind, s.type, s.language, s.name, s.module, s.class_name, s.handler_class, s.handler_method, s.handler_function,
+      SELECT s.kind, s.type, s.language, s.name, s.module, s.fully_qualified_name, s.namespace, s.class_name, s.visibility, s.is_static, s.is_abstract, s.is_final,
+             s.return_type, s.extends_name, s.implements_json, s.traits_json, s.handler_class, s.handler_method, s.handler_function,
              s.event_name, s.agent_action, s.api, s.site_id, s.periodic, s.interval, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description, s.component_template, s.params_json
       FROM symbols s
       JOIN files f ON f.id = s.file_id
@@ -124,7 +136,8 @@ export async function readIndexedRecordsForFiles(dbFile: string, files: string[]
       iblockUsages: iblockUsageRows.map(rowToIblockUsage),
       hlblockUsages: hlblockUsageRows.map(rowToHlblockUsage),
       optionUsages: optionUsageRows.map(rowToOptionUsage),
-      relations: relationRows.map(rowToBitrixRelation)
+      relations: relationRows.map((row) => normalizeStoredRelation(rowToBitrixRelation(row))),
+      files: matchedFiles.map((file) => ({ path: normalizeSlashes(file.path), relativePath: normalizeSlashes(file.relative_path), size: Number(file.size), mtimeMs: Number(file.mtime_ms), indexedAt: String(file.indexed_at) }))
     };
   } finally {
     db.close();

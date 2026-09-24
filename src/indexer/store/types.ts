@@ -158,6 +158,10 @@ export interface InheritanceSearchQuery {
   kind?: IndexKind | IndexKind[];
   module?: string;
   limit?: number;
+  /** Follow descendants (subclasses of matching classes) breadth-first; bounded by `maxDepth`. */
+  transitive?: boolean;
+  /** Transitive depth, 1..10 (default 5). Ignored unless `transitive` is true. */
+  maxDepth?: number;
 }
 
 export interface WriteBitrixRelationsOptions {

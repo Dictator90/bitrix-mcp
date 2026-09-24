@@ -132,7 +132,7 @@ test("cli detect-changes --json emits compact change analysis", async () => {
 
   const parsed = JSON.parse(stdout);
   assert.equal(parsed.base, "HEAD~1");
-  assert.deepEqual(parsed.changedFiles, [{ file: "docs/framework/search.md", kind: "docs" }]);
+  assert.deepEqual(parsed.changedFiles, [{ file: "docs/framework/search.md", kind: "docs", status: "modified" }]);
   assert.equal(parsed.summary.files, 1);
   assert.ok(parsed.impact);
 

@@ -161,6 +161,12 @@ function parseDetectChangesOptions(values: OptionValues): DetectChangesOptions {
   if (flag(values, "no-relations")) options.includeRelations = false;
   if (flag(values, "no-impact")) options.includeImpact = false;
   if (flag(values, "no-risk")) options.includeRisk = false;
+  if (flag(values, "no-symbol-diff")) options.symbolDiff = false;
+  const diffBaseline = stringOption(values, "diff-baseline");
+  if (diffBaseline !== undefined) {
+    if (diffBaseline !== "auto" && diffBaseline !== "index" && diffBaseline !== "git") throw new Error("--diff-baseline must be auto, index, or git.");
+    options.diffBaseline = diffBaseline;
+  }
   const maxDepth = integerOption(values, "depth", 0);
   if (maxDepth !== undefined) options.maxDepth = maxDepth;
   const maxFiles = integerOption(values, "max-files", 1);
