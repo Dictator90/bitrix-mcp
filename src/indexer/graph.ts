@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "./database.js";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sqlitePath, type RuntimePaths } from "../config/paths.js";
@@ -211,7 +212,7 @@ async function relationRows(dbFile: string, node: GraphNode, direction: GraphDir
     return [];
   }
   await ensureSqliteStore(dbFile);
-  const db = new DatabaseSync(dbFile, { readOnly: true });
+  const db = openDatabase(dbFile, { readOnly: true });
   try {
     const rows: Array<{ relation: BitrixRelationRecord; direction: "out" | "in" }> = [];
     const relationFilter = relationTypes.length > 0 ? ` AND relation_type IN (${relationTypes.map(() => "?").join(", ")})` : "";

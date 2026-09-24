@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "../indexer/database.js";
 import fg from "fast-glob";
 import { frameworkDocsCheckoutPath, sqlitePath } from "../config/paths.js";
 import { ensureSqliteStore, readExistingDocsBySource, writeDocsToSqlite, type DocIndexChunk } from "../indexer/sqliteStore.js";
@@ -36,10 +37,6 @@ interface ScannedDocResource extends DocResource {
   relativePath: string;
   size: number;
   mtimeMs: number;
-}
-
-function openDatabase(dbFile: string): DatabaseSync {
-  return new DatabaseSync(dbFile);
 }
 
 function nullable(value: string | undefined): string | null {

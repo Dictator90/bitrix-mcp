@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase as openIndexDatabase } from "../indexer/database.js";
+
+const openDatabase = (dbFile: string): DatabaseSync => openIndexDatabase(dbFile, { readOnly: true });
 import type { EventRecord, IndexKind, SearchResult, SymbolRecord } from "../types.js";
 
 export interface LiveApiQuery {
@@ -84,10 +87,6 @@ interface DocRow {
   exact_rank: number;
   prefix_rank: number;
   like_rank: number;
-}
-
-function openDatabase(dbFile: string): DatabaseSync {
-  return new DatabaseSync(dbFile, { readOnly: true });
 }
 
 function escapeLike(value: string): string {

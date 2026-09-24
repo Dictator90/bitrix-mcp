@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "./database.js";
 import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "./template.js";
 import type { BitrixRelationRecord, ComponentParamRecord, IndexFile, IndexKind, IndexManifest, IndexWarning, HlblockUsageRecord, IblockUsageRecord, ModuleUsageRecord, OrmEntityRecord, OrmFieldRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord, AutoloadRecord, AutoloadRecordType } from "../types.js";
 
@@ -359,9 +360,6 @@ function relationFileForStorage(relationFile: string, file: IndexFile): string {
   return normalizedRelationFile === normalizedAbsolutePath ? file.relativePath : normalizedRelationFile;
 }
 
-function openDatabase(dbFile: string): DatabaseSync {
-  return new DatabaseSync(dbFile);
-}
 
 function rowToSymbol(row: SymbolRow): SymbolRecord {
   return {
@@ -768,14 +766,66 @@ function eventRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixR
   return relations;
 }
 
+/**
+ * Schema version stored in `PRAGMA user_version`. Bump it whenever
+ * {@link migrateSchema} gains a step, so existing databases run it once.
+ */
+export const SCHEMA_VERSION = 4;
+
+const migratedDatabases = new Set<string>();
+
+async function databaseIdentity(dbFile: string): Promise<string | undefined> {
+  try {
+    const stat = await fs.stat(dbFile);
+    return `${path.resolve(dbFile)}:${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Creates or migrates the index schema. The DDL runs at most once per database
+ * per process, and only when `PRAGMA user_version` is older than
+ * {@link SCHEMA_VERSION}; otherwise this is a single cheap read, so search
+ * tools never take a write lock (they previously re-ran DDL and a full FTS
+ * resync on every call and failed with "database is locked" during indexing).
+ */
 export async function ensureSqliteStore(dbFile: string): Promise<void> {
+  const identity = await databaseIdentity(dbFile);
+  if (identity && migratedDatabases.has(identity)) return;
+
   await fs.mkdir(path.dirname(dbFile), { recursive: true });
   const db = openDatabase(dbFile);
   try {
-    db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
+    if (schemaVersion(db) < SCHEMA_VERSION) {
+      db.exec("PRAGMA journal_mode = WAL;");
+      db.exec("BEGIN IMMEDIATE;");
+      try {
+        // Another process may have migrated while we waited for the lock.
+        if (schemaVersion(db) < SCHEMA_VERSION) {
+          migrateSchema(db);
+          db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+        }
+        db.exec("COMMIT;");
+      } catch (error) {
+        db.exec("ROLLBACK;");
+        throw error;
+      }
+    }
+  } finally {
+    db.close();
+  }
+  const migratedIdentity = await databaseIdentity(dbFile);
+  if (migratedIdentity) migratedDatabases.add(migratedIdentity);
+}
 
+function schemaVersion(db: DatabaseSync): number {
+  return Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+}
+
+function migrateSchema(db: DatabaseSync): void {
+  {
+    db.exec(`
       CREATE TABLE IF NOT EXISTS files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         kind TEXT NOT NULL,
@@ -1202,9 +1252,6 @@ export async function ensureSqliteStore(dbFile: string): Promise<void> {
       INSERT OR IGNORE INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
       SELECT id, name, module, handler_class, handler_method, handler_function, signature, description FROM events;
     `);
-
-  } finally {
-    db.close();
   }
 }
 
