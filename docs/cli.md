@@ -16,6 +16,7 @@ Run `bitrix-mcp --help` for the built-in summary.
 | --- | --- |
 | `init [options]` | Configure MCP clients + guidance and build initial indexes. The MCP client starts the server; use `--serve` to start it now. See [configuration.md](./configuration.md). |
 | `configure [options]` | Configure MCP clients and guidance only — no indexing, no server. |
+| `uninstall [--agent <id>] [--all-agents] [--dry-run]` | Remove what `init`/`configure` wrote: the `bitrix-mcp` server entry in each client config, managed hooks, managed guidance sections, and installed skills. See [configuration.md](./configuration.md#bitrix-mcp-uninstall). |
 | `config [--json]` | Print resolved runtime paths and which MCP client config files exist. |
 | `serve` | Start the MCP server over stdio. |
 | `index-all [--force]` | Index project, templates, Bitrix core, install assets, and docs. |
@@ -37,7 +38,16 @@ Run `bitrix-mcp --help` for the built-in summary.
 | `impact-radius [file ...] [--base <ref>] [--depth <n>] [--json]` | Analyze graph impact radius. |
 | `benchmark [--force]` | Write `.bitrix-mcp/benchmark.json` and `benchmark.md`. See [benchmarks](#benchmarks). |
 
-Global options: `--version`/`-v`, `--help`/`-h`.
+Global options (before the command): `--version`/`-v`, `--help`/`-h`, `--debug`.
+
+## Argument parsing
+
+- `bitrix-mcp <command> --help` (or `-h`) prints that command's options and exits `0` **without running it** — e.g. `index-code --help` does not index and `init --help` writes nothing.
+- Value options accept both forms: `--modules main,iblock` and `--modules=main,iblock` (same for `--agent`, `--base`, `--depth`, `--limit`, `--php-bin`, …).
+- Options are validated per command: an unknown option (or a flag a command does not support, e.g. `status --force`) or an unexpected extra argument prints an error and exits with code `2`.
+- `--depth`, `--limit`, `--max-files`, and `--max-items` must be integers (`--depth` ≥ 0, the others ≥ 1).
+- `-v`/`--version` is only recognized as a global flag before the command.
+- On failure the CLI prints `Error: <message>` and exits non-zero (`2` for usage errors, `1` otherwise). Add `--debug` to also print the stack trace.
 
 ## Bitrix core indexing
 

@@ -16,6 +16,7 @@
 | `BITRIX_MCP_DB_ENABLED` | Enable live project DB access tools (`bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`). Reads credentials from `bitrix/.settings.php`. Off by default in the server; `init` enables it unless you answer no or pass `--no-db`. The read-only check is a keyword filter, not a security boundary — see [security](./security.md). |
 | `BITRIX_MCP_DB_ALLOW_WRITE` | Additionally register `bitrix_db_execute` for write SQL (INSERT/UPDATE/DELETE). Requires `BITRIX_MCP_DB_ENABLED`. Off by default. |
 | `BITRIX_MCP_TINKER_ENABLED` | Enable the `bitrix_tinker` tool (runs arbitrary PHP with the Bitrix kernel loaded). Off by default. Full code execution — local trusted dev only. |
+| `BITRIX_MCP_HOME_DIR` | Override the home directory used for **global** client configs (Windsurf, Cline, Codex, Kilo Code) by `init`/`configure`/`uninstall`/`config`. Defaults to your OS home directory; useful for sandboxes and tests. |
 | `BITRIX_MCP_PHP_BIN` | Path to the PHP CLI binary used by `bitrix_tinker`. `init` auto-detects it (PATH, Herd, Laragon, XAMPP, OpenServer) and writes it into the config only when tinker is enabled; falls back to `php`. Should match the site's PHP version/extensions. |
 
 ## `bitrix-mcp init`
@@ -31,6 +32,28 @@ It then asks which AI agents to configure (enter one or several numbers, comma-s
 `init` does **not** start the stdio server by default — the MCP config it writes launches `bitrix-mcp serve` from your client. Pass `--serve` to start it now, or run `bitrix-mcp serve` yourself.
 
 Rule files are safe to re-run: new files get the full template; existing files keep your content and only the `bitrix-mcp:init-guidance` managed section is replaced.
+
+Client config files are edited surgically, so re-running is safe there too:
+
+- JSON configs are read as JSONC (comments and trailing commas allowed). Only the keys bitrix-mcp manages are changed; your comments, formatting, other servers, and other settings are kept. If a file cannot be parsed, `init` stops with an error naming the file and does not modify it.
+- The `bitrix-mcp` server entry is **merged**, not replaced: `command`, `args`, and bitrix-mcp's own `BITRIX_*` env keys are updated, while keys you added (extra env vars such as `BITRIX_MCP_DOCS_PATHS`, `disabled`, `timeout`, Cline/Roo/Kilo `alwaysAllow`, …) are preserved.
+- Before the first change to an existing config file, a one-time backup is written next to it as `<file>.bak` (an existing `.bak` is never overwritten, so it always holds the pre-bitrix-mcp version). Files whose content would not change are not rewritten.
+- Codex `~/.codex/config.toml`: the `[mcp_servers.bitrix-mcp]` table is replaced in place (bare or quoted key, with or without a trailing comment); a stale `[mcp_servers.bitrix-mcp.env]` sub-table is removed. Other tables are untouched.
+
+### Agent hooks
+
+Passive rule files are not always enough, so for agents that support context-injection hooks `init`/`configure` also write a small hook that reminds the agent to use bitrix-mcp first. Every managed hook carries the `bitrix-mcp:auto-directive` marker, so re-runs and `uninstall` touch only bitrix-mcp's own entries.
+
+| Agent | Hook file | Event |
+| --- | --- | --- |
+| `claude-code` | `.claude/settings.json` | `SessionStart` (once per session) + `SubagentStart` |
+| `cursor` | `.cursor/hooks.json` | `sessionStart` |
+| `gemini-cli` | `.gemini/settings.json` | `BeforeAgent` |
+| `codex` | `.codex/hooks.json` | `SessionStart` |
+| `vscode` | `.github/hooks/bitrix-mcp.json` | `SessionStart` |
+| `cline` | `.clinerules/hooks/UserPromptSubmit` | `UserPromptSubmit` |
+
+Earlier releases used a per-prompt `UserPromptSubmit` hook for Claude Code; re-running `init`/`configure` removes that managed entry. If `.github/hooks/bitrix-mcp.json` or `.clinerules/hooks/UserPromptSubmit` already exists without the marker, it is treated as yours and skipped with a warning. Pass `--no-hooks` to skip writing hooks entirely.
 
 ### Supported clients
 
@@ -55,7 +78,8 @@ Claude Desktop reads the project `.mcp.json`, so use `claude-code` for it.
 
 - `--agent <id>` — select agents without a prompt. Repeat or comma-separate, e.g. `--agent cursor,codex`.
 - `--all-agents` — configure every built-in agent that needs no extra path prompt.
-- `--yes` / `-y` — accept the default non-interactive choice (`cursor`).
+- `--yes` / `-y` — accept the default non-interactive choice (`cursor`); the chosen agent is printed.
+- `--no-hooks` — do not write agent context-injection hooks (see [Agent hooks](#agent-hooks)).
 - `--no-index` — skip code indexing during `init`.
 - `--no-docs` — skip documentation indexing during `init`.
 - `--no-db` — disable live project DB access in the generated config (default: enabled).
@@ -67,6 +91,22 @@ Claude Desktop reads the project `.mcp.json`, so use `claude-code` for it.
 - `--no-serve` — explicit no-op for the default behavior.
 
 Use `bitrix-mcp configure` with the same agent flags when you only want config + guidance files (never indexes, never serves).
+
+## `bitrix-mcp uninstall`
+
+Removes what `init`/`configure` wrote, using bitrix-mcp's markers, and leaves everything else intact:
+
+- the `bitrix-mcp` entry from each client config (files left with nothing else in them are deleted; Codex's `[mcp_servers.bitrix-mcp]` table is removed);
+- managed hooks (entries with the `bitrix-mcp:auto-directive` marker; bitrix-mcp-owned hook files are deleted);
+- the `bitrix-mcp:init-guidance` section from rule files (a rule file containing only that section is deleted);
+- installed skills (`.claude/skills/bitrix-mcp/SKILL.md`, and `.bitrix-mcp/skills/bitrix-mcp/SKILL.md` when uninstalling all agents).
+
+Flags:
+
+- `--agent <id>` / `--all-agents` — limit removal to these agents (default: all agents).
+- `--dry-run` — print what would change without changing anything.
+
+Global configs (Windsurf, Cline, Codex, Kilo Code) are shared by all projects, so their entry is only removed when its `BITRIX_MCP_WORKSPACE` points at the current project. Index data in `.bitrix-mcp/` and `*.bak` backups are kept. Custom `generic-json` configs and JetBrains IDE settings must be cleaned up manually (the command prints a note).
 
 ### Generated MCP config
 
