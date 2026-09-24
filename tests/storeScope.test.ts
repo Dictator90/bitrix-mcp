@@ -137,3 +137,25 @@ test("reads and writes wait for a concurrent writer instead of failing with 'dat
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("re-indexing one directory keeps warnings and file counts for the rest of the scope", async () => {
+  const { root, dataDir, paths } = await makeProject({
+    "local/templates/a/broken.php": "<?php\nfunction broken( {\n",
+    "local/templates/b/ok.php": "<?php\nfunction fine() {}\n"
+  });
+  try {
+    const { readIndexWarnings, getIndexStatus } = await import("../src/indexer/sqliteStore.js");
+    await buildIndex(resolveTemplateIndexOptions(paths));
+    const before = await readIndexWarnings(sqlitePath(dataDir), "template");
+    assert.ok(before.some((warning) => warning.file.endsWith("broken.php")), "fixture should produce a parse warning");
+
+    await buildIndex(resolveTemplateIndexOptions(paths, "local/templates/b"));
+    const after = await readIndexWarnings(sqlitePath(dataDir), "template");
+    assert.ok(after.some((warning) => warning.file.endsWith("broken.php")), "warnings outside the re-indexed directory are kept");
+    const status = await getIndexStatus(sqlitePath(dataDir));
+    assert.ok(status.files >= 2);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

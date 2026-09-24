@@ -172,6 +172,8 @@ interface IndexWriteScope {
   kind: IndexKind;
   /** Base root: stored with each row and used for relative paths. */
   root: string;
+  /** Directory this run scanned; warnings for files outside it are kept on finish. */
+  scanRoot: string;
   generatedAt: string;
 }
 
@@ -517,7 +519,7 @@ export class SqliteIndexWriter {
           throw error;
         }
       }
-      return new SqliteIndexWriter(db, st, { kind: options.kind, root: options.root, generatedAt: options.generatedAt ?? new Date().toISOString() }, existingByPath);
+      return new SqliteIndexWriter(db, st, { kind: options.kind, root: options.root, scanRoot, generatedAt: options.generatedAt ?? new Date().toISOString() }, existingByPath);
     } catch (error) {
       db.close();
       throw error;
@@ -548,12 +550,17 @@ export class SqliteIndexWriter {
   /** Rebuilds cross-file relations, records index metadata, and closes the writer. */
   finish(summary: { files: number; warnings?: IndexWarning[] }): void {
     try {
-      const { kind, root, generatedAt } = this.scope;
+      const { kind, root, scanRoot, generatedAt } = this.scope;
       this.db.exec("BEGIN IMMEDIATE;");
       try {
         rebuildMailEventRelations(this.db, this.st, kind);
-        this.st.setMeta.run(`index:${kind}`, JSON.stringify({ version: 1, generatedAt, root, kind, files: summary.files }), generatedAt);
-        this.st.setMeta.run(`index:${kind}:warnings`, warningMetaValue(summary.warnings), generatedAt);
+        // A partial run (one template/module, `watch`) only saw part of the scope: count files from
+        // the table and keep earlier warnings for files outside the scanned directory.
+        const files = Number((this.db.prepare("SELECT COUNT(*) AS count FROM files WHERE kind = ?").get(kind) as { count: number }).count);
+        const previous = this.db.prepare("SELECT value FROM index_meta WHERE key = ?").get(`index:${kind}:warnings`) as { value: string } | undefined;
+        const kept = previous ? parseWarningMeta(previous.value).diagnostics.filter((warning) => !isUnderRoot(scanRoot, warning.file)) : [];
+        this.st.setMeta.run(`index:${kind}`, JSON.stringify({ version: 1, generatedAt, root, kind, files: summary.files > files ? summary.files : files }), generatedAt);
+        this.st.setMeta.run(`index:${kind}:warnings`, warningMetaValue([...kept, ...(summary.warnings ?? [])]), generatedAt);
         this.db.exec("COMMIT;");
       } catch (error) {
         this.db.exec("ROLLBACK;");
