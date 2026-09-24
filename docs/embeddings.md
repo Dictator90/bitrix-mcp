@@ -19,8 +19,21 @@ cd embeddings
 python -m venv .venv
 source .venv/bin/activate          # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn service:app --host 127.0.0.1 --port 8765
+python service.py                  # binds 127.0.0.1:8765 by default
+# or: uvicorn service:app --host 127.0.0.1 --port 8765
 ```
+
+The default model is `intfloat/multilingual-e5-small`: it handles Russian and English and reads up to 512 tokens, enough for a whole documentation chunk (the previous default, `paraphrase-multilingual-MiniLM-L12-v2`, silently truncated chunks at 128 tokens). Override it with `BITRIX_MCP_EMBEDDINGS_MODEL` (e5 models get their `query:`/`passage:` prefixes automatically). After changing the model, rerun `bitrix-mcp index-embeddings` — the service refuses to search an index built with a different model.
+
+Service settings:
+
+| Variable | Purpose |
+| --- | --- |
+| `BITRIX_MCP_EMBEDDINGS_MODEL` | sentence-transformers model (default `intfloat/multilingual-e5-small`). |
+| `BITRIX_MCP_EMBEDDINGS_DATA` | Where the index is stored (`docs.meta.json` + `docs.vectors.npy`, written atomically). |
+| `BITRIX_MCP_EMBEDDINGS_TOKEN` | Optional shared secret. When set, the service requires `Authorization: Bearer <token>`; set the same variable for `bitrix-mcp` so its client sends it. |
+| `BITRIX_MCP_EMBEDDINGS_HOST` / `_PORT` | Bind address for `python service.py` (default `127.0.0.1:8765`). Keep it on loopback unless a token is set: anyone who can reach the port can replace the index. |
+| `BITRIX_MCP_EMBEDDINGS_BATCH` | Encoding batch size (default 32). |
 
 Recommended semantic indexing sequence:
 
