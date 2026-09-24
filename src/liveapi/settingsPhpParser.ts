@@ -23,11 +23,14 @@ function findReturnExpression(ast: PhpNode): PhpNode | undefined {
 }
 
 /**
- * Splits a Bitrix `host` value on its last `:` when the trailing segment is
- * purely numeric, treating it as a port. Sockets and hosts without a port
- * are returned unchanged.
+ * Splits a Bitrix `host` value into host/port or a Unix socket path. Accepts
+ * `host`, `host:3306`, `localhost:/run/mysqld/mysqld.sock`, `:/path.sock`, and
+ * a bare `/path.sock`.
  */
-function splitHostPort(rawHost: string): { host: string; port?: number } {
+function splitHostPort(rawHost: string): { host: string; port?: number; socketPath?: string } {
+  if (rawHost.startsWith("/")) return { host: "localhost", socketPath: rawHost };
+  const socketMatch = rawHost.match(/^([^:]*):(\/.+)$/u);
+  if (socketMatch) return { host: socketMatch[1] || "localhost", socketPath: socketMatch[2] };
   const lastColon = rawHost.lastIndexOf(":");
   if (lastColon === -1) return { host: rawHost };
   const portPart = rawHost.slice(lastColon + 1);
@@ -48,11 +51,12 @@ function buildConnection(name: string, conf: unknown): BitrixConnection | undefi
   const rawDatabase = record.database !== undefined && record.database !== null ? String(record.database) : undefined;
   if (rawHost === undefined && rawDatabase === undefined) return undefined;
 
-  const { host, port } = rawHost !== undefined ? splitHostPort(rawHost) : { host: "", port: undefined };
+  const { host, port, socketPath } = rawHost !== undefined ? splitHostPort(rawHost) : { host: "", port: undefined, socketPath: undefined };
   return {
     name,
     host,
     port,
+    ...(socketPath ? { socketPath } : {}),
     database: rawDatabase ?? "",
     login: record.login !== undefined && record.login !== null ? String(record.login) : "",
     password: record.password !== undefined && record.password !== null ? String(record.password) : "",
@@ -60,15 +64,19 @@ function buildConnection(name: string, conf: unknown): BitrixConnection | undefi
   };
 }
 
+function sectionValue(parsed: unknown, section: string): unknown {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+  const entry = (parsed as Record<string, unknown>)[section];
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
+  return (entry as Record<string, unknown>).value;
+}
+
 /**
  * Navigates the decoded `.settings.php` array to `connections.value` and
  * builds a {@link BitrixConnection} for each named entry.
  */
 function extractConnections(parsed: unknown): BitrixConnection[] {
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return [];
-  const connectionsSection = (parsed as Record<string, unknown>).connections;
-  if (typeof connectionsSection !== "object" || connectionsSection === null || Array.isArray(connectionsSection)) return [];
-  const value = (connectionsSection as Record<string, unknown>).value;
+  const value = sectionValue(parsed, "connections");
   if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
 
   const connections: BitrixConnection[] = [];
@@ -77,6 +85,12 @@ function extractConnections(parsed: unknown): BitrixConnection[] {
     if (connection) connections.push(connection);
   }
   return connections;
+}
+
+/** Reads `utf_mode.value`: true → UTF-8, false → legacy cp1251 site, undefined when not declared. */
+function extractUtfMode(parsed: unknown): boolean | undefined {
+  const value = sectionValue(parsed, "utf_mode");
+  return typeof value === "boolean" ? value : undefined;
 }
 
 /**
@@ -97,26 +111,54 @@ function extractQuotedValue(source: string, key: string): string | undefined {
  * connection. Returns an empty array when no plausible connection is found.
  */
 function parseConnectionsWithRegex(source: string): BitrixConnection[] {
-  const rawHost = extractQuotedValue(source, "host");
-  const database = extractQuotedValue(source, "database");
+  // Only look inside the connections section, so a cache/session `host` elsewhere is not picked up.
+  const sectionStart = source.search(/["']connections["']\s*=>/u);
+  if (sectionStart === -1) return [];
+  const section = source.slice(sectionStart);
+  const rawHost = extractQuotedValue(section, "host");
+  const database = extractQuotedValue(section, "database");
   if (!rawHost || !database) return [];
 
-  const login = extractQuotedValue(source, "login") ?? "";
-  const password = extractQuotedValue(source, "password") ?? "";
-  const className = extractQuotedValue(source, "className");
-  const { host, port } = splitHostPort(rawHost);
+  const login = extractQuotedValue(section, "login") ?? "";
+  const password = extractQuotedValue(section, "password") ?? "";
+  const className = extractQuotedValue(section, "className");
+  const { host, port, socketPath } = splitHostPort(rawHost);
 
   return [
     {
       name: "default",
       host,
       port,
+      ...(socketPath ? { socketPath } : {}),
       database,
       login,
       password,
       className
     }
   ];
+}
+
+interface ParsedSettingsFile {
+  connections: BitrixConnection[];
+  utfMode?: boolean;
+}
+
+/** Parses one settings file via the PHP AST, falling back to a scoped regex scan when the AST parse fails. */
+function parseSettingsSource(source: string, filePath: string): ParsedSettingsFile {
+  try {
+    const ast = parsePhpToAst(source, filePath);
+    const parsed = literalValue(findReturnExpression(ast), { uses: new Map() });
+    return { connections: extractConnections(parsed), utfMode: extractUtfMode(parsed) };
+  } catch {
+    return { connections: parseConnectionsWithRegex(source) };
+  }
+}
+
+/** Merges `.settings_extra.php` connections over `.settings.php` ones by name, as Bitrix does. */
+function mergeConnections(base: BitrixConnection[], extra: BitrixConnection[]): BitrixConnection[] {
+  const merged = new Map(base.map((connection) => [connection.name, connection]));
+  for (const connection of extra) merged.set(connection.name, connection);
+  return [...merged.values()];
 }
 
 /**
@@ -132,6 +174,7 @@ export async function readBitrixConnections(paths: RuntimePaths): Promise<{ conn
   }
 
   const settingsPath = path.join(paths.bitrixRoot, "bitrix", ".settings.php");
+  const extraPath = path.join(paths.bitrixRoot, "bitrix", ".settings_extra.php");
 
   let source: string;
   try {
@@ -140,14 +183,18 @@ export async function readBitrixConnections(paths: RuntimePaths): Promise<{ conn
     return { connections: [], source: settingsPath, error: `Settings file not found: ${settingsPath}` };
   }
 
+  const base = parseSettingsSource(source, settingsPath);
+  let extra: ParsedSettingsFile = { connections: [] };
   try {
-    const ast = parsePhpToAst(source, settingsPath);
-    const expr = findReturnExpression(ast);
-    const parsed = literalValue(expr, { uses: new Map() });
-    return { connections: extractConnections(parsed), source: settingsPath };
+    extra = parseSettingsSource(await fs.readFile(extraPath, "utf8"), extraPath);
   } catch {
-    return { connections: parseConnectionsWithRegex(source), source: settingsPath };
+    // .settings_extra.php is optional.
   }
+
+  const utfMode = extra.utfMode ?? base.utfMode;
+  const charset = utfMode === false ? "CP1251_GENERAL_CI" : utfMode === true ? "UTF8MB4_GENERAL_CI" : undefined;
+  const connections = mergeConnections(base.connections, extra.connections).map((connection) => (charset ? { ...connection, charset } : connection));
+  return { connections, source: settingsPath };
 }
 
 /**
@@ -164,6 +211,7 @@ export function redactConnection(conn: BitrixConnection, source: string): Redact
     login: conn.login,
     hasPassword: conn.password.length > 0,
     className: conn.className,
+    ...(conn.socketPath ? { socketPath: conn.socketPath } : {}),
     source
   };
 }
@@ -184,4 +232,15 @@ export async function resolveConnection(paths: RuntimePaths, name = "default"): 
   if (exact) return exact;
 
   return normalized === "default" ? connections[0] : undefined;
+}
+
+/**
+ * Swaps in dedicated read-only credentials from `BITRIX_MCP_DB_READONLY_USER`
+ * / `BITRIX_MCP_DB_READONLY_PASSWORD` when set, so `bitrix_db_query` and
+ * `bitrix_db_schema` can run under an account that only has SELECT.
+ */
+export function withReadOnlyCredentials(conn: BitrixConnection, env: NodeJS.ProcessEnv = process.env): BitrixConnection {
+  const login = env.BITRIX_MCP_DB_READONLY_USER?.trim();
+  if (!login) return conn;
+  return { ...conn, login, password: env.BITRIX_MCP_DB_READONLY_PASSWORD ?? "" };
 }

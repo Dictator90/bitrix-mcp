@@ -17,6 +17,10 @@ export interface BitrixConnection {
   login: string;
   password: string;
   className?: string;
+  /** Unix socket path, when the Bitrix host is `localhost:/path/to.sock` or a bare socket path. */
+  socketPath?: string;
+  /** mysql2 connection charset derived from Bitrix `utf_mode` (UTF8MB4 or CP1251). */
+  charset?: string;
 }
 
 /**
@@ -31,6 +35,7 @@ export interface RedactedConnection {
   login: string;
   hasPassword: boolean;
   className?: string;
+  socketPath?: string;
   source: string;
 }
 
@@ -42,6 +47,8 @@ export interface QueryResult {
   rows: Array<Record<string, unknown>>;
   rowCount: number;
   truncated: boolean;
+  /** Why rows were cut off: the row limit or the result byte budget. */
+  truncatedReason?: "rows" | "bytes";
   affectedRows?: number;
 }
 

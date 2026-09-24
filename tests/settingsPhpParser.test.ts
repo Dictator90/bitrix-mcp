@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readBitrixConnections, redactConnection, resolveConnection } from "../src/liveapi/settingsPhpParser.js";
+import { readBitrixConnections, redactConnection, resolveConnection, withReadOnlyCredentials } from "../src/liveapi/settingsPhpParser.js";
 import type { RuntimePaths } from "../src/config/paths.js";
 
 const SETTINGS_PHP = `<?php
@@ -131,4 +131,52 @@ test("readBitrixConnections reports an error when bitrixRoot is unknown", async 
   const { connections, error } = await readBitrixConnections(paths);
   assert.equal(connections.length, 0);
   assert.ok(error && error.length > 0);
+});
+
+test("readBitrixConnections merges .settings_extra.php, maps sockets, and derives charset from utf_mode", async () => {
+  const { paths, root } = await makeBitrixProject(`<?php
+return [
+  'utf_mode' => ['value' => false],
+  'connections' => ['value' => [
+    'default' => ['host' => 'localhost:/run/mysqld/mysqld.sock', 'database' => 'site', 'login' => 'u', 'password' => 'p'],
+    'stats' => ['host' => 'db', 'database' => 'stats', 'login' => 'u', 'password' => 'p'],
+  ]],
+];
+`);
+  try {
+    await fs.writeFile(path.join(root, "bitrix", ".settings_extra.php"), "<?php\nreturn ['connections' => ['value' => ['stats' => ['host' => 'db-extra:3310', 'database' => 'stats2', 'login' => 'x', 'password' => 'y']]]];\n", "utf8");
+    const { connections } = await readBitrixConnections(paths);
+    const byName = new Map(connections.map((connection) => [connection.name, connection]));
+    assert.equal(byName.get("default")?.socketPath, "/run/mysqld/mysqld.sock");
+    assert.equal(byName.get("default")?.host, "localhost");
+    assert.equal(byName.get("default")?.charset, "CP1251_GENERAL_CI");
+    assert.equal(byName.get("stats")?.host, "db-extra");
+    assert.equal(byName.get("stats")?.port, 3310);
+    assert.equal(byName.get("stats")?.database, "stats2");
+    assert.equal(redactConnection(byName.get("default")!, "x").socketPath, "/run/mysqld/mysqld.sock");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("regex fallback only reads the connections section", async () => {
+  const { paths, root } = await makeBitrixProject(`<?php
+return [
+  'cache' => ['value' => ['type' => ['class_name' => getenv('X')], 'host' => 'memcache.local', 'database' => 'nope']],
+  'connections' => ['value' => ['default' => ['host' => 'mysql.local', 'database' => 'site', 'login' => 'u', 'password' => getenv('DB_PASS') ?: 'p']]],
+  'broken' => [
+`);
+  try {
+    const { connections } = await readBitrixConnections(paths);
+    assert.equal(connections.length, 1);
+    assert.equal(connections[0]?.host, "mysql.local");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("withReadOnlyCredentials swaps login/password only when configured", () => {
+  const conn = { name: "default", host: "h", database: "d", login: "root", password: "rootpw" };
+  assert.deepEqual(withReadOnlyCredentials(conn, {}), conn);
+  assert.deepEqual(withReadOnlyCredentials(conn, { BITRIX_MCP_DB_READONLY_USER: "reader", BITRIX_MCP_DB_READONLY_PASSWORD: "rpw" }), { ...conn, login: "reader", password: "rpw" });
 });

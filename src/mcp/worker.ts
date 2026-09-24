@@ -8,7 +8,7 @@ import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type AutoloadSearchFormatOptions, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
-import { readBitrixConnections, redactConnection, resolveConnection } from "../liveapi/settingsPhpParser.js";
+import { readBitrixConnections, redactConnection, resolveConnection, withReadOnlyCredentials } from "../liveapi/settingsPhpParser.js";
 import { runQuery, getSchema } from "../db/mysqlClient.js";
 import { runTinker } from "../php/tinker.js";
 
@@ -196,26 +196,26 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
     case "dbSchema": {
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
       }
-      const schema = await getSchema(conn, { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit });
+      const schema = await getSchema(withReadOnlyCredentials(conn), { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit });
       return { content: [{ type: "text", text: JSON.stringify(schema, null, 2) }] };
     }
     case "dbQuery": {
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
       }
-      const result = await runQuery(conn, task.query.sql, { readOnly: true, rowLimit: task.query.limit });
+      const result = await runQuery(withReadOnlyCredentials(conn), task.query.sql, { readOnly: true, rowLimit: task.query.limit });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     case "dbExecute": {
       if (!task.paths.dbAllowWrite) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, null, 2) }] };
+        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, null, 2) }] };
       }
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) {
-        return { content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
+        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
       }
       const result = await runQuery(conn, task.query.sql, { readOnly: false });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
