@@ -82,6 +82,9 @@ bitrix-mcp index-code     # переиндексировать только ко
 bitrix-mcp serve          # запустить MCP-сервер (обычно это делает клиент)
 bitrix-mcp status         # счётчики индекса и путь к БД
 bitrix-mcp doctor         # проверка состояния и вычисленные пути
+bitrix-mcp watch          # обновлять индекс на лету при правках (Ctrl+C — остановить)
+bitrix-mcp clean --dry-run   # показать, какие файлы индекса удалит `clean`
+bitrix-mcp configure --agent cursor --dry-run   # предпросмотр изменений конфигов (diff) без записи
 ```
 
 Индексировать только нужные модули ядра — заметно быстрее:

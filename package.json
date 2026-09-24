@@ -21,6 +21,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node --test --import tsx \"tests/**/*.test.ts\"",
     "test:integration": "BITRIX_MCP_INTEGRATION=1 node --test --import tsx tests/bitrixCoreRepo.integration.test.ts",
+    "test:mysql": "node --test --import tsx tests/db.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "start": "node dist/cli.js serve",

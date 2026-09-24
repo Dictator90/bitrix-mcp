@@ -14,11 +14,13 @@ Run `bitrix-mcp --help` for the built-in summary.
 
 | Command | What it does |
 | --- | --- |
-| `init [options]` | Configure MCP clients + guidance and build initial indexes. The MCP client starts the server; use `--serve` to start it now. See [configuration.md](./configuration.md). |
-| `configure [options]` | Configure MCP clients and guidance only — no indexing, no server. |
+| `init [options]` | Configure MCP clients + guidance and build initial indexes. The MCP client starts the server; use `--serve` to start it now. `--dry-run` previews the file changes. See [configuration.md](./configuration.md). |
+| `configure [options]` | Configure MCP clients and guidance only — no indexing, no server. `--dry-run` previews the file changes. |
 | `uninstall [--agent <id>] [--all-agents] [--dry-run]` | Remove what `init`/`configure` wrote: the `bitrix-mcp` server entry in each client config, managed hooks, managed guidance sections, and installed skills. See [configuration.md](./configuration.md#bitrix-mcp-uninstall). |
 | `config [--json]` | Print resolved runtime paths and which MCP client config files exist. |
 | `serve` | Start the MCP server over stdio. |
+| `watch [options]` | Watch the workspace (and Bitrix root) and incrementally re-index changed files until Ctrl+C. See [Watch mode](#watch-mode). |
+| `clean [--dry-run] [--yes] [--all]` | Delete the index data in the data directory. See [Cleaning index data](#cleaning-index-data). |
 | `index-all [--force]` | Index project, templates, Bitrix core, install assets, and docs. |
 | `index-code [--force]` | Index project, templates, Bitrix core, and install assets (no docs). |
 | `index-project [root] [--force]` | Index your project's own files (never crawls `/bitrix/`). |
@@ -112,6 +114,69 @@ Unknown module names print a warning and are skipped; the run continues as long 
 ### Incremental reindex
 
 Reindexing is incremental: a file is re-parsed only when its size or mtime changed since the last run. Unchanged files are skipped, deleted files are removed. The first `index-bitrix` is the slow one; later runs are fast. `.bitrixmcpignore` rules apply on top of the built-in ignores.
+
+## Watch mode
+
+`bitrix-mcp watch` keeps the index current while you edit: it watches the workspace (plus `BITRIX_ROOT` when it lies outside the workspace) and re-indexes each debounced batch of changes. Run `index-code` (or `init`) once first — `watch` only reacts to changes made while it runs.
+
+```bash
+bitrix-mcp watch                       # project, templates, Bitrix core
+bitrix-mcp watch --no-bitrix           # your code only
+bitrix-mcp watch --docs                # also re-index documentation directories
+bitrix-mcp watch --modules=main,iblock --install   # match how you indexed the core
+bitrix-mcp watch --json                # one JSON object per event
+```
+
+Each changed path is mapped to its scope with the same include/ignore rules as indexing (built-in ignores, `lang/` exclusion, `.gitignore` for project/template, `.bitrixmcpignore`, the Bitrix core allowlist, and the module selection). Paths no scope indexes — `.bitrix-mcp/`, `.git/`, `node_modules/`, `bitrix/cache`, `upload/`, images, … — are ignored. Each batch then re-runs the incremental indexer on the smallest unit that contains the change:
+
+| Change under | Re-indexed |
+| --- | --- |
+| `local/templates/<name>/`, `bitrix/templates/<name>/` | that site template directory (template scope) |
+| `local/components/<ns>/<name>/`, `bitrix/components/<ns>/<name>/` | that component directory (template scope) |
+| `bitrix/modules/<m>/`, `local/modules/<m>/` (PHP) | that module (bitrix scope; `install/` excluded) |
+| `bitrix/admin/`, `bitrix/tools/` | that directory (bitrix scope) |
+| `bitrix/js/<ext>/`, `local/js/<ext>/` | that extension (bitrix scope) |
+| `<module>/install/` (with `--install`) | that module's `install/` (install scope; `install/js` excluded) |
+| anything else indexed | the project scope (incremental: unchanged files are only stat-ed) |
+| documentation directories (with `--docs`) | the registered docs sources |
+
+Deleted files and directories are pruned from the index. Editing the root `.gitignore` / `.bitrixmcpignore` re-runs the project and template scopes.
+
+Output is one line per re-index run, e.g. `[12:30:18] template local/templates/main: local/templates/main/header.php -> 1 parsed, 12 unchanged (9 ms)`. With `--json` every event is a JSON object on its own line: `ready` (roots, scopes), `reindex` (`scope`, `path`, `changed`, `files`, `parsedFiles`, `unchangedFiles`, `warnings`, `elapsedMs`, `docChunks` for docs), `error`, and `stopped`. Ctrl+C stops after the current run finishes (a second Ctrl+C exits immediately).
+
+| Flag | Effect |
+| --- | --- |
+| `--no-bitrix` | Do not watch or re-index the Bitrix core / install scopes. |
+| `--modules=…`, `--include-lang`, `--install`, `--full` | Same meaning as for `index-code`. Use the options you indexed with, otherwise a re-index of a module prunes files the full run kept (e.g. `lang/` files). |
+| `--docs` | Also watch the documentation directories (`BITRIX_MCP_DOCS_PATHS` / `docs/`) and re-index docs on change. Remote doc checkouts are not pulled. |
+| `--debounce <ms>` | Quiet period before a batch is re-indexed (default `500`). |
+| `--json` | JSON Lines output. |
+
+Notes:
+
+- On Linux, `watch` adds one inotify watch per relevant directory and never descends into ignored trees. On a very large core you may need to raise `fs.inotify.max_user_watches` (the error message says so). macOS and Windows use a single recursive watcher per root.
+- A directory-level re-index reads `.gitignore` / `.bitrixmcpignore` from that directory, not from the project root (as `index-template <path>` does); root rules are applied to the changed path itself. Run `index-code` occasionally for a full pass with the root rules.
+- A module-level re-index records only that module's parse warnings in the scope's index metadata; `index-code` restores the full picture.
+
+## Cleaning index data
+
+`bitrix-mcp clean` deletes the index data from the data directory (`.bitrix-mcp/` or `BITRIX_MCP_DATA_DIR`):
+
+- the SQLite index `bitrix-mcp.sqlite` and its `-wal` / `-shm` / `-journal` files;
+- legacy JSON indexes (`*-index.json`);
+- benchmark reports (`benchmark.json`, `benchmark.md`);
+- with `--all`, also the `docs-sources/` documentation checkouts.
+
+Generated skills/rules and any other files in the data directory are kept, and nothing outside the data directory is ever removed.
+
+```bash
+bitrix-mcp clean --dry-run   # list what would be removed, with sizes
+bitrix-mcp clean             # asks for confirmation in a terminal
+bitrix-mcp clean --yes       # no prompt (required when stdin is not a terminal)
+bitrix-mcp clean --all --yes # also delete the docs checkouts
+```
+
+Registered documentation sources are stored in the SQLite index: `index-docs` re-registers the official docs and `BITRIX_MCP_DOCS_PATHS`; re-add custom ones with `docs-add-git` / `docs-add-path`. On Windows, stop running MCP servers first: open database files cannot be deleted there.
 
 ## Indexing progress
 
