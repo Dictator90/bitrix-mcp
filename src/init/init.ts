@@ -119,7 +119,7 @@ If a Bitrix MCP tool returns a successful, non-empty result, use it as the prima
 
 1. **Orientation**: Call \`bitrix_index_status\` and \`bitrix_project_overview\` first to understand the project structure, autoloading, and index health.
 2. **Review/Impact**: Use \`bitrix_detect_changes\` for review tasks. Use \`bitrix_impact_radius\`, \`bitrix_graph_neighbors\`, or \`bitrix_graph_traverse\` for dependency analysis and risk assessment.
-3. **Search**: Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, or \`bitrix_docs_search\` to find symbols, handlers, or documentation.
+3. **Search**: Use \`bitrix_liveapi_search\` (symbols), \`bitrix_event_search\` (event handlers), \`bitrix_entity_search\` (agents, mail events, components, module/IBlock/HLBlock/option usages, ORM, autoload, relations, inheritance; set \`entity\`), or \`bitrix_docs_search\` (documentation). Results are paginated: pass \`nextCursor\` as \`cursor\` when \`truncated\` is true.
 4. **Inspection**: Use \`bitrix_read_symbol_context\` or \`bitrix_read_file_context\` after a search returns a file and line number.
 5. **Direct search**: Use manual file search/grep only as a fallback when MCP tools are insufficient or the index is stale.
 6. **Live DB (optional)**: When \`BITRIX_MCP_DB_ENABLED=1\`, after static search you can inspect real data via \`bitrix_db_connections\` → \`bitrix_db_schema\` → \`bitrix_db_query\` (read-only; use \`bitrix_db_execute\` for writes only when \`BITRIX_MCP_DB_ALLOW_WRITE=1\`).
@@ -129,7 +129,7 @@ If a Bitrix MCP tool returns a successful, non-empty result, use it as the prima
 
 If MCP returns no result for something that should exist:
 1. Check \`bitrix_index_status\`.
-2. Ask to run or run the relevant indexing tool (\`bitrix_index_project\`, \`bitrix_index_template\`, \`bitrix_index_docs\`, or \`bitrix_index_all\`).
+2. Ask to run or run \`bitrix_index\` with the relevant \`scope\` (\`project\`, \`template\`, \`bitrix\`, \`install\`, \`docs\`, or \`all\`).
 3. Retry the MCP query before falling back to manual search.
 
 ## Safety
@@ -146,12 +146,12 @@ Treat \`bitrix-mcp\` tool results as the primary source of truth for Bitrix Fram
 ## Recommended Workflow
 1. Call \`bitrix_index_status\` and \`bitrix_project_overview\` first.
 2. Use \`bitrix_detect_changes\` and impact tools for changes/reviews.
-3. Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, and \`bitrix_docs_search\` for discovery.
+3. Use \`bitrix_liveapi_search\`, \`bitrix_event_search\`, \`bitrix_entity_search\`, and \`bitrix_docs_search\` for discovery; follow \`nextCursor\` when results are \`truncated\`.
 4. Use \`bitrix_read_symbol_context\` or \`bitrix_read_file_context\` for source inspection.
 5. Manual file search is a fallback, not the default.
 
 ## Stale Indexes
-If MCP returns no results for expected data, check \`bitrix_index_status\`, run the relevant reindexing tool (e.g., \`bitrix_index_all\`), and retry the query.
+If MCP returns no results for expected data, check \`bitrix_index_status\`, run \`bitrix_index\` with the relevant scope (e.g., \`scope: "all"\`), and retry the query.
 
 ## Safety
 Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`local/\`, project modules, and templates.
@@ -171,6 +171,7 @@ const BITRIX_MCP_HOOK_TOOLS = [
   "bitrix_index_status",
   "bitrix_project_overview",
   "bitrix_liveapi_search",
+  "bitrix_entity_search",
   "bitrix_docs_search",
   "bitrix_read_symbol_context",
   "bitrix_detect_changes"
@@ -193,7 +194,7 @@ function claudeSessionDirective(): string {
 
 /** Same as above, injected into every spawned Claude Code subagent at start. */
 function claudeSubagentDirective(): string {
-  return `[bitrix-mcp] 1C-Bitrix project. For Bitrix tasks, first load bitrix-mcp tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS.slice(0, 5))}) and treat them as the primary source of truth; manual file search is a fallback.`;
+  return `[bitrix-mcp] 1C-Bitrix project. For Bitrix tasks, first load bitrix-mcp tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS.filter((tool) => tool !== "bitrix_detect_changes"))}) and treat them as the primary source of truth; manual file search is a fallback.`;
 }
 
 /**
@@ -201,7 +202,7 @@ function claudeSubagentDirective(): string {
  * so there is no ToolSearch step — only the Authority Rule.
  */
 function directToolsDirective(): string {
-  return "[bitrix-mcp] 1C-Bitrix project with the bitrix-mcp MCP server. For Bitrix tasks, use its tools as the primary source of truth: start with bitrix_index_status and bitrix_project_overview, then bitrix_liveapi_search, bitrix_docs_search, bitrix_detect_changes, bitrix_read_symbol_context. Manual grep/read is a fallback when MCP is empty, stale, or explicitly requested.";
+  return "[bitrix-mcp] 1C-Bitrix project with the bitrix-mcp MCP server. For Bitrix tasks, use its tools as the primary source of truth: start with bitrix_index_status and bitrix_project_overview, then bitrix_liveapi_search, bitrix_entity_search, bitrix_docs_search, bitrix_detect_changes, bitrix_read_symbol_context. Manual grep/read is a fallback when MCP is empty, stale, or explicitly requested.";
 }
 
 /** Wrap a hook JSON payload in a marked, single-quoted `echo` shell command. */
