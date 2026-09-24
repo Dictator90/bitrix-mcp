@@ -19,7 +19,7 @@ export const DEFAULT_INDEX_PATTERNS = [`**/*.${CODE_EXTENSIONS}`];
 // symbols); the authored `src/` next to it is indexed instead. `test/` dirs and
 // `*.test.js` are test scaffolding, not API surface, so they are excluded from
 // every scope.
-const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**", "**/test/**", "**/*.test.js"];
+export const DEFAULT_IGNORES = ["**/node_modules/**", "**/vendor/**", "**/.git/**", "**/dist/**", "**/build/**", "**/.bitrix-mcp/**", "**/upload/**", "**/cache/**", "**/generated/**", "**/test/**", "**/*.test.js"];
 // The project scope indexes the project's own code only. The entire bitrix/
 // core tree is owned by the dedicated bitrix scope (modules/admin/tools/js)
 // and the template scope (components/templates), so it is excluded here to

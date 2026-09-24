@@ -1,22 +1,19 @@
 import nodePath from "node:path";
 import { readPackageVersion } from "./config/version.js";
-import { collectConfigDiagnostics, formatConfigDiagnostics } from "./config/diagnostics.js";
-import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath } from "./config/paths.js";
-import { detectChanges, formatDetectChangesText, type DetectChangesOptions } from "./indexer/detectChanges.js";
-import { getGraphNeighbors, getImpactRadiusForPaths, type GraphNeighborsOptions, type ImpactRadiusOptions } from "./indexer/graph.js";
-import { buildIndex, discoverFiles, relativeBaseFor } from "./indexer/indexer.js";
+import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath, type RuntimePaths } from "./config/paths.js";
 import { resolveBitrixIndex, parseModuleSelection, validateBitrixModules, detectBitrixModule, type BitrixModuleSelection } from "./indexer/bitrixModules.js";
-import { searchModuleUsages } from "./indexer/sqliteStore.js";
-import { formatDoctor, formatIndexAllResult, formatIndexEmbeddingsResult, formatIndexStatus, hasDoctorErrors, indexAll, indexCode, indexEmbeddings, installIndexOptions, readIndexStatus, runDoctor } from "./indexer/actions.js";
-import { resolveTemplateIndexOptions } from "./indexer/template.js";
-import { AGENT_CHOICES, configureAgents, initAndServe, parseAgentIds, type Agent, type InitOptions } from "./init/init.js";
-import { runUninstall } from "./init/uninstall.js";
 import { commandHelp, flag, integerOption, listOption, parseCli, stringOption, UsageError, type OptionValues } from "./cli/args.js";
-import { addGitDocSource, addPathDocSource, indexDocResourcesToSqlite, OFFICIAL_DOCS_GIT_URL, updateDocSources } from "./resources/docs.js";
-import { serveStdio } from "./mcp/server.js";
-import { runBenchmark } from "./benchmark/report.js";
-import { formatModuleUsageSearchResults } from "./mcp/format.js";
 import { createProgressReporter, detectCi, type CreateProgressReporterOptions } from "./progress/index.js";
+import type { DetectChangesOptions } from "./indexer/detectChanges.js";
+import type { GraphNeighborsOptions, ImpactRadiusOptions } from "./indexer/graph.js";
+import type { Agent, InitOptions } from "./init/init.js";
+
+// Everything else is imported where it is used: the MCP SDK, the SQLite store,
+// the indexer, and init are only loaded by the commands that need them, so
+// `--version`, `--help` and argument errors return without loading them.
+const actions = () => import("./indexer/actions.js");
+const indexer = () => import("./indexer/indexer.js");
+const diagnostics = () => import("./config/diagnostics.js");
 
 function usage(): string {
   return `Usage: bitrix-mcp <command> [options]
@@ -33,6 +30,9 @@ Commands:
                                 Remove MCP config entries, hooks, guidance sections, and skills written by init/configure
   config [--json]               Show resolved runtime paths and MCP client config file presence
   serve                         Start MCP server over stdio
+  watch [options]               Watch the workspace (and Bitrix root) and re-index changed files until Ctrl+C
+  clean [--dry-run] [--yes] [--all]
+                                Remove index data (SQLite index, legacy JSON indexes, benchmark reports) from the data dir
   index-all [--force]           Index project, templates, Bitrix modules, and docs (add --install for install assets)
   index-code [--force]          Index project, templates, and Bitrix modules (add --install for install assets)
   index-project [root] [--force] Index project files
@@ -84,6 +84,18 @@ Init/configure options:
   --php-bin <path>              PHP CLI binary for bitrix_tinker (auto-detected when omitted; Herd/Laragon/XAMPP/OpenServer/PATH)
   --no-hooks                    Do not write agent context-injection hooks (Claude Code, Cursor, Gemini, Codex, Copilot, Cline)
   --yes, -y                     Accept defaults for non-interactive init/configure (configures Cursor unless --agent is given)
+  --dry-run                     Print the files that would be created/updated (with a diff) without writing, indexing or serving
+
+Watch options (watch; also accepts --modules, --include-lang, --install, --full):
+  --no-bitrix                   Do not watch or re-index the Bitrix core
+  --docs                        Also watch documentation directories and re-index docs
+  --debounce <ms>               Quiet period before a batch of changes is re-indexed (default 500)
+  --json                        Print one JSON object per event (ready, reindex, error, stopped)
+
+Clean options:
+  --dry-run                     List what would be removed
+  --yes, -y                     Do not ask for confirmation (required when stdin is not a terminal)
+  --all                         Also remove the docs-sources/ documentation checkouts
 
 Uninstall options:
   --agent <id> / --all-agents   Limit removal to these agents (default: all agents)
@@ -105,7 +117,7 @@ Environment:
 `;
 }
 
-function parseInitOptions(values: OptionValues): InitOptions {
+async function parseInitOptions(values: OptionValues): Promise<InitOptions> {
   const options: InitOptions = {};
   if (flag(values, "all-agents")) options.allAgents = true;
   if (flag(values, "no-index")) options.index = false;
@@ -118,19 +130,21 @@ function parseInitOptions(values: OptionValues): InitOptions {
   if (flag(values, "tinker")) options.tinker = true;
   if (flag(values, "yes")) options.yes = true;
   if (flag(values, "no-hooks")) options.hooks = false;
+  if (flag(values, "dry-run")) options.dryRun = true;
   const phpBin = stringOption(values, "php-bin");
   if (phpBin !== undefined) options.phpBin = phpBin;
 
-  const agents = parseAgentOption(values);
+  const agents = await parseAgentOption(values);
   if (agents) options.agents = agents;
   return options;
 }
 
-function parseAgentOption(values: OptionValues): Agent[] | undefined {
+async function parseAgentOption(values: OptionValues): Promise<Agent[] | undefined> {
   const agentValues = listOption(values, "agent");
   if (agentValues.length === 0) {
     return undefined;
   }
+  const { AGENT_CHOICES, parseAgentIds } = await import("./init/init.js");
   const agents = parseAgentIds(agentValues);
   const unknown = agentValues.filter((value) => parseAgentIds([value]).length === 0);
   if (unknown.length > 0) {
@@ -251,6 +265,7 @@ function parseBitrixOptions(values: OptionValues): BitrixCliOptions {
 }
 
 async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof resolveBitrixIndex>, modules: BitrixModuleSelection): Promise<void> {
+  const { discoverFiles } = await indexer();
   const { found, queued } = await discoverFiles(projectRoot, { kind: "bitrix", patterns: resolved.patterns, ignores: resolved.ignores, includeLang: resolved.includeLang });
   const byModule = new Map<string, number>();
   for (const relativePath of queued) {
@@ -272,6 +287,86 @@ async function printBitrixPlan(projectRoot: string, resolved: ReturnType<typeof 
     "Top queued modules:",
     ...top.map(([moduleName, count]) => `- ${moduleName}: ${count} files`)
   ].join("\n"));
+}
+
+async function runWatch(paths: RuntimePaths, values: OptionValues): Promise<void> {
+  const bitrix = parseBitrixOptions(values);
+  const json = flag(values, "json");
+  const debounceMs = integerOption(values, "debounce", 0);
+  const { formatWatchEvent, startWatch } = await import("./watch/watch.js");
+  let handle: Awaited<ReturnType<typeof startWatch>> | undefined;
+  let stopRequested = false;
+  let resolveStopped: () => void = () => undefined;
+  const stopped = new Promise<void>((resolve) => {
+    resolveStopped = resolve;
+  });
+  const onSignal = () => {
+    if (stopRequested) {
+      // Second Ctrl+C: do not wait for an in-flight re-index.
+      process.exit(130);
+    }
+    stopRequested = true;
+    if (handle) void handle.stop().then(resolveStopped, resolveStopped);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    handle = await startWatch(paths, {
+      noBitrix: bitrix.noBitrix,
+      modules: bitrix.modules,
+      includeLang: bitrix.includeLang,
+      includeInstall: bitrix.includeInstall,
+      docs: flag(values, "docs"),
+      ...(debounceMs !== undefined ? { debounceMs } : {}),
+      onEvent: (event) => console.log(json ? JSON.stringify(event) : formatWatchEvent(event))
+    });
+    if (stopRequested) await handle.stop().then(resolveStopped, resolveStopped);
+    await stopped;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
+}
+
+async function confirm(question: string): Promise<boolean> {
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return ["y", "yes"].includes((await rl.question(question)).trim().toLowerCase());
+  } finally {
+    rl.close();
+  }
+}
+
+async function runClean(dataDir: string, values: OptionValues): Promise<void> {
+  const { applyClean, formatCleanPlan, planClean } = await import("./indexer/clean.js");
+  const all = flag(values, "all");
+  const targets = await planClean(dataDir, { all });
+  if (targets.length === 0 || flag(values, "dry-run")) {
+    console.log(formatCleanPlan(dataDir, targets, { mode: "dry-run", all }));
+    return;
+  }
+  if (!flag(values, "yes")) {
+    if (!process.stdin.isTTY) {
+      throw new UsageError("clean deletes index data; pass --yes to confirm (or --dry-run to preview).");
+    }
+    console.log(formatCleanPlan(dataDir, targets, { mode: "confirm", all }));
+    if (!(await confirm("Remove these files? [y/N]: "))) {
+      console.log("Aborted; nothing was removed.");
+      return;
+    }
+  } else {
+    console.log(formatCleanPlan(dataDir, targets, { mode: "remove", all }));
+  }
+  const failures = await applyClean(dataDir, targets);
+  for (const failure of failures) {
+    console.error(`Could not remove ${failure.target.path}: ${failure.error}`);
+  }
+  if (failures.length > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Removed ${targets.length} item${targets.length === 1 ? "" : "s"}. Run bitrix-mcp index-all (or init) to rebuild the index.`);
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -296,28 +391,43 @@ async function main(argv: string[]): Promise<void> {
   const paths = resolveRuntimePaths();
 
   if (command === "init") {
-    await initAndServe(parseInitOptions(values));
+    const { initAndServe } = await import("./init/init.js");
+    await initAndServe(await parseInitOptions(values));
     return;
   }
 
   if (command === "configure") {
-    await configureAgents(parseInitOptions(values));
+    const { configureAgents } = await import("./init/init.js");
+    await configureAgents(await parseInitOptions(values));
     return;
   }
 
   if (command === "uninstall") {
-    await runUninstall({ agents: parseAgentOption(values), allAgents: flag(values, "all-agents"), dryRun: flag(values, "dry-run") });
+    const { runUninstall } = await import("./init/uninstall.js");
+    await runUninstall({ agents: await parseAgentOption(values), allAgents: flag(values, "all-agents"), dryRun: flag(values, "dry-run") });
     return;
   }
 
   if (command === "config") {
-    const diagnostics = await collectConfigDiagnostics(paths);
-    console.log(flag(values, "json") ? JSON.stringify(diagnostics, null, 2) : formatConfigDiagnostics(diagnostics));
+    const { collectConfigDiagnostics, formatConfigDiagnostics } = await diagnostics();
+    const result = await collectConfigDiagnostics(paths);
+    console.log(flag(values, "json") ? JSON.stringify(result, null, 2) : formatConfigDiagnostics(result));
     return;
   }
 
   if (command === "serve") {
+    const { serveStdio } = await import("./mcp/server.js");
     await serveStdio(paths);
+    return;
+  }
+
+  if (command === "watch") {
+    await runWatch(paths, values);
+    return;
+  }
+
+  if (command === "clean") {
+    await runClean(paths.dataDir, values);
     return;
   }
 
@@ -326,6 +436,7 @@ async function main(argv: string[]): Promise<void> {
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
+    const { formatIndexAllResult, indexAll } = await actions();
     const result = await indexAll(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
       scope: "all",
@@ -344,6 +455,7 @@ async function main(argv: string[]): Promise<void> {
     if (bitrix.full) console.error("Warning: full Bitrix indexing may take a long time on large projects.");
     const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
+    const { formatIndexAllResult, indexCode } = await actions();
     const result = await indexCode(paths, { force, reporter, noBitrix: bitrix.noBitrix, bitrixModules: bitrix.modules, includeLang: bitrix.includeLang, includeInstall: bitrix.includeInstall });
     reporter.done({
       scope: "code",
@@ -359,6 +471,7 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-project") {
     const reporter = createProgressReporter(parseProgressOptions(values));
     const projectRoot = nodePath.resolve(arg ?? paths.workspaceRoot);
+    const { buildIndex, relativeBaseFor } = await indexer();
     const manifest = await buildIndex({ root: projectRoot, relativeTo: relativeBaseFor(paths.workspaceRoot, projectRoot), kind: "project", outFile: indexPath(paths.dataDir, "project"), force, reporter, includeLang: parseBitrixOptions(values).includeLang, retainSymbols: false });
     console.log(`Indexed ${manifest.files.length} project files into ${sqlitePath(paths.dataDir)}`);
     return;
@@ -366,6 +479,8 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "index-template") {
     const reporter = createProgressReporter(parseProgressOptions(values));
+    const { resolveTemplateIndexOptions } = await import("./indexer/template.js");
+    const { buildIndex } = await indexer();
     const options = resolveTemplateIndexOptions(paths, arg);
     const manifest = await buildIndex({ ...options, force, reporter, includeLang: parseBitrixOptions(values).includeLang, retainSymbols: false });
     console.log(`Indexed ${manifest.files.length} template files into ${sqlitePath(paths.dataDir)}`);
@@ -397,6 +512,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const reporter = createProgressReporter(parseProgressOptions(values));
+    const { buildIndex } = await indexer();
     const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, force, reporter, includeLang: bitrix.includeLang, retainSymbols: false });
     console.log(`Indexed ${manifest.files.length} Bitrix files into ${sqlitePath(paths.dataDir)}`);
     return;
@@ -404,12 +520,15 @@ async function main(argv: string[]): Promise<void> {
 
   if (command === "index-install") {
     const reporter = createProgressReporter(parseProgressOptions(values));
+    const { buildIndex } = await indexer();
+    const { installIndexOptions } = await actions();
     const manifest = await buildIndex({ ...installIndexOptions(paths, arg), force, reporter, includeLang: parseBitrixOptions(values).includeLang, retainSymbols: false });
     console.log(`Indexed ${manifest.files.length} install asset files into ${sqlitePath(paths.dataDir)}`);
     return;
   }
 
   if (command === "docs-add-git") {
+    const { addGitDocSource, OFFICIAL_DOCS_GIT_URL } = await import("./resources/docs.js");
     const source = await addGitDocSource(paths.dataDir, arg ?? OFFICIAL_DOCS_GIT_URL);
     console.log(`Registered Git documentation source ${source.uri} at ${source.checkoutPath ?? source.rootPath}`);
     return;
@@ -419,12 +538,14 @@ async function main(argv: string[]): Promise<void> {
     if (!arg) {
       throw new Error("docs-add-path requires a local documentation directory path.");
     }
+    const { addPathDocSource } = await import("./resources/docs.js");
     const source = await addPathDocSource(paths.dataDir, arg);
     console.log(`Registered local documentation source ${source.rootPath}`);
     return;
   }
 
   if (command === "docs-update") {
+    const { updateDocSources } = await import("./resources/docs.js");
     const sources = await updateDocSources(paths.dataDir);
     console.log(`Updated ${sources.length} Git documentation source${sources.length === 1 ? "" : "s"}.`);
     return;
@@ -433,17 +554,20 @@ async function main(argv: string[]): Promise<void> {
   if (command === "index-docs") {
     const reporter = createProgressReporter(parseProgressOptions(values));
     const startedAt = Date.now();
+    const { indexDocResourcesToSqlite } = await import("./resources/docs.js");
     reporter.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
     const chunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force });
     reporter.done({ scope: "docs", phase: "done", status: "done", elapsedMs: Date.now() - startedAt, docsChunks: chunks });
     console.log(`Indexed ${chunks} documentation chunks into ${sqlitePath(paths.dataDir)}`);
     if (embeddings) {
+      const { formatIndexEmbeddingsResult, indexEmbeddings } = await actions();
       console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));
     }
     return;
   }
 
   if (command === "index-embeddings") {
+    const { formatIndexEmbeddingsResult, indexEmbeddings } = await actions();
     console.log(formatIndexEmbeddingsResult(await indexEmbeddings(paths)));
     return;
   }
@@ -452,6 +576,8 @@ async function main(argv: string[]): Promise<void> {
     if (!arg) {
       throw new Error("search-modules requires a module name.");
     }
+    const { searchModuleUsages } = await import("./indexer/sqliteStore.js");
+    const { formatModuleUsageSearchResults } = await import("./mcp/format.js");
     const results = await searchModuleUsages(sqlitePath(paths.dataDir), { module: arg, limit: 50 }) ?? [];
     console.log(JSON.stringify(formatModuleUsageSearchResults(results), null, 2));
     return;
@@ -463,29 +589,34 @@ async function main(argv: string[]): Promise<void> {
     if (!nodeType || !nodeName) {
       throw new Error("graph-neighbors requires <type> <name>.");
     }
+    const { getGraphNeighbors } = await import("./indexer/graph.js");
     const result = await getGraphNeighbors(sqlitePath(paths.dataDir), { type: nodeType, name: nodeName }, parseGraphNeighborsOptions(values));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "impact-radius") {
+    const { getImpactRadiusForPaths } = await import("./indexer/graph.js");
     const result = await getImpactRadiusForPaths(paths, parseImpactRadiusOptions(values, positionals));
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (command === "status") {
+    const { formatIndexStatus, readIndexStatus } = await actions();
     console.log(formatIndexStatus(await readIndexStatus(paths)));
     return;
   }
 
   if (command === "detect-changes") {
+    const { detectChanges, formatDetectChangesText } = await import("./indexer/detectChanges.js");
     const result = await detectChanges(paths, parseDetectChangesOptions(values));
     console.log(flag(values, "json") ? JSON.stringify(result, null, 2) : formatDetectChangesText(result));
     return;
   }
 
   if (command === "benchmark") {
+    const { runBenchmark } = await import("./benchmark/report.js");
     const report = await runBenchmark({ force });
     console.log(`Benchmark report written to ${paths.dataDir}/benchmark.json and ${paths.dataDir}/benchmark.md`);
     console.log(JSON.stringify({ metrics: report.metrics, warnings: report.warnings }, null, 2));
@@ -493,6 +624,8 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "doctor") {
+    const { formatDoctor, hasDoctorErrors, runDoctor } = await actions();
+    const { collectConfigDiagnostics, formatConfigDiagnostics } = await diagnostics();
     const checks = await runDoctor(paths);
     if (flag(values, "json")) {
       const diagnostics = await collectConfigDiagnostics(paths);

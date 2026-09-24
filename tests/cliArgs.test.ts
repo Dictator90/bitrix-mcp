@@ -178,3 +178,19 @@ test("cli configure --yes reports the chosen agent and uninstall --dry-run/unins
   await assert.rejects(fs.access(path.join(cwd, ".cursor", "rules", "bitrix-mcp.mdc")));
   assert.deepEqual(await fs.readdir(home), []);
 });
+
+test("parseCli: watch, clean, and init/configure --dry-run options", () => {
+  const watch = commandOf(["watch", "--no-bitrix", "--docs", "--debounce", "250", "--json", "--modules=main"]);
+  assert.equal(watch.values["no-bitrix"], true);
+  assert.equal(watch.values.docs, true);
+  assert.equal(integerOption(watch.values, "debounce"), 250);
+  assert.equal(watch.values.modules, "main");
+  assert.throws(() => parseCli(["watch", "--dry-run"]), /Unknown option for "watch": --dry-run/);
+
+  const clean = commandOf(["clean", "--dry-run", "-y", "--all"]);
+  assert.deepEqual([clean.values["dry-run"], clean.values.yes, clean.values.all], [true, true, true]);
+  assert.throws(() => parseCli(["clean", "--force"]), UsageError);
+
+  assert.equal(commandOf(["configure", "--agent", "cursor", "--dry-run"]).values["dry-run"], true);
+  assert.equal(commandOf(["init", "--dry-run"]).values["dry-run"], true);
+});

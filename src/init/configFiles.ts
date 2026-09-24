@@ -1,8 +1,51 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { applyEdits, modify, parse, printParseErrorCode, type FormattingOptions, type JSONPath, type ParseError } from "jsonc-parser";
 
+/** A write that `withDryRun` recorded instead of performing. */
+export interface PlannedWrite {
+  filePath: string;
+  /** Content on disk before the first planned write (undefined: file does not exist). */
+  previous: string | undefined;
+  /** Content after every planned write to this file. */
+  next: string;
+  outcome: WriteOutcome;
+}
+
+const dryRunWrites = new AsyncLocalStorage<Map<string, PlannedWrite>>();
+
+/**
+ * Runs `task` with every config write (`writeTextIfChanged`, `saveJsonConfig`)
+ * recorded instead of performed. Reads inside the task see the planned
+ * content, so several edits to one file (MCP entry + hooks) combine exactly as
+ * a real run would. Returns the planned writes in first-write order.
+ */
+export async function withDryRun<T>(task: () => Promise<T>): Promise<{ result: T; writes: PlannedWrite[] }> {
+  const writes = new Map<string, PlannedWrite>();
+  const result = await dryRunWrites.run(writes, task);
+  return { result, writes: [...writes.values()] };
+}
+
+/** True while running inside `withDryRun`. */
+export function isDryRun(): boolean {
+  return dryRunWrites.getStore() !== undefined;
+}
+
+function planWrite(filePath: string, previous: string | undefined, next: string): WriteOutcome {
+  const writes = dryRunWrites.getStore() as Map<string, PlannedWrite>;
+  const key = path.resolve(filePath);
+  const original = writes.has(key) ? writes.get(key)?.previous : previous;
+  const outcome: WriteOutcome = original === next ? "unchanged" : original === undefined ? "created" : "updated";
+  writes.set(key, { filePath: key, previous: original, next, outcome });
+  return previous === next ? "unchanged" : outcome;
+}
+
 export async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
+  const planned = dryRunWrites.getStore()?.get(path.resolve(filePath));
+  if (planned) {
+    return planned.next;
+  }
   try {
     return await fs.readFile(filePath, "utf8");
   } catch (error) {
@@ -36,6 +79,9 @@ export function backupPath(filePath: string): string {
  */
 export async function writeTextIfChanged(filePath: string, next: string, options: WriteTextOptions = {}): Promise<WriteOutcome> {
   const previous = "previous" in options ? options.previous : await readTextFileIfExists(filePath);
+  if (isDryRun()) {
+    return planWrite(filePath, previous, next);
+  }
   if (previous === next) {
     return "unchanged";
   }
@@ -200,7 +246,7 @@ export function jsonConfigText(doc: JsonConfigDocument): string {
 
 export async function saveJsonConfig(doc: JsonConfigDocument): Promise<WriteOutcome> {
   if (doc.original !== undefined && doc.text === doc.original) {
-    return "unchanged";
+    return isDryRun() ? planWrite(doc.filePath, doc.original, doc.original) : "unchanged";
   }
   return writeTextIfChanged(doc.filePath, jsonConfigText(doc), { backup: true, previous: doc.original });
 }
