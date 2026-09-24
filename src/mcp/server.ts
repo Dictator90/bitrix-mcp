@@ -7,6 +7,7 @@ import { readPackageVersion } from "../config/version.js";
 import { resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
 import { searchInheritanceRelations, searchSymbolsForContext } from "../indexer/sqliteStore.js";
+import { ALLOW_SECRET_FILES_ENV, isSecretFile, secretFilesAllowed } from "../config/secrets.js";
 import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
@@ -151,11 +152,30 @@ async function assertFileInsideReadAllowlist(paths: RuntimePaths, requestedFile:
   }
 
   const workspaceRoot = realAllowedRoots[0] ?? allowedRoots[0];
-  const relativePath = isInsideWorkspace(workspaceRoot, realFilePath)
+  const relativePath = (isInsideWorkspace(workspaceRoot, realFilePath)
     ? path.relative(workspaceRoot, realFilePath)
-    : path.relative(matchingRoot, realFilePath);
+    : path.relative(matchingRoot, realFilePath)).replace(/\\/gu, "/");
+
+  if (!secretFilesAllowed() && isSecretFile(relativePath)) {
+    throw new Error(`MCP secret-file restriction: ${relativePath} may contain credentials or bulk data (DB settings, env/VCS/SSH files, keys, dumps, backups) and is not returned to the client. Set ${ALLOW_SECRET_FILES_ENV}=1 to allow it on a trusted machine.`);
+  }
 
   return { absolutePath: realFilePath, relativePath };
+}
+
+const MAX_CONTEXT_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Reads a text file for a context excerpt, refusing oversized and binary files instead of loading them whole. */
+async function readContextFile(absolutePath: string, relativePath: string): Promise<string> {
+  const stat = await fs.stat(absolutePath);
+  if (stat.size > MAX_CONTEXT_FILE_BYTES) {
+    throw new Error(`MCP file read refused: ${relativePath} is ${stat.size} bytes; context reads are limited to ${MAX_CONTEXT_FILE_BYTES} bytes.`);
+  }
+  const contents = await fs.readFile(absolutePath, "utf8");
+  if (contents.slice(0, 8192).includes("\u0000")) {
+    throw new Error(`MCP file read refused: ${relativePath} looks like a binary file.`);
+  }
+  return contents;
 }
 
 function buildFileContext(contents: string, absolutePath: string, relativePath: string, line: number, before: number, after: number, maxChars: number): FileContextResult {
@@ -242,7 +262,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     async ({ file, line, before, after, maxChars }) => {
       return withMcpToolGuard("bitrix_read_file_context", async () => {
         const { absolutePath, relativePath } = await assertFileInsideReadAllowlist(paths, file);
-        const contents = await fs.readFile(absolutePath, "utf8");
+        const contents = await readContextFile(absolutePath, relativePath);
         const context = buildFileContext(contents, absolutePath, relativePath, line, before, after, maxChars);
         return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
       });
@@ -290,7 +310,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
         const symbol = matches[0];
         const { absolutePath, relativePath } = await assertFileInsideReadAllowlist(paths, symbol.file);
-        const contents = await fs.readFile(absolutePath, "utf8");
+        const contents = await readContextFile(absolutePath, relativePath);
         const effectiveAfter = includeBody && symbol.lineEnd !== undefined && symbol.lineEnd >= symbol.line
           ? (symbol.lineEnd - symbol.line) + after
           : after;

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import ignore from "ignore";
+import { SECRET_FILE_PATTERNS } from "../config/secrets.js";
 import { sqlitePath } from "../config/paths.js";
 import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
@@ -90,7 +91,7 @@ function detectModule(relativePath: string): string | undefined {
 }
 
 async function loadIgnore(root: string, options: { useGitignore?: boolean; extraIgnores?: string[] } = {}) {
-  const ig = ignore().add([...DEFAULT_IGNORES, ...(options.extraIgnores ?? [])].map((entry) => entry.replace(/^\*\*\//, "")));
+  const ig = ignore().add(SECRET_FILE_PATTERNS).add([...DEFAULT_IGNORES, ...(options.extraIgnores ?? [])].map((entry) => entry.replace(/^\*\*\//, "")));
   const ignoreFiles = [
     options.useGitignore === false ? undefined : ".gitignore",
     ".bitrixmcpignore"
