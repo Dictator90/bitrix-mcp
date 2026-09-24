@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.8.0
+
+Storage and runtime release: no more "database is locked", faster indexing and searches, and partial re-indexing that no longer loses data. The index database is migrated automatically on first use, and every file is re-parsed once by the new parser version.
+
+### Fixed
+
+- **Searches no longer fail with "database is locked" during indexing.** Every search, and every node of a graph traversal, used to re-run the whole schema DDL plus a full FTS resync. That took a write lock and cost about 0.5 s per call on large indexes. Migrations now run once per database, tracked with `PRAGMA user_version`. Every connection waits up to 5 s for a concurrent writer (`busy_timeout`), and indexing writes in transactions of 250 files instead of one run-long transaction.
+- **Re-indexing part of a scope no longer deletes the rest.** Before, `bitrix_index_template({ templatePath: "local/templates/main" })` removed every other template from the index, and the same happened with a custom `bitrix_index_project` root. Pruning is now limited to the scanned directory. Paths stay workspace-relative, so component names still resolve.
+- **Upgrades re-parse stale files automatically.** Each file records the parser version that indexed it. Unchanged files from an older parser are re-parsed on the next run, instead of keeping stale symbols until `--force`.
+- **One bad file no longer aborts a run.** A file that disappears between discovery and parsing, or fails to parse, is reported as a `file_error` warning in `status`.
+- **Parallel index calls queue instead of colliding.** MCP index tools run one at a time; a waiting call can be cancelled.
+- **A crashed or exited worker fails the tool call immediately.** Before, it hung until the 10-minute timeout; this includes an OOM `SIGKILL` and a worker exiting with code 0.
+- `bitrix-mcp benchmark` re-indexes the Bitrix scope with the same module selection as `index-bitrix`, so it no longer prunes `bitrix/admin`, `tools` and `js` from your index.
+
+### Changed
+
+- **Method call sites are no longer symbols.**
+  - `Class::method()` and `$obj->method()` calls were stored as `static_call`/`method_call` symbols, each with the full source text of the call as its signature. That flooded `bitrix_liveapi_search` results and bloated the database.
+  - They now live in a lean `call_sites` table, with signatures capped at 160 characters. `bitrix_explain_api_usage` reads them for "local usages".
+  - `bitrix_liveapi_search` no longer returns `static_call`/`method_call` results.
+- **Faster indexing.**
+  - Runs with 200+ changed files parse in worker threads (`BITRIX_MCP_INDEX_WORKERS`, default CPUs − 1, at most 4), pipelined with the SQLite writes.
+  - On a synthetic 3000-file project, a full index went from 20.2 s to 11.9 s and the database from 283 MB to 217 MB.
+- **Faster searches.** MCP read/search tools run on a pool of long-lived worker threads (`BITRIX_MCP_WORKERS`, default 2). Before, every call started a new worker and reloaded every module (about 0.5–1 s); searches after the first now take a few milliseconds.
+- **Separate timeouts.** Read/search tools time out after 30 s (`BITRIX_MCP_TOOL_TIMEOUT_MS`). Index tools, `bitrix_tinker` and `bitrix_db_execute` keep 10 minutes (`BITRIX_MCP_HEAVY_TOOL_TIMEOUT_MS`).
+- The SQLite store implementation is split from the 3300-line `sqliteStore.ts` into `src/indexer/store/` modules; the public API is unchanged.
+
+### Added
+
+- **MCP cancellation is honoured.** A cancelled index or search stops its worker, and a queued index call is dropped.
+- **Index tools send `notifications/progress`** when the client passes a `progressToken`.
+- **`bitrix-mcp serve` shuts down cleanly.** It exits when stdin closes and stops running workers.
+- **The stdio protocol is protected.** Output a task prints to stdout is redirected to stderr, so it cannot corrupt the protocol stream.
+
 ## 0.7.0
 
 Security and robustness release. Some changes are **breaking** for scripts: see "CLI" below.

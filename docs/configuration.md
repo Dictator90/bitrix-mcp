@@ -20,6 +20,10 @@
 | `BITRIX_MCP_TINKER_ENV_PASSTHROUGH` | Comma-separated extra environment variables to pass to tinker's PHP process (it otherwise gets only PATH, HOME, locale, temp, PHP ini and Windows system variables). |
 | `BITRIX_MCP_CONFIRM_DANGEROUS` | Set `0` to skip the elicitation prompt that asks you to approve each `bitrix_tinker` / `bitrix_db_execute` call (only shown by clients that support elicitation). |
 | `BITRIX_MCP_ALLOW_SECRET_FILES` | Set `1` to let `bitrix_read_file_context` / `bitrix_read_symbol_context` return, and indexing include, credential and dump files (`.settings.php`, `dbconn.php`, `.env`, keys, SQL dumps, …). Off by default. |
+| `BITRIX_MCP_WORKERS` | Worker threads for MCP read/search tools (default 2, max 16). They stay loaded, so searches after the first take milliseconds. |
+| `BITRIX_MCP_INDEX_WORKERS` | Worker threads for parsing during indexing (default CPUs − 1, max 4; `1` parses in-process). Used when a run has 200+ changed files. |
+| `BITRIX_MCP_TOOL_TIMEOUT_MS` | Timeout for read/search tools (default 30000). If `BITRIX_MCP_HEAVY_TOOL_TIMEOUT_MS` is unset it also applies to heavy tools. |
+| `BITRIX_MCP_HEAVY_TOOL_TIMEOUT_MS` | Timeout for index tools, `bitrix_tinker` and `bitrix_db_execute` (default 600000). |
 | `BITRIX_MCP_HOME_DIR` | Override the home directory used for **global** client configs (Windsurf, Cline, Codex, Kilo Code) by `init`/`configure`/`uninstall`/`config`. Defaults to your OS home directory; useful for sandboxes and tests. |
 | `BITRIX_MCP_PHP_BIN` | Path to the PHP CLI binary used by `bitrix_tinker`. `init` auto-detects it (PATH, Herd, Laragon, XAMPP, OpenServer) and writes it into the config only when tinker is enabled; falls back to `php`. Should match the site's PHP version/extensions. |
 
