@@ -56,3 +56,34 @@ exports.unmount = function () {};
   assert.ok(symbols.some((symbol) => symbol.type === "export" && symbol.name === "unmount"));
   assert.ok(symbols.some((symbol) => symbol.type === "function" && symbol.name === "unmount"));
 });
+
+test("parseJsSymbols assigns modules to bitrix/js and non-install module paths", () => {
+  const source = "export class Widget {}\n";
+  assert.equal(parseJsSymbols(source, "/srv/site/bitrix/js/vendor.module/widget.js")[0]?.module, "vendor.module");
+  assert.equal(parseJsSymbols(source, String.raw`C:\site\bitrix\js\main\core\core.js`)[0]?.module, "main");
+  assert.equal(parseJsSymbols(source, "/srv/site/local/modules/vendor.module/assets/app.js")[0]?.module, "vendor.module");
+  assert.equal(parseJsSymbols(source, "/srv/site/local/templates/main/script.js")[0]?.module, undefined);
+});
+
+test("parseJsSymbols records class extends and legacy BX declarations", () => {
+  const symbols = parseJsSymbols(`
+BX.namespace('BX.Vendor');
+var ns = BX.namespace('BX.Vendor.Grid');
+BX.Vendor.Popup = function (params) { this.onClose = function () {}; };
+BX.Vendor.Popup.prototype.show = function () {};
+ns.Row = function () {};
+ns.Cell = class extends BX.Vendor.Base {};
+class Dialog extends BX.Main.Popup {}
+class Plain {}
+`, "/srv/site/bitrix/js/vendor.module/popup.js");
+
+  const byName = new Map(symbols.map((symbol) => [`${symbol.type}:${symbol.name}`, symbol]));
+  assert.ok(byName.has("function:BX.Vendor.Popup"));
+  assert.equal(byName.get("method:show")?.className, "BX.Vendor.Popup");
+  assert.ok(byName.has("function:BX.Vendor.Grid.Row"));
+  assert.equal(byName.get("class:BX.Vendor.Grid.Cell")?.extends, "BX.Vendor.Base");
+  assert.equal(byName.get("class:Dialog")?.extends, "BX.Main.Popup");
+  assert.equal(byName.get("class:Plain")?.extends, undefined);
+  assert.equal(symbols.some((symbol) => symbol.name.includes("onClose")), false);
+  assert.ok(symbols.every((symbol) => symbol.module === "vendor.module"));
+});
