@@ -24,37 +24,37 @@ export const MAX_ENTITY_LIMIT = 100;
  * entity are ignored and reported in `warnings`.
  */
 export const entitySearchShape = {
-  entity: z.enum(ENTITY_TYPES).describe("What to search. agent: CAgent registrations; mail_event: CEvent::Send/SendImmediate calls; component: IncludeComponent calls; module_usage: Loader::includeModule/CModule checks; iblock_usage / hlblock_usage: IBlock and Highloadblock API calls; option: Option::get/set reads and writes; orm_entity: D7 DataManager entities; orm_usage: ORM calls (getList/add/update/...); autoload: Composer autoload/dependency/bootstrap records; relation: raw graph edges; inheritance: classes that extend/implement/use a target."),
-  query: z.string().optional().describe("Free-text filter (substring). Used by agent, mail_event, component, iblock_usage, hlblock_usage, option, orm_entity, orm_usage, autoload; for inheritance it is an alias of target."),
-  module: z.string().optional().describe("Bitrix module id, e.g. iblock or vendor.module (agent, module_usage, option, orm_entity, relation, inheritance)."),
-  kind: z.union([entityKindSchema, z.array(entityKindSchema).min(1).max(5)]).optional().describe("Index kind: project, template, bitrix, install; relation also accepts autoload. relation takes a single kind."),
-  file: z.string().optional().describe("Indexed file path filter (agent, mail_event, component, module_usage, iblock_usage, hlblock_usage, option, orm_usage, relation)."),
-  eventName: z.string().optional().describe("mail_event: mail event type, e.g. SALE_NEW_ORDER."),
-  api: z.string().optional().describe("API call filter, e.g. CEvent::Send, CIBlockElement::GetList, HighloadBlockTable::getById, Option::get (mail_event, iblock_usage, hlblock_usage, option)."),
-  includeHandlers: z.boolean().optional().describe("mail_event: also return OnBeforeEventSend/OnBeforeEventAdd handlers."),
-  component: z.string().optional().describe("component: component name, e.g. bitrix:catalog.section."),
-  template: z.string().optional().describe("component: component template name, e.g. .default."),
-  call: z.string().optional().describe("module_usage: call, e.g. Loader::includeModule, CModule::IncludeModule, IsModuleInstalled."),
-  iblockId: z.string().optional().describe("iblock_usage: IBLOCK_ID value or constant name."),
-  hlblockId: z.string().optional().describe("hlblock_usage: HLBLOCK id or code."),
-  name: z.string().optional().describe("option: option name."),
-  operation: z.enum(["get", "set"]).optional().describe("option: get (read) or set (write)."),
-  className: z.string().optional().describe("orm_entity: DataManager class name."),
-  tableName: z.string().optional().describe("orm_entity: database table name."),
-  ormEntity: z.string().optional().describe("orm_usage: entity class, e.g. Vendor\\Module\\ProductTable."),
-  method: z.string().optional().describe("orm_usage: method, e.g. getList, add, update, delete, query."),
-  namespace: z.string().optional().describe("autoload: exact PSR-4 namespace prefix, e.g. Vendor\\Module\\."),
-  package: z.string().optional().describe("autoload: Composer package name, e.g. phpunit/phpunit."),
-  autoloadType: z.enum(["psr-4", "files", "classmap", "dependency", "dev_dependency", "bootstrap"]).optional().describe("autoload: record type: psr-4, files, classmap, dependency, dev_dependency, bootstrap."),
-  sourceType: z.string().optional().describe(`relation: source node type. ${NODE_TYPES_DESCRIPTION}`),
-  sourceName: z.string().optional().describe("relation: source node name, e.g. main:OnBeforeProlog or local/php_interface/init.php."),
-  targetType: z.string().optional().describe("relation: target node type (same values as sourceType)."),
-  targetName: z.string().optional().describe("relation: target node name."),
-  relationType: z.string().optional().describe(`relation: edge type. ${RELATION_TYPES_DESCRIPTION}`),
-  target: z.string().optional().describe("inheritance: parent class, interface or trait. A name with a backslash matches that exact FQN; a short name matches the last namespace segment. Case-insensitive."),
-  relation: z.enum(["extends", "implements", "uses_trait", "any"]).optional().describe("inheritance: extends, implements, uses_trait, or any (default)."),
-  transitive: z.boolean().optional().describe("inheritance: also return indirect descendants, breadth-first and cycle-safe; each result has depth."),
-  maxDepth: z.number().int().min(1).max(10).optional().describe("inheritance: transitive depth; default 5."),
+  entity: z.enum(ENTITY_TYPES).describe("agent: CAgent registrations; mail_event: CEvent::Send calls; component: IncludeComponent calls; module_usage: includeModule checks; iblock_usage/hlblock_usage: IBlock/Highloadblock API calls; option: Option get/set; orm_entity: DataManager entities; orm_usage: ORM calls; autoload: Composer/bootstrap records; relation: graph edges; inheritance: subclasses/implementors/trait users of target."),
+  query: z.string().optional().describe("Free-text substring filter; for inheritance an alias of target."),
+  module: z.string().optional().describe("Module id, e.g. iblock, vendor.module."),
+  kind: z.union([entityKindSchema, z.array(entityKindSchema).min(1).max(5)]).optional().describe("Index kind(s): project, template, bitrix, install; autoload (relation only, single kind)."),
+  file: z.string().optional().describe("Indexed file path."),
+  eventName: z.string().optional().describe("Mail event type, e.g. SALE_NEW_ORDER."),
+  api: z.string().optional().describe("API call, e.g. CEvent::Send, CIBlockElement::GetList, Option::get."),
+  includeHandlers: z.boolean().optional().describe("Also return OnBeforeEventSend/OnBeforeEventAdd handlers."),
+  component: z.string().optional().describe("Component name, e.g. bitrix:catalog.section."),
+  template: z.string().optional().describe("Component template, e.g. .default."),
+  call: z.string().optional().describe("Call, e.g. Loader::includeModule, CModule::IncludeModule."),
+  iblockId: z.string().optional().describe("IBLOCK_ID value or constant."),
+  hlblockId: z.string().optional().describe("Highloadblock id or code."),
+  name: z.string().optional().describe("Option name."),
+  operation: z.enum(["get", "set"]).optional().describe("Option read (get) or write (set)."),
+  className: z.string().optional().describe("DataManager class."),
+  tableName: z.string().optional().describe("Database table."),
+  ormEntity: z.string().optional().describe("ORM entity class, e.g. Vendor\\Module\\ProductTable."),
+  method: z.string().optional().describe("ORM method, e.g. getList, add, update, delete."),
+  namespace: z.string().optional().describe("Exact PSR-4 prefix, e.g. Vendor\\Module\\."),
+  package: z.string().optional().describe("Composer package, e.g. phpunit/phpunit."),
+  autoloadType: z.enum(["psr-4", "files", "classmap", "dependency", "dev_dependency", "bootstrap"]).optional().describe("Autoload record type."),
+  sourceType: z.string().optional().describe(NODE_TYPES_DESCRIPTION),
+  sourceName: z.string().optional().describe("Source node name, e.g. main:OnBeforeProlog."),
+  targetType: z.string().optional().describe("Target node type (same values as sourceType)."),
+  targetName: z.string().optional().describe("Target node name."),
+  relationType: z.string().optional().describe(RELATION_TYPES_DESCRIPTION),
+  target: z.string().optional().describe("Parent class, interface or trait; with a backslash an exact FQN, else the last name segment. Case-insensitive."),
+  relation: z.enum(["extends", "implements", "uses_trait", "any"]).optional().describe("Inheritance relation; default any."),
+  transitive: z.boolean().optional().describe("Include indirect descendants (breadth-first, cycle-safe, with depth)."),
+  maxDepth: z.number().int().min(1).max(10).optional().describe("Transitive depth; default 5."),
   limit: z.number().int().min(1).max(MAX_ENTITY_LIMIT).default(DEFAULT_ENTITY_LIMIT).describe(`Page size, 1-${MAX_ENTITY_LIMIT}; default ${DEFAULT_ENTITY_LIMIT}.`),
   cursor: cursorSchema,
   format: formatSchema
@@ -83,6 +83,11 @@ export const ENTITY_FILTERS: Record<EntityType, readonly FilterKey[]> = {
   relation: ["sourceType", "sourceName", "targetType", "targetName", "relationType", "module", "kind", "file"],
   inheritance: ["target", "query", "relation", "kind", "module", "transitive", "maxDepth"]
 };
+
+/** Compact "entity: filters" map for the tool description. */
+export function entityFiltersSummary(): string {
+  return ENTITY_TYPES.map((entity) => `${entity}(${ENTITY_FILTERS[entity].join(",")})`).join("; ");
+}
 
 function ignoredFilterWarnings(args: EntitySearchArgs): string[] {
   const allowed = new Set<string>(ENTITY_FILTERS[args.entity]);

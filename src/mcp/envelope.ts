@@ -27,17 +27,18 @@ export const MAX_PAGE_WINDOW = 500;
  */
 export const RANKED_MIN_FETCH = 40;
 
+/** Output schema of search/list tools; the fields are explained once in the server instructions. */
 export const resultEnvelopeShape = {
-  count: z.number().int().describe("Number of results in this page."),
-  total: z.number().int().optional().describe("Exact total, present only when the last page was reached."),
-  truncated: z.boolean().describe("True when more results exist than were returned (limit or pagination window hit)."),
-  nextCursor: z.string().optional().describe("Pass as `cursor` to fetch the next page."),
-  results: z.array(z.record(z.string(), z.unknown())).describe("Result rows; compact fields by default, raw records with format=full."),
-  entity: z.string().optional().describe("Entity searched (bitrix_entity_search only)."),
-  warnings: z.array(z.string()).optional().describe("Ignored filters or pagination notes.")
+  count: z.number().int(),
+  total: z.number().int().optional(),
+  truncated: z.boolean(),
+  nextCursor: z.string().optional(),
+  results: z.array(z.record(z.string(), z.unknown())),
+  entity: z.string().optional(),
+  warnings: z.array(z.string()).optional()
 };
 
-export const cursorSchema = z.string().max(200).optional().describe("Opaque cursor from a previous response's nextCursor; omit for the first page.");
+export const cursorSchema = z.string().max(200).optional().describe("nextCursor from the previous page.");
 
 export interface PageRequest {
   offset: number;

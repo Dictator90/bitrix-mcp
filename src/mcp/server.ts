@@ -16,8 +16,8 @@ import { closeWorkerPools, runWorkerTask, withMcpToolGuard, type McpToolGuardOpt
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { formatSemanticDocSearchResults } from "./format.js";
 import { cursorSchema, decodeCursor, jsonResult, resultEnvelopeShape, structuredResult } from "./envelope.js";
-import { entitySearchShape, type EntitySearchInput } from "./entitySearch.js";
-import { formatSchema, KIND_DESCRIPTION, NODE_TYPES_DESCRIPTION, RELATION_TYPES_DESCRIPTION, searchFormatShape, searchKindSchema } from "./schemas.js";
+import { entityFiltersSummary, entitySearchShape, type EntitySearchInput } from "./entitySearch.js";
+import { formatSchema, KIND_DESCRIPTION, NODE_TYPES_DESCRIPTION, RELATION_TYPES_DESCRIPTION, docFormatShape, searchKindSchema, symbolFormatShape } from "./schemas.js";
 import { indexToolShape, registerLegacyTools, type IndexToolArgs } from "./legacyTools.js";
 import { registerPrompts } from "./prompts.js";
 import type { SymbolRecord } from "../types.js";
@@ -228,8 +228,8 @@ function buildFileContext(contents: string, absolutePath: string, relativePath: 
 const symbolContextTypeSchema = z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant"]);
 const changedFileKindSchema = z.enum(["project", "template", "component", "bitrix", "install", "docs", "asset", "unknown"]);
 const changedFileKindFilterSchema = z.union([changedFileKindSchema, z.array(changedFileKindSchema).min(1).max(8)]);
-const graphDirectionSchema = z.enum(["out", "in", "both"]).optional().describe("Edge direction: out (outgoing edges), in (incoming edges), or both; default out.");
-const maxEdgesPerNodeSchema = z.number().int().min(1).max(1000).optional().describe("Maximum edges read per node and direction (hub protection); defaults to limit. Capped nodes are listed in truncatedNodes.");
+const graphDirectionSchema = z.enum(["out", "in", "both"]).optional().describe("out (default), in, or both.");
+const maxEdgesPerNodeSchema = z.number().int().min(1).max(1000).optional().describe("Hub cap: edges read per node and direction; default limit.");
 
 /** Environment switch that re-registers the pre-0.9 tool names as thin wrappers (one-release compatibility). */
 export const LEGACY_TOOLS_ENV = "BITRIX_MCP_LEGACY_TOOLS";
@@ -286,7 +286,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_index_status",
     {
       title: "Index status",
-      description: "Show the SQLite DB path and index counters (files, symbols, events, docs, relations) and the last index time per scope. Call first to check freshness.",
+      description: "SQLite DB path, index counters, and last index time per scope. Call first to check freshness.",
       inputSchema: {}
     },
     async (_args, extra) => withMcpToolGuard("bitrix_index_status", async () => jsonResult(await readIndexStatus(paths)), extra)
@@ -296,16 +296,16 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_project_overview",
     {
       title: "Project overview",
-      description: "Compact project overview: index status, counters, top modules/components/events/ORM/agents/mail events, autoload coverage, and warnings. Call before large tasks, after bitrix_index_status.",
+      description: "Project overview: index counters, top modules/components/events/ORM/agents/mail events, autoload coverage, warnings. Call after bitrix_index_status before large tasks.",
       inputSchema: {
-        includeTopFiles: z.boolean().optional().describe("Include files with the most symbols; default false."),
-        includeModules: z.boolean().optional().describe("Include top modules; default true."),
-        includeComponents: z.boolean().optional().describe("Include top components; default true."),
-        includeEvents: z.boolean().optional().describe("Include top events; default true."),
-        includeOrm: z.boolean().optional().describe("Include ORM entities; default true."),
-        includeAgents: z.boolean().optional().describe("Include agents; default true."),
-        includeMailEvents: z.boolean().optional().describe("Include mail events; default true."),
-        includeWarnings: z.boolean().optional().describe("Include index/autoload warnings; default true."),
+        includeTopFiles: z.boolean().optional().describe("Files with most symbols; default false."),
+        includeModules: z.boolean().optional().describe("Default true."),
+        includeComponents: z.boolean().optional().describe("Default true."),
+        includeEvents: z.boolean().optional().describe("Default true."),
+        includeOrm: z.boolean().optional().describe("Default true."),
+        includeAgents: z.boolean().optional().describe("Default true."),
+        includeMailEvents: z.boolean().optional().describe("Default true."),
+        includeWarnings: z.boolean().optional().describe("Default true."),
         format: formatSchema
       }
     },
@@ -316,7 +316,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_index",
     {
       title: "Build index",
-      description: "Index Bitrix sources into the local SQLite index. scope: project (workspace code), template (templates/components; templatePath narrows it), bitrix (core modules, needs the Bitrix root), install (module install/ assets), docs (registered documentation sources; may git clone/pull), all (project + template + bitrix + docs, plus install when includeInstall). Incremental: unchanged files are skipped. Long-running; reports progress.",
+      description: "Build the local SQLite index. scope: project (workspace code), template (templates/components), bitrix (core modules; needs the Bitrix root), install (module install/ assets), docs (doc sources; may git clone/pull), all (project+template+bitrix+docs, +install with includeInstall). Incremental; long-running; reports progress.",
       inputSchema: indexToolShape
     },
     async (args, extra) => runIndex("bitrix_index", args, extra)
@@ -326,16 +326,16 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_liveapi_search",
     {
       title: "Symbol search",
-      description: "Search indexed Bitrix and project symbols: classes, interfaces, traits, functions, methods, events, components, constants, mail events, JS exports. Exact and prefix name matches rank first, then full-text relevance. Paginated.",
+      description: "Search indexed symbols (classes, methods, functions, constants, events, components, JS exports) in project, templates and Bitrix core. Exact/prefix name matches rank first. Paginated.",
       inputSchema: {
         query: z.string().min(1).describe("Symbol name, Class::method, FQN, or free text."),
-        type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant", "mail_event"]).optional().describe("Symbol type: class, interface, trait, function, method, event, component, constant, mail_event."),
-        module: z.string().optional().describe("Bitrix module id, e.g. iblock, sale, main."),
+        type: z.enum(["class", "interface", "trait", "function", "method", "event", "component", "constant", "mail_event"]).optional().describe("Symbol type."),
+        module: z.string().optional().describe("Module id, e.g. iblock."),
         kind: searchKindSchema.optional().describe(KIND_DESCRIPTION),
-        preferLocal: z.boolean().optional().describe("Boost project/template matches over core/install matches of equal relevance; default true."),
+        preferLocal: z.boolean().optional().describe("Rank project/template first on ties; default true."),
         limit: z.number().int().min(1).max(100).default(20).describe("Page size, 1-100; default 20."),
         cursor: cursorSchema,
-        ...searchFormatShape
+        ...symbolFormatShape
       },
       outputSchema: resultEnvelopeShape
     },
@@ -346,15 +346,15 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_event_search",
     {
       title: "Event handler search",
-      description: "Search indexed Bitrix event handlers (AddEventHandler/registerEventHandler/EventManager) by event name (\"OnAfterIBlockElementAdd\" or \"iblock:OnAfterIBlockElementAdd\"), handler class, method, or function. Paginated.",
+      description: "Search indexed event handlers by event name (OnAfterIBlockElementAdd or iblock:OnAfterIBlockElementAdd), handler class, method, or function. Paginated.",
       inputSchema: {
-        query: z.string().min(1).describe("Event name, module:Event, or handler class/method/function."),
-        module: z.string().optional().describe("Event module id, e.g. main, iblock, sale."),
+        query: z.string().min(1).describe("Event name, module:Event, or handler."),
+        module: z.string().optional().describe("Event module id, e.g. main."),
         kind: searchKindSchema.optional().describe(KIND_DESCRIPTION),
-        preferLocal: z.boolean().optional().describe("Boost project/template handlers over core/install handlers; default true."),
+        preferLocal: z.boolean().optional().describe("Rank project/template first on ties; default true."),
         limit: z.number().int().min(1).max(100).default(20).describe("Page size, 1-100; default 20."),
         cursor: cursorSchema,
-        ...searchFormatShape
+        ...symbolFormatShape
       },
       outputSchema: resultEnvelopeShape
     },
@@ -365,7 +365,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_entity_search",
     {
       title: "Bitrix entity search",
-      description: "Search indexed Bitrix entities by type: agent, mail_event, component, module_usage, iblock_usage, hlblock_usage, option, orm_entity, orm_usage, autoload, relation (graph edges), inheritance (subclasses/implementors/trait users). Pick `entity`, then the filters listed for it; others are ignored and reported in warnings. Paginated.",
+      description: `Search indexed Bitrix entities. Set entity, then its filters (others are ignored with a warning): ${entityFiltersSummary()}. Paginated.`,
       inputSchema: entitySearchShape,
       outputSchema: resultEnvelopeShape
     },
@@ -376,12 +376,12 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_docs_search",
     {
       title: "Documentation search",
-      description: "Full-text search (SQLite FTS, English and Russian stemming) in indexed Bitrix Framework documentation; no embeddings service needed. Paginated.",
+      description: "Full-text search (English/Russian stemming) in indexed Bitrix documentation. Paginated.",
       inputSchema: {
         query: z.string().min(1).describe("Words or phrase to search for."),
         limit: z.number().int().min(1).max(50).default(5).describe("Page size, 1-50; default 5."),
         cursor: cursorSchema,
-        ...searchFormatShape
+        ...docFormatShape
       },
       outputSchema: resultEnvelopeShape
     },
@@ -392,9 +392,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_docs_for_symbol",
     {
       title: "Docs for symbol",
-      description: "Find indexed documentation chunks that mention a Bitrix API symbol such as CIBlockElement::GetList or Loader::includeModule. Paginated.",
+      description: "Documentation chunks that mention an API symbol such as CIBlockElement::GetList. Paginated.",
       inputSchema: {
-        symbol: z.string().min(1).describe("API symbol, e.g. CIBlockElement::GetList (case-insensitive exact match)."),
+        symbol: z.string().min(1).describe("API symbol, e.g. CIBlockElement::GetList."),
         limit: z.number().int().min(1).max(100).default(20).describe("Page size, 1-100; default 20."),
         cursor: cursorSchema,
         format: formatSchema
@@ -408,14 +408,14 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_explain_api_usage",
     {
       title: "Explain API usage",
-      description: "Explain a Bitrix API in one call: documentation links (or docs search), local call sites and symbols, Bitrix core definitions, related graph edges, and deterministic recommendations.",
+      description: "Explain a Bitrix API in one call: docs, local call sites, core definition, related graph edges, recommendations.",
       inputSchema: {
-        query: z.string().min(1).describe("API symbol, e.g. CIBlockElement::GetList, CEvent::Send, Loader::includeModule."),
-        kind: searchKindSchema.optional().describe(`${KIND_DESCRIPTION} Applies to local usages; default project, template, install.`),
-        includeDocs: z.boolean().optional().describe("Include documentation links/search results; default true."),
-        includeLocalUsages: z.boolean().optional().describe("Include indexed project/template/install usages; default true."),
-        includeCoreDefinition: z.boolean().optional().describe("Include indexed Bitrix core definitions; default true."),
-        limit: z.number().int().min(1).max(100).default(10).describe("Maximum items per section, 1-100; default 10."),
+        query: z.string().min(1).describe("API symbol, e.g. CIBlockElement::GetList."),
+        kind: searchKindSchema.optional().describe("Local-usage kind(s): project, template, bitrix, install; default all but bitrix."),
+        includeDocs: z.boolean().optional().describe("Default true."),
+        includeLocalUsages: z.boolean().optional().describe("Default true."),
+        includeCoreDefinition: z.boolean().optional().describe("Default true."),
+        limit: z.number().int().min(1).max(100).default(10).describe("Items per section; default 10."),
         format: formatSchema
       }
     },
@@ -426,13 +426,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_read_file_context",
     {
       title: "Read file context",
-      description: "Read a bounded excerpt of a file inside the workspace or data directory, with numbered lines and path/language metadata. Secret files (.settings.php, .env, keys, dumps) are refused.",
+      description: "Read numbered lines around a line of a workspace file. Secret files (.settings.php, .env, keys, dumps) are refused.",
       inputSchema: {
-        file: z.string().min(1).describe("Path to read. Relative paths are resolved from workspaceRoot; absolute paths are allowed only inside workspaceRoot or dataDir."),
-        line: z.number().int().min(1).describe("1-based target line number to center the context around."),
-        before: z.number().int().min(0).max(500).default(5).describe("Lines to include before the target line; default 5."),
-        after: z.number().int().min(0).max(500).default(20).describe("Lines to include after the target line; default 20."),
-        maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Maximum characters of numbered line text; default 12000.")
+        file: z.string().min(1).describe("Workspace-relative path (absolute only inside the workspace or data dir)."),
+        line: z.number().int().min(1).describe("1-based target line."),
+        before: z.number().int().min(0).max(500).default(5).describe("Default 5."),
+        after: z.number().int().min(0).max(500).default(20).describe("Default 20."),
+        maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Default 12000.")
       }
     },
     async ({ file, line, before, after, maxChars }, extra) => withMcpToolGuard("bitrix_read_file_context", async () => {
@@ -446,16 +446,16 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_read_symbol_context",
     {
       title: "Read symbol context",
-      description: "Read a bounded source excerpt for an indexed symbol by name, using its stored file and line. Returns candidates instead when the name is ambiguous.",
+      description: "Read the source of an indexed symbol by name. Returns candidates when ambiguous.",
       inputSchema: {
-        name: z.string().min(1).describe("Indexed symbol name: class, function, method, event, component, or constant."),
-        type: symbolContextTypeSchema.optional().describe("Symbol type: class, interface, trait, function, method, event, component, constant."),
+        name: z.string().min(1).describe("Symbol name."),
+        type: symbolContextTypeSchema.optional().describe("Symbol type."),
         kind: searchKindSchema.optional().describe(KIND_DESCRIPTION),
-        file: z.string().optional().describe("Indexed file path or relative file path to disambiguate."),
-        before: z.number().int().min(0).max(500).default(5).describe("Lines before the symbol line; default 5."),
-        after: z.number().int().min(0).max(500).default(20).describe("Lines after the symbol line (after the body with includeBody); default 20."),
-        includeBody: z.boolean().default(false).describe("Include the whole declaration body when lineEnd is indexed; default false."),
-        maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Maximum characters of numbered line text; default 12000."),
+        file: z.string().optional().describe("File path to disambiguate."),
+        before: z.number().int().min(0).max(500).default(5).describe("Default 5."),
+        after: z.number().int().min(0).max(500).default(20).describe("Default 20 (after the body with includeBody)."),
+        includeBody: z.boolean().default(false).describe("Whole declaration body; default false."),
+        maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Default 12000."),
         format: formatSchema
       }
     },
@@ -504,14 +504,14 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_component_context",
     {
       title: "Component context",
-      description: "For one component (e.g. bitrix:catalog.section): its IncludeComponent calls, resolved template files and assets, extracted params, and stored relations.",
+      description: "A component's IncludeComponent calls, template files, assets, params, and relations.",
       inputSchema: {
-        component: z.string().min(1).describe("Component name, e.g. bitrix:catalog.section."),
-        template: z.string().optional().describe("Component template; default .default."),
-        callFile: z.string().optional().describe("Restrict to calls in this file."),
-        includeFiles: z.boolean().optional().describe("Include resolved template files; default true."),
-        includeAssets: z.boolean().optional().describe("Include template script.js/style.css assets; default true."),
-        includeParams: z.boolean().optional().describe("Include extracted call params; default true."),
+        component: z.string().min(1).describe("e.g. bitrix:catalog.section."),
+        template: z.string().optional().describe("Default .default."),
+        callFile: z.string().optional().describe("Only calls in this file."),
+        includeFiles: z.boolean().optional().describe("Default true."),
+        includeAssets: z.boolean().optional().describe("Default true."),
+        includeParams: z.boolean().optional().describe("Default true."),
         format: formatSchema
       }
     },
@@ -522,11 +522,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_orm_entity_map",
     {
       title: "ORM entity map",
-      description: "Return indexed D7 ORM getMap() fields and references for an entity selected by class, table, or file.",
+      description: "D7 ORM getMap() fields and references of an entity by class, table, or file.",
       inputSchema: {
-        className: z.string().optional().describe("DataManager class, e.g. Vendor\\Module\\ProductTable."),
-        tableName: z.string().optional().describe("Database table, e.g. b_vendor_product."),
-        file: z.string().optional().describe("File that declares the entity."),
+        className: z.string().optional().describe("DataManager class."),
+        tableName: z.string().optional().describe("Database table."),
+        file: z.string().optional().describe("Declaring file."),
         format: formatSchema
       },
       outputSchema: resultEnvelopeShape
@@ -538,14 +538,14 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_graph_neighbors",
     {
       title: "Graph neighbors",
-      description: "Neighbors of a node in the Bitrix dependency graph (bitrix_relations): in/out/both directions, relation filter, bounded depth. Node ids are type:name, e.g. event main:OnBeforeProlog.",
+      description: "Neighbors of a node in the Bitrix dependency graph, e.g. nodeType event, nodeName main:OnBeforeProlog.",
       inputSchema: {
         nodeType: z.string().min(1).describe(NODE_TYPES_DESCRIPTION),
-        nodeName: z.string().min(1).describe("Node name, e.g. main:OnBeforeProlog, Vendor\\Module\\Handler::onProlog, local/php_interface/init.php."),
+        nodeName: z.string().min(1).describe("Node name, e.g. main:OnBeforeProlog."),
         direction: graphDirectionSchema,
         relationType: z.string().optional().describe(RELATION_TYPES_DESCRIPTION),
-        depth: z.number().int().min(1).max(5).optional().describe("Neighbor depth, 1-5; default 1."),
-        limit: z.number().int().min(1).max(1000).default(100).describe("Maximum nodes and edges, 1-1000; default 100."),
+        depth: z.number().int().min(1).max(5).optional().describe("Default 1."),
+        limit: z.number().int().min(1).max(1000).default(100).describe("Max nodes/edges; default 100."),
         maxEdgesPerNode: maxEdgesPerNodeSchema,
         format: formatSchema
       }
@@ -562,9 +562,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
         startType: z.string().min(1).describe(NODE_TYPES_DESCRIPTION),
         startName: z.string().min(1).describe("Start node name."),
         direction: graphDirectionSchema,
-        maxDepth: z.number().int().min(0).max(8).optional().describe("Traversal depth, 0-8; default 2."),
-        relationTypes: z.array(z.string().min(1)).max(25).optional().describe(`Follow only these edge types. ${RELATION_TYPES_DESCRIPTION}`),
-        limit: z.number().int().min(1).max(1000).default(100).describe("Maximum nodes and edges, 1-1000; default 100."),
+        maxDepth: z.number().int().min(0).max(8).optional().describe("Default 2."),
+        relationTypes: z.array(z.string().min(1)).max(25).optional().describe("Edge types to follow (see bitrix_graph_neighbors relationType)."),
+        limit: z.number().int().min(1).max(1000).default(100).describe("Max nodes/edges; default 100."),
         maxEdgesPerNode: maxEdgesPerNodeSchema,
         format: formatSchema
       }
@@ -576,15 +576,15 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_impact_radius",
     {
       title: "Impact radius",
-      description: "Impacted events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods for changed files (given, or git-changed since base), with optional risk score.",
+      description: "Bitrix entities (events, handlers, components, ORM, agents, modules, classes, ...) impacted by changed files (given, or git changes since base).",
       inputSchema: {
-        files: z.array(z.string().min(1)).max(1000).optional().describe("Workspace-relative changed files; default: git changes since base."),
-        base: z.string().optional().describe("Git base ref used when files are not given; default HEAD~1."),
-        maxDepth: z.number().int().min(0).max(8).optional().describe("Graph depth, 0-8; default 2."),
-        relationTypes: z.array(z.string().min(1)).max(25).optional().describe(`Follow only these edge types. ${RELATION_TYPES_DESCRIPTION}`),
-        includeChangedSymbols: z.boolean().optional().describe("Include the indexed symbols of the changed files."),
-        includeRisk: z.boolean().optional().describe("Include a weighted risk score."),
-        limit: z.number().int().min(1).max(1000).default(100).describe("Maximum nodes and edges, 1-1000; default 100."),
+        files: z.array(z.string().min(1)).max(1000).optional().describe("Changed files; default git changes since base."),
+        base: z.string().optional().describe("Git base ref; default HEAD~1."),
+        maxDepth: z.number().int().min(0).max(8).optional().describe("Default 2."),
+        relationTypes: z.array(z.string().min(1)).max(25).optional().describe("Edge types to follow (see bitrix_graph_neighbors relationType)."),
+        includeChangedSymbols: z.boolean().optional().describe("List symbols of changed files."),
+        includeRisk: z.boolean().optional().describe("Weighted risk score."),
+        limit: z.number().int().min(1).max(1000).default(100).describe("Max nodes/edges; default 100."),
         maxEdgesPerNode: maxEdgesPerNodeSchema,
         format: formatSchema
       }
@@ -596,19 +596,19 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_detect_changes",
     {
       title: "Detect changes",
-      description: "Analyze git-changed (including untracked and deleted) files against the index: symbol-level diff (added/removed/changed), deleted files, affected events, module usages, agents, mail events, components, ORM/IBlock/HLBlock/options, relations, graph impact, risk, and recommendations. Start code reviews here.",
+      description: "Git changes (incl. untracked/deleted) vs the index: symbol-level diff, affected Bitrix entities, relations, graph impact, risk, recommendations. Start code reviews here.",
       inputSchema: {
-        base: z.string().optional().describe("Git base ref for git diff <base> (working tree vs base) plus untracked files; default HEAD~1."),
+        base: z.string().optional().describe("Git base ref (working tree vs base); default HEAD~1."),
         kind: changedFileKindFilterSchema.optional().describe("Changed-file kinds: project, template, component, bitrix, install, docs, asset, unknown."),
-        includeSource: z.boolean().optional().describe("Include compact source signatures when available."),
-        includeRelations: z.boolean().optional().describe("Include related relation rows; default true."),
-        includeImpact: z.boolean().optional().describe("Include graph impact radius; default true."),
-        includeRisk: z.boolean().optional().describe("Include merged file/entity/graph risk; default true."),
-        symbolDiff: z.boolean().optional().describe("Include the symbol-level diff of changed PHP/JS/TS files; default true."),
-        diffBaseline: z.enum(["auto", "index", "git"]).optional().describe("Before state for the symbol diff: index (SQLite index), git (file at base), or auto (index when older than the working tree, else git; default)."),
-        maxDepth: z.number().int().min(0).max(8).optional().describe("Graph impact depth, 0-8; default 2."),
-        maxFiles: z.number().int().min(1).max(1000).optional().describe("Maximum changed files analyzed."),
-        maxItems: z.number().int().min(1).max(1000).optional().describe("Maximum items per result section."),
+        includeSource: z.boolean().optional().describe("Source signatures."),
+        includeRelations: z.boolean().optional().describe("Default true."),
+        includeImpact: z.boolean().optional().describe("Default true."),
+        includeRisk: z.boolean().optional().describe("Default true."),
+        symbolDiff: z.boolean().optional().describe("Default true."),
+        diffBaseline: z.enum(["auto", "index", "git"]).optional().describe("Symbol-diff baseline: index, git (file at base), or auto (default)."),
+        maxDepth: z.number().int().min(0).max(8).optional().describe("Default 2."),
+        maxFiles: z.number().int().min(1).max(1000).optional().describe("Max changed files."),
+        maxItems: z.number().int().min(1).max(1000).optional().describe("Max items per section."),
         format: formatSchema
       }
     },
@@ -626,13 +626,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
         inputSchema: {
           query: z.string().min(1).describe("Natural-language question or phrase."),
           limit: z.number().int().min(1).max(20).default(5).describe("Maximum results, 1-20; default 5."),
-          ...searchFormatShape
+          ...docFormatShape
         },
         outputSchema: resultEnvelopeShape
       },
-      async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }, extra) => withMcpToolGuard("bitrix_semantic_docs_search", async () => {
+      async ({ query, limit, maxTextChars, format }, extra) => withMcpToolGuard("bitrix_semantic_docs_search", async () => {
         const hits = await embeddings.search(query, limit + 1);
-        const results = formatSemanticDocSearchResults(hits.slice(0, limit), { query, includeSignature, maxSignatureChars, maxTextChars, format }) as Array<Record<string, unknown>>;
+        const results = formatSemanticDocSearchResults(hits.slice(0, limit), { query, maxTextChars, format }) as Array<Record<string, unknown>>;
         const truncated = hits.length > limit;
         return structuredResult({ count: results.length, ...(truncated ? {} : { total: results.length }), truncated, results });
       }, extra)

@@ -4,9 +4,9 @@ import { z } from "zod";
 export const INDEX_KINDS = ["project", "bitrix", "template", "install"] as const;
 export const indexKindSchema = z.enum(INDEX_KINDS);
 export const searchKindSchema = z.union([indexKindSchema, z.array(indexKindSchema).min(1).max(4)]);
-export const KIND_DESCRIPTION = "Restrict to one index kind or an array of kinds: project, template, bitrix (core), install (module install/ assets).";
+export const KIND_DESCRIPTION = "Index kind(s): project, template, bitrix, install.";
 
-export const formatSchema = z.enum(["compact", "full"]).optional().describe("compact (default) returns short fields; full returns raw indexed records.");
+export const formatSchema = z.enum(["compact", "full"]).optional().describe("compact (default) or full (raw records).");
 
 /** Graph node types stored in bitrix_relations (source_type/target_type). */
 export const GRAPH_NODE_TYPES = [
@@ -25,9 +25,15 @@ export const RELATION_TYPES = [
 export const NODE_TYPES_DESCRIPTION = `Node types: ${GRAPH_NODE_TYPES.join(", ")}. Classes, interfaces and traits are all "class".`;
 export const RELATION_TYPES_DESCRIPTION = `Relation types: ${RELATION_TYPES.join(", ")}.`;
 
-export const searchFormatShape = {
-  includeSignature: z.boolean().optional().describe("Include the compact signature field; default true."),
-  maxSignatureChars: z.number().int().min(20).max(2_000).optional().describe("Maximum characters for compact signatures; default 160."),
-  maxTextChars: z.number().int().min(80).max(10_000).optional().describe("Maximum characters for documentation excerpts in compact mode; default 500."),
+/** Output options of symbol/event searches. */
+export const symbolFormatShape = {
+  includeSignature: z.boolean().optional().describe("Include signatures; default true."),
+  maxSignatureChars: z.number().int().min(20).max(2_000).optional().describe("Signature length cap; default 160."),
+  format: formatSchema
+};
+
+/** Output options of documentation searches. */
+export const docFormatShape = {
+  maxTextChars: z.number().int().min(80).max(10_000).optional().describe("Excerpt length cap; default 500."),
   format: formatSchema
 };
