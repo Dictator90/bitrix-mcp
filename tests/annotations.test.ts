@@ -43,8 +43,8 @@ test("tools advertise read-only and destructive annotations", async () => {
     const byName = new Map(tools.map((tool) => [tool.name, tool.annotations]));
     assert.equal(byName.get("bitrix_liveapi_search")?.readOnlyHint, true);
     assert.equal(byName.get("bitrix_db_query")?.readOnlyHint, true);
-    assert.equal(byName.get("bitrix_index_all")?.readOnlyHint, false);
-    assert.equal(byName.get("bitrix_index_all")?.destructiveHint, false);
+    assert.equal(byName.get("bitrix_index")?.readOnlyHint, false);
+    assert.equal(byName.get("bitrix_index")?.destructiveHint, false);
     assert.equal(byName.get("bitrix_tinker")?.destructiveHint, true);
     assert.equal(byName.get("bitrix_db_execute")?.destructiveHint, true);
     assert.ok(tools.every((tool) => tool.annotations !== undefined));

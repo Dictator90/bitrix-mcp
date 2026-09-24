@@ -1,43 +1,43 @@
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
-import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
+import { formatIndexAllResult, indexAll, installIndexOptions } from "../indexer/actions.js";
+import { resolveBitrixIndex, validateBitrixModules } from "../indexer/bitrixModules.js";
 import { buildIndex, relativeBaseFor } from "../indexer/indexer.js";
-import { getComponentContext, searchCallSites, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchDocSymbolRefs, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { getComponentContext, searchCallSites, getOrmEntityMap, getProjectOverview, searchBitrixRelations, searchDocSymbolRefs, type ProjectOverviewOptions, type ComponentContextQuery, type OrmEntityMapQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
-import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type AutoloadSearchFormatOptions, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { formatComponentContextResult, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatOrmEntityResults, type OrmSearchFormatOptions, type SearchFormatOptions } from "./format.js";
+import { jsonResult, pageRequest, paginate, RANKED_MIN_FETCH, structuredResult, WHOLE_LIST } from "./envelope.js";
+import { runEntitySearch, type EntitySearchArgs } from "./entitySearch.js";
 import { readBitrixConnections, redactConnection, resolveConnection, withReadOnlyCredentials } from "../liveapi/settingsPhpParser.js";
 import { runQuery, getSchema } from "../db/mysqlClient.js";
 import { heavyToolTimeoutMs } from "./toolGuards.js";
 import { runTinker } from "../php/tinker.js";
 import type { ProgressReporter } from "../progress/types.js";
 
+/** Cursor-decoded page position carried by paginated search tasks. */
+interface PageQuery {
+  offset?: number;
+}
+
 export type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
   | { name: "indexTemplate"; paths: RuntimePaths; templatePath?: string; root?: string }
+  | { name: "indexBitrix"; paths: RuntimePaths; modules?: string[] }
+  | { name: "indexInstall"; paths: RuntimePaths }
   | { name: "indexAll"; paths: RuntimePaths; includeInstall?: boolean }
   | { name: "indexDocs"; paths: RuntimePaths }
-  | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
-  | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
-  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions }
-  | { name: "docsForSymbol"; paths: RuntimePaths; query: { symbol: string; limit?: number; format?: "compact" | "full" } }
+  | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions & PageQuery }
+  | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions & PageQuery }
+  | { name: "searchDocs"; paths: RuntimePaths; query: { query: string; limit?: number } & SearchFormatOptions & PageQuery }
+  | { name: "docsForSymbol"; paths: RuntimePaths; query: { symbol: string; limit?: number; format?: "compact" | "full" } & PageQuery }
   | { name: "explainApiUsage"; paths: RuntimePaths; query: { query: string; kind?: LiveApiQuery["kind"]; includeDocs?: boolean; includeLocalUsages?: boolean; includeCoreDefinition?: boolean; limit?: number; format?: "compact" | "full" } }
-  | { name: "searchBitrixRelations"; paths: RuntimePaths; query: BitrixRelationSearchQuery & RelationSearchFormatOptions }
-  | { name: "searchAutoloadRecords"; paths: RuntimePaths; query: AutoloadSearchQuery & AutoloadSearchFormatOptions }
+  | { name: "entitySearch"; paths: RuntimePaths; query: EntitySearchArgs }
   | { name: "projectOverview"; paths: RuntimePaths; query: Partial<ProjectOverviewOptions> }
-  | { name: "searchComponents"; paths: RuntimePaths; query: ComponentSearchQuery & { format?: "compact" | "full" } }
   | { name: "getComponentContext"; paths: RuntimePaths; query: ComponentContextQuery }
-  | { name: "searchAgents"; paths: RuntimePaths; query: AgentSearchQuery & { format?: "compact" | "full" } }
-  | { name: "searchMailEvents"; paths: RuntimePaths; query: MailEventSearchQuery & MailEventSearchFormatOptions }
-  | { name: "searchModuleUsages"; paths: RuntimePaths; query: ModuleUsageSearchQuery & ModuleUsageSearchFormatOptions }
-  | { name: "searchIblockUsages"; paths: RuntimePaths; query: IblockUsageSearchQuery & IblockUsageSearchFormatOptions }
-  | { name: "searchHlblockUsages"; paths: RuntimePaths; query: HlblockUsageSearchQuery & HlblockUsageSearchFormatOptions }
-  | { name: "searchOptionUsages"; paths: RuntimePaths; query: OptionSearchQuery & OptionSearchFormatOptions }
-  | { name: "searchOrmEntities"; paths: RuntimePaths; query: OrmSearchQuery & OrmSearchFormatOptions }
   | { name: "getOrmEntityMap"; paths: RuntimePaths; query: OrmEntityMapQuery & OrmSearchFormatOptions }
-  | { name: "searchOrmUsages"; paths: RuntimePaths; query: OrmUsageSearchQuery & OrmSearchFormatOptions }
   | { name: "detectChanges"; paths: RuntimePaths; query: DetectChangesOptions }
   | { name: "graphNeighbors"; paths: RuntimePaths; query: { nodeType: string; nodeName: string } & GraphNeighborsOptions }
   | { name: "graphTraverse"; paths: RuntimePaths; query: { startType: string; startName: string } & GraphTraverseOptions }
@@ -54,51 +54,86 @@ export interface WorkerTaskContext {
   reporter?: ProgressReporter;
 }
 
+/** searchDocSymbolRefs returns at most 100 rows per read. */
+const DOC_SYMBOL_REFS_WINDOW = 100;
+
+const NO_DB_CONNECTION = { error: "No matching DB connection found in bitrix/.settings.php." };
+
+function textResult(text: string): { content: Array<{ type: "text"; text: string }> } {
+  return { content: [{ type: "text", text }] };
+}
+
 export async function runTask(task: WorkerTask, context: WorkerTaskContext = {}): Promise<unknown> {
   const { reporter } = context;
   switch (task.name) {
     case "indexProject": {
       const root = task.root ?? task.paths.workspaceRoot;
       const manifest = await buildIndex({ root, relativeTo: relativeBaseFor(task.paths.workspaceRoot, root), kind: "project", outFile: indexPath(task.paths.dataDir, "project"), retainSymbols: false, reporter });
-      return { content: [{ type: "text", text: `Indexed ${manifest.files.length} project files.` }] };
+      return textResult(`Indexed ${manifest.files.length} project files.`);
     }
     case "indexTemplate": {
       const options = resolveTemplateIndexOptions(task.paths, task.templatePath ?? task.root);
       const manifest = await buildIndex({ ...options, retainSymbols: false, reporter });
-      return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
+      return textResult(`Indexed ${manifest.files.length} template files.`);
+    }
+    case "indexBitrix": {
+      const projectRoot = task.paths.bitrixRoot;
+      if (!projectRoot) {
+        throw new Error("Bitrix root not found. Run the server from a project containing ./bitrix or set BITRIX_ROOT.");
+      }
+      const modules = task.modules && task.modules.length > 0 ? task.modules : "all";
+      const warnings: string[] = [];
+      if (modules !== "all") {
+        const { found, missing } = await validateBitrixModules(projectRoot, modules);
+        if (found.length === 0) throw new Error(`None of the requested Bitrix modules were found under ${projectRoot}: ${modules.join(", ")}`);
+        warnings.push(...missing.map((name) => `Bitrix module "${name}" was requested but not found.`));
+      }
+      const resolved = resolveBitrixIndex({ modules });
+      const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(task.paths.dataDir, "bitrix"), patterns: resolved.patterns, ignores: resolved.ignores, retainSymbols: false, reporter });
+      return textResult([`Indexed ${manifest.files.length} Bitrix files.`, ...warnings].join("\n"));
+    }
+    case "indexInstall": {
+      const manifest = await buildIndex({ ...installIndexOptions(task.paths), retainSymbols: false, reporter });
+      return textResult(`Indexed ${manifest.files.length} install asset files.`);
     }
     case "indexAll": {
       const result = await indexAll(task.paths, { includeInstall: task.includeInstall, reporter });
-      return { content: [{ type: "text", text: formatIndexAllResult(result) }] };
+      return textResult(formatIndexAllResult(result));
     }
     case "indexDocs": {
       reporter?.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
       const chunks = await indexDocResourcesToSqlite(task.paths.dataDir, task.paths.docsPaths, { includeOfficialDocs: task.paths.officialDocsEnabled ?? false });
       reporter?.done({ scope: "docs", phase: "done", status: "done", docsChunks: chunks });
-      return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
+      return textResult(`Indexed ${chunks} documentation chunks.`);
     }
     case "searchLiveApi": {
-      const results = await searchLiveApi(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatLiveApiSearchResults(results, task.query), null, 2) }] };
+      const { offset, ...query } = task.query;
+      const page = pageRequest(query.limit ?? 20, offset, { minFetch: RANKED_MIN_FETCH });
+      const results = await searchLiveApi(sqlitePath(task.paths.dataDir), { ...query, limit: page.fetch });
+      return structuredResult(paginate(results, page, (rows) => formatLiveApiSearchResults(rows, query)));
     }
     case "searchEvents": {
-      const results = await searchSqliteEvents(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatEventSearchResults(results, task.query), null, 2) }] };
+      const { offset, ...query } = task.query;
+      const page = pageRequest(query.limit ?? 20, offset, { minFetch: RANKED_MIN_FETCH });
+      const results = await searchSqliteEvents(sqlitePath(task.paths.dataDir), { ...query, limit: page.fetch });
+      return structuredResult(paginate(results, page, (rows) => formatEventSearchResults(rows, query)));
     }
     case "searchDocs": {
-      const results = await searchSqliteDocs(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatDocSearchResults(results, task.query), null, 2) }] };
+      const { offset, ...query } = task.query;
+      const page = pageRequest(query.limit ?? 5, offset, { minFetch: RANKED_MIN_FETCH });
+      const results = await searchSqliteDocs(sqlitePath(task.paths.dataDir), { query: query.query, limit: page.fetch });
+      return structuredResult(paginate(results, page, (rows) => formatDocSearchResults(rows, query)));
     }
     case "docsForSymbol": {
-      const refs = await searchDocSymbolRefs(sqlitePath(task.paths.dataDir), task.query.symbol, task.query.limit ?? 20) ?? [];
-      const results = task.query.format === "full" ? refs : refs.map((ref) => ({
+      const page = pageRequest(task.query.limit ?? 20, task.query.offset, { window: DOC_SYMBOL_REFS_WINDOW });
+      const refs = await searchDocSymbolRefs(sqlitePath(task.paths.dataDir), task.query.symbol, page.fetch);
+      return structuredResult(paginate(refs, page, (rows) => task.query.format === "full" ? rows : rows.map((ref) => ({
         title: ref.title,
         uri: ref.docUri,
         path: ref.docPath,
         chunkIndex: ref.chunkIndex,
         excerpt: ref.excerpt
-      }));
-      return { content: [{ type: "text", text: JSON.stringify({ symbol: task.query.symbol, results }, null, 2) }] };
+      }))));
     }
     case "explainApiUsage": {
       const dbFile = sqlitePath(task.paths.dataDir);
@@ -130,117 +165,62 @@ export async function runTask(task: WorkerTask, context: WorkerTaskContext = {})
       const relationMap = new Map([...sourceRelations, ...targetRelations].map((relation) => [`${relation.sourceType}:${relation.sourceName}:${relation.relationType}:${relation.targetType}:${relation.targetName}:${relation.file}:${relation.line}`, relation]));
       const relations = [...relationMap.values()].slice(0, limit);
       const recommendations = apiUsageRecommendations(task.query.query);
-      return { content: [{ type: "text", text: JSON.stringify({ query: task.query.query, docs, localUsages, coreDefinitions, relations, recommendations }, null, 2) }] };
+      return jsonResult({ query: task.query.query, docs, localUsages, coreDefinitions, relations, recommendations });
     }
-    case "searchAgents": {
-      const results = await searchAgents(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatAgentSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchBitrixRelations": {
-      const results = await searchBitrixRelations(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatBitrixRelationSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchAutoloadRecords": {
-      const results = await searchAutoloadRecords(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatAutoloadSearchResults(results, task.query), null, 2) }] };
+    case "entitySearch": {
+      return structuredResult(await runEntitySearch(sqlitePath(task.paths.dataDir), task.query));
     }
     case "projectOverview": {
       const result = await getProjectOverview(sqlitePath(task.paths.dataDir), { workspaceRoot: task.paths.workspaceRoot, bitrixRoot: task.paths.bitrixRoot, sqlitePath: sqlitePath(task.paths.dataDir), ...task.query });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    }
-    case "searchComponents": {
-      const results = await searchComponents(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatComponentSearchResults(results, task.query), null, 2) }] };
+      return jsonResult(result);
     }
     case "getComponentContext": {
       const result = await getComponentContext(sqlitePath(task.paths.dataDir), task.query) ?? { component: task.query.component, template: task.query.template ?? ".default", calls: [], templateFiles: [], assets: [], parameters: [], relations: [] };
-      return { content: [{ type: "text", text: JSON.stringify(formatComponentContextResult(result, task.query), null, 2) }] };
-    }
-    case "searchMailEvents": {
-      const results = await searchMailEvents(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatMailEventSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchModuleUsages": {
-      const results = await searchModuleUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatModuleUsageSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchIblockUsages": {
-      const results = await searchIblockUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatIblockUsageSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchHlblockUsages": {
-      const results = await searchHlblockUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatHlblockUsageSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchOptionUsages": {
-      const results = await searchOptionUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatOptionSearchResults(results, task.query), null, 2) }] };
-    }
-    case "searchOrmEntities": {
-      const results = await searchOrmEntities(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatOrmEntityResults(results, task.query), null, 2) }] };
+      return jsonResult(formatComponentContextResult(result, task.query));
     }
     case "getOrmEntityMap": {
-      const results = await getOrmEntityMap(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatOrmEntityResults(results, task.query), null, 2) }] };
-    }
-    case "searchOrmUsages": {
-      const results = await searchOrmUsages(sqlitePath(task.paths.dataDir), task.query) ?? [];
-      return { content: [{ type: "text", text: JSON.stringify(formatOrmUsageResults(results, task.query), null, 2) }] };
+      const results = await getOrmEntityMap(sqlitePath(task.paths.dataDir), task.query);
+      return structuredResult(paginate(results, WHOLE_LIST, (rows) => formatOrmEntityResults(rows, task.query)));
     }
     case "detectChanges": {
-      const result = await detectChanges(task.paths, task.query);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(await detectChanges(task.paths, task.query));
     }
     case "graphNeighbors": {
-      const result = await getGraphNeighbors(sqlitePath(task.paths.dataDir), { type: task.query.nodeType, name: task.query.nodeName }, task.query);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(await getGraphNeighbors(sqlitePath(task.paths.dataDir), { type: task.query.nodeType, name: task.query.nodeName }, task.query));
     }
     case "graphTraverse": {
-      const result = await traverseGraph(sqlitePath(task.paths.dataDir), { type: task.query.startType, name: task.query.startName }, task.query);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(await traverseGraph(sqlitePath(task.paths.dataDir), { type: task.query.startType, name: task.query.startName }, task.query));
     }
     case "impactRadius": {
-      const result = await getImpactRadiusForPaths(task.paths, task.query);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(await getImpactRadiusForPaths(task.paths, task.query));
     }
     case "dbConnections": {
       const { connections, source, error } = await readBitrixConnections(task.paths);
-      const result = { connections: connections.map((connection) => redactConnection(connection, source)), source, ...(error ? { error } : {}) };
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult({ connections: connections.map((connection) => redactConnection(connection, source)), source, ...(error ? { error } : {}) });
     }
     case "dbSchema": {
       const conn = await resolveConnection(task.paths, task.query.connection);
-      if (!conn) {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
-      }
-      const schema = await getSchema(withReadOnlyCredentials(conn), { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit });
-      return { content: [{ type: "text", text: JSON.stringify(schema, null, 2) }] };
+      if (!conn) return jsonResult(NO_DB_CONNECTION, true);
+      return jsonResult(await getSchema(withReadOnlyCredentials(conn), { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit }));
     }
     case "dbQuery": {
       const conn = await resolveConnection(task.paths, task.query.connection);
-      if (!conn) {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
-      }
-      const result = await runQuery(withReadOnlyCredentials(conn), task.query.sql, { readOnly: true, rowLimit: task.query.limit });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      if (!conn) return jsonResult(NO_DB_CONNECTION, true);
+      return jsonResult(await runQuery(withReadOnlyCredentials(conn), task.query.sql, { readOnly: true, rowLimit: task.query.limit }));
     }
     case "dbExecute": {
       if (!task.paths.dbAllowWrite) {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, null, 2) }] };
+        return jsonResult({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, true);
       }
       const conn = await resolveConnection(task.paths, task.query.connection);
-      if (!conn) {
-        return { isError: true, content: [{ type: "text", text: JSON.stringify({ error: "No matching DB connection found in bitrix/.settings.php." }, null, 2) }] };
-      }
-      const result = await runQuery(conn, task.query.sql, { readOnly: false });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      if (!conn) return jsonResult(NO_DB_CONNECTION, true);
+      return jsonResult(await runQuery(conn, task.query.sql, { readOnly: false }));
     }
     case "tinker": {
       // Keep the PHP timeout below the worker's own timeout so PHP is killed (and temp files removed) before the worker is terminated.
       const maxTimeoutMs = Math.max(1000, heavyToolTimeoutMs() - 5000);
       const result = await runTinker(task.paths, task.query.code, { timeoutMs: Math.min(task.query.timeoutMs ?? 30_000, maxTimeoutMs) });
-      return { ...(result.ok ? {} : { isError: true }), content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      return jsonResult(result, !result.ok);
     }
   }
 }

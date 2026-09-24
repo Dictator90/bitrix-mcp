@@ -1,7 +1,7 @@
-import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 
-const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
 const INDEX: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 /**
@@ -10,6 +10,9 @@ const INDEX: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, id
  * or its database are marked destructive so clients ask before running them.
  */
 const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
+  // scope=docs (and all) may clone/pull documentation repositories.
+  bitrix_index: { ...INDEX, openWorldHint: true },
+  // Legacy names (BITRIX_MCP_LEGACY_TOOLS=1).
   bitrix_index_project: INDEX,
   bitrix_index_template: INDEX,
   bitrix_index_all: { ...INDEX, openWorldHint: true },
@@ -20,16 +23,6 @@ const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
 
 export function toolAnnotations(name: string): ToolAnnotations {
   return TOOL_ANNOTATIONS[name] ?? READ_ONLY;
-}
-
-/** Makes every tool registered on `server` through `server.tool(...)` carry {@link toolAnnotations}. */
-export function annotateRegisteredTools(server: McpServer): void {
-  const register = server.tool.bind(server) as (...args: unknown[]) => RegisteredTool;
-  server.tool = ((...args: unknown[]) => {
-    const registered = register(...args);
-    registered.update({ annotations: toolAnnotations(String(args[0])) });
-    return registered;
-  }) as McpServer["tool"];
 }
 
 export const CONFIRM_DANGEROUS_ENV = "BITRIX_MCP_CONFIRM_DANGEROUS";
