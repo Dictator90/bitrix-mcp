@@ -1,10 +1,7 @@
 import type { ComponentParamRecord, HlblockUsageRecord, IblockUsageRecord, IndexWarning, ModuleUsageRecord, OrmEntityRecord, OptionUsageRecord, OrmUsageRecord, SymbolRecord } from "../types.js";
+import { lineOf, normalizeAgentName, normalizeHlblockApi, normalizeIblockApi, normalizeOptionApi } from "./bitrixApis.js";
 import { parsePhpEvents } from "./eventParser.js";
-import { parsePhpSymbolsWithAst, parsePhpWithAst } from "./phpAstParser.js";
-
-function lineOf(source: string, index: number): number {
-  return source.slice(0, index).split(/\r?\n/).length;
-}
+import { parsePhpWithAst } from "./phpAstParser.js";
 
 function moduleFromPath(filePath: string): string | undefined {
   const normalized = filePath.replace(/\\/g, "/");
@@ -70,14 +67,6 @@ function unquotePhpString(value: string | undefined): string | undefined {
   if ((quote !== "'" && quote !== '"') || trimmed.at(-1) !== quote) return undefined;
   const inner = trimmed.slice(1, -1);
   return quote === "'" ? inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\") : inner.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-}
-
-function normalizeAgentName(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const callable = value.trim().replace(/\s*;\s*$/u, "").replace(/\s*\(\s*\)\s*$/u, "").trim();
-  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*::[A-Za-z_][A-Za-z0-9_]*$/u.test(callable)) return callable;
-  if (/^\\?[A-Za-z_][A-Za-z0-9_\\]*$/u.test(callable)) return callable;
-  return undefined;
 }
 
 function splitTopLevelArgs(argsSource: string): string[] {
@@ -265,10 +254,10 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
   const symbols: SymbolRecord[] = [];
   const module = moduleFromPath(filePath);
 
-  const classRegex = /\b(class|interface|trait)\s+([A-Za-z_][A-Za-z0-9_]*)/g;
+  const classRegex = /\b(class|interface|trait|enum(?=\s+[A-Za-z_][A-Za-z0-9_]*\s*[:{]|\s+[A-Za-z_][A-Za-z0-9_]*\s+implements\b))\s+([A-Za-z_][A-Za-z0-9_]*)/g;
   for (const match of source.matchAll(classRegex)) {
     symbols.push({
-      type: match[1] as "class" | "interface" | "trait",
+      type: match[1] as "class" | "interface" | "trait" | "enum",
       name: match[2],
       module,
       file: filePath,
@@ -352,17 +341,6 @@ function parsePhpSymbolsWithRegex(source: string, filePath: string): SymbolRecor
 
 
 
-const OPTION_API_REGEX_MAP = new Map<string, { api: string; operation: "get" | "set" }>([
-  ["option::get", { api: "Option::get", operation: "get" }],
-  ["option::set", { api: "Option::set", operation: "set" }],
-  ["bitrix\\main\\config\\option::get", { api: "Bitrix\\Main\\Config\\Option::get", operation: "get" }],
-  ["bitrix\\main\\config\\option::set", { api: "Bitrix\\Main\\Config\\Option::set", operation: "set" }],
-  ["coption::getoptionstring", { api: "COption::GetOptionString", operation: "get" }],
-  ["coption::setoptionstring", { api: "COption::SetOptionString", operation: "set" }],
-  ["coption::getoptionint", { api: "COption::GetOptionInt", operation: "get" }],
-  ["coption::setoptionint", { api: "COption::SetOptionInt", operation: "set" }]
-]);
-
 function parsePhpOptionUsagesWithRegex(source: string, filePath: string): OptionUsageRecord[] {
   const usages: OptionUsageRecord[] = [];
   const callRegex = new RegExp(String.raw`(?<![A-Za-z0-9_])((?:\\\\?Bitrix\\\\Main\\\\Config\\\\Option|Option|\\\\?COption))::([A-Za-z_][A-Za-z0-9_]*)\s*\(`, "g");
@@ -370,7 +348,7 @@ function parsePhpOptionUsagesWithRegex(source: string, filePath: string): Option
     const start = match.index ?? 0;
     if (match[1] === "Option" && source[start - 1] === "\\") continue;
     const className = match[1].replace(/^\\/u, "");
-    const config = OPTION_API_REGEX_MAP.get(`${className.toLowerCase()}::${match[2].toLowerCase()}`);
+    const config = normalizeOptionApi(className, match[2]);
     if (!config) continue;
     const openParenIndex = start + match[0].lastIndexOf("(");
     const end = findCallEnd(source, openParenIndex);
@@ -393,20 +371,6 @@ function parsePhpOptionUsagesWithRegex(source: string, filePath: string): Option
   return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
 }
 
-const IBLOCK_API_REGEX_MAP = new Map<string, string>([
-  ["ciblockelement::getlist", "CIBlockElement::GetList"],
-  ["ciblockelement::getbyid", "CIBlockElement::GetByID"],
-  ["ciblockelement::setpropertyvaluesex", "CIBlockElement::SetPropertyValuesEx"],
-  ["ciblockelement::add", "CIBlockElement::Add"],
-  ["ciblockelement::update", "CIBlockElement::Update"],
-  ["ciblocksection::getlist", "CIBlockSection::GetList"],
-  ["ciblocksection::add", "CIBlockSection::Add"],
-  ["ciblocksection::update", "CIBlockSection::Update"],
-  ["ciblockpropertyenum::getlist", "CIBlockPropertyEnum::GetList"],
-  ["bitrix\\iblock\\elementtable::getlist", "Bitrix\\Iblock\\ElementTable::getList"],
-  ["bitrix\\iblock\\sectiontable::getlist", "Bitrix\\Iblock\\SectionTable::getList"]
-]);
-
 function parseIblockIdFromArgs(argsSource: string): string {
   const pattern = /["']IBLOCK_ID["']\s*=>\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\$[A-Za-z_][A-Za-z0-9_]*|\\?[A-Za-z_][A-Za-z0-9_\\]*|-?\d+)/i;
   const match = argsSource.match(pattern);
@@ -421,8 +385,7 @@ function parsePhpIblockUsagesWithRegex(source: string, filePath: string): Iblock
   for (const match of source.matchAll(callRegex)) {
     const start = match.index ?? 0;
     const className = match[1].replace(/^\\/u, "");
-    const normalizedClass = className.includes("\\") ? className : className;
-    const api = IBLOCK_API_REGEX_MAP.get(`${normalizedClass.toLowerCase()}::${match[2].toLowerCase()}`);
+    const api = normalizeIblockApi(className, match[2]);
     if (!api) continue;
     const openParenIndex = start + match[0].lastIndexOf("(");
     const end = findCallEnd(source, openParenIndex);
@@ -439,15 +402,6 @@ function parsePhpIblockUsagesWithRegex(source: string, filePath: string): Iblock
   }
   return usages.sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
 }
-
-const HLBLOCK_API_REGEX_MAP = new Map<string, string>([
-  ["highloadblocktable::getlist", "HighloadBlockTable::getList"],
-  ["highloadblocktable::getbyid", "HighloadBlockTable::getById"],
-  ["highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"],
-  ["bitrix\\highloadblock\\highloadblocktable::getlist", "HighloadBlockTable::getList"],
-  ["bitrix\\highloadblock\\highloadblocktable::getbyid", "HighloadBlockTable::getById"],
-  ["bitrix\\highloadblock\\highloadblocktable::compileentity", "HighloadBlockTable::compileEntity"]
-]);
 
 function parseHlblockIdFromArgs(api: string, argsSource: string): string {
   if (api === "HighloadBlockTable::getById") {
@@ -472,7 +426,7 @@ function parsePhpHlblockUsagesWithRegex(source: string, filePath: string): Hlblo
   for (const match of source.matchAll(callRegex)) {
     const start = match.index ?? 0;
     const className = match[1].replace(/^\\/u, "");
-    const api = HLBLOCK_API_REGEX_MAP.get(`${className.toLowerCase()}::${match[2].toLowerCase()}`);
+    const api = normalizeHlblockApi(className, match[2]);
     if (!api) continue;
     const openParenIndex = start + match[0].lastIndexOf("(");
     const end = findCallEnd(source, openParenIndex);
@@ -505,24 +459,77 @@ export interface PhpParseResult {
   warnings: IndexWarning[];
 }
 
+function mergeOptionUsages(astUsages: OptionUsageRecord[], regexUsages: OptionUsageRecord[]): OptionUsageRecord[] {
+  const key = (usage: OptionUsageRecord): string => `${usage.file}:${usage.line}:${usage.module}:${usage.name}:${usage.api}`;
+  const astKeys = new Set(astUsages.map(key));
+  return [...astUsages, ...regexUsages.filter((usage) => !astKeys.has(key(usage)))].sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
+}
+
+const REGEX_DECLARATION_TYPES = new Set<SymbolRecord["type"]>(["class", "interface", "trait", "enum", "function"]);
+const REGEX_CALL_TYPES = new Set<SymbolRecord["type"]>(["event", "agent", "mail_event", "component"]);
+
+function shortName(name: string): string {
+  return (name.split("\\").at(-1) ?? name).toLowerCase();
+}
+
+/** Adds regex-found records the partial AST missed (code the error-recovering parser skipped). */
+function supplementPartialAst(source: string, filePath: string, symbols: SymbolRecord[]): SymbolRecord[] {
+  // The regex cannot reliably tell functions from methods, so an AST method also covers a regex "function".
+  const declarationKey = (symbol: SymbolRecord): string => `${symbol.type === "method" ? "function" : symbol.type}:${shortName(symbol.name)}`;
+  const declared = new Set(symbols.filter((symbol) => REGEX_DECLARATION_TYPES.has(symbol.type) || symbol.type === "method").map(declarationKey));
+  const calls = new Set(symbols.filter((symbol) => REGEX_CALL_TYPES.has(symbol.type)).map((symbol) => `${symbol.type}:${symbol.line}`));
+  const extra = parsePhpSymbolsWithRegex(source, filePath).filter((symbol) => {
+    if (REGEX_DECLARATION_TYPES.has(symbol.type)) return !declared.has(declarationKey(symbol));
+    if (REGEX_CALL_TYPES.has(symbol.type)) return !calls.has(`${symbol.type}:${symbol.line}`);
+    return false;
+  });
+  return extra.length ? [...symbols, ...extra] : symbols;
+}
+
+function supplementUsages<T extends { line: number; api: string }>(astUsages: T[], regexUsages: T[]): T[] {
+  const keys = new Set(astUsages.map((usage) => `${usage.line}:${usage.api}`));
+  return [...astUsages, ...regexUsages.filter((usage) => !keys.has(`${usage.line}:${usage.api}`))];
+}
+
+/**
+ * Parses PHP with the error-recovering AST parser. Syntax errors keep the partial AST (plus
+ * regex-found records it missed) and add a `recovered` warning; the regex-only fallback is used
+ * only when php-parser cannot build an AST at all.
+ */
 export function parsePhpSymbolsWithDiagnostics(source: string, filePath: string): PhpParseResult {
+  const moduleUsages = parsePhpModuleUsages(source, filePath);
+  const regexOptionUsages = parsePhpOptionUsagesWithRegex(source, filePath);
+  let astResult: ReturnType<typeof parsePhpWithAst>;
   try {
-    const astResult = parsePhpWithAst(source, filePath);
-    const regexOptionUsages = parsePhpOptionUsagesWithRegex(source, filePath);
-    const optionKeys = new Set(astResult.optionUsages.map((usage) => `${usage.file}:${usage.line}:${usage.module}:${usage.name}:${usage.api}`));
-    const optionUsages = [
-      ...astResult.optionUsages,
-      ...regexOptionUsages.filter((usage) => !optionKeys.has(`${usage.file}:${usage.line}:${usage.module}:${usage.name}:${usage.api}`))
-    ].sort((a, b) => a.line - b.line || a.api.localeCompare(b.api));
-    return { ...astResult, optionUsages, moduleUsages: parsePhpModuleUsages(source, filePath), warnings: [] };
+    astResult = parsePhpWithAst(source, filePath);
   } catch (error) {
     const warning: IndexWarning = {
       type: "php_parse_fallback",
       file: filePath,
       message: errorMessage(error)
     };
-    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages: parsePhpModuleUsages(source, filePath), ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), hlblockUsages: parsePhpHlblockUsagesWithRegex(source, filePath), optionUsages: parsePhpOptionUsagesWithRegex(source, filePath), warnings: [warning] };
+    return { symbols: parsePhpSymbolsWithRegex(source, filePath), moduleUsages, ormEntities: [], ormUsages: [], iblockUsages: parsePhpIblockUsagesWithRegex(source, filePath), hlblockUsages: parsePhpHlblockUsagesWithRegex(source, filePath), optionUsages: regexOptionUsages, warnings: [warning] };
   }
+
+  const { errors, ...result } = astResult;
+  const optionUsages = mergeOptionUsages(result.optionUsages, regexOptionUsages);
+  if (!errors.length) return { ...result, optionUsages, moduleUsages, warnings: [] };
+
+  const warning: IndexWarning = {
+    type: "php_parse_fallback",
+    file: filePath,
+    message: `Recovered partial AST after ${errors.length} parse error${errors.length === 1 ? "" : "s"}: ${errors[0]}`,
+    recovered: true
+  };
+  return {
+    ...result,
+    symbols: supplementPartialAst(source, filePath, result.symbols),
+    iblockUsages: supplementUsages(result.iblockUsages, parsePhpIblockUsagesWithRegex(source, filePath)),
+    hlblockUsages: supplementUsages(result.hlblockUsages, parsePhpHlblockUsagesWithRegex(source, filePath)),
+    optionUsages,
+    moduleUsages,
+    warnings: [warning]
+  };
 }
 
 export function parsePhpSymbols(source: string, filePath: string): SymbolRecord[] {
