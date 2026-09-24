@@ -4,8 +4,8 @@ import fg from "fast-glob";
 import ignore from "ignore";
 import { SECRET_FILE_PATTERNS } from "../config/secrets.js";
 import { sqlitePath } from "../config/paths.js";
-import { parseJsSymbols } from "../liveapi/jsParser.js";
-import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
+import { parseFile } from "./parseFile.js";
+import { indexWorkerCount, ParsePool } from "./parsePool.js";
 import { detectLanguage } from "./language.js";
 import { readIndexFromSqlite, SqliteIndexWriter } from "./sqliteStore.js";
 import { indexAutoloadMetadata } from "./autoload.js";
@@ -101,6 +101,8 @@ export function relativeBaseFor(workspaceRoot: string, root: string): string {
 
 /** Files parsed between SQLite write transactions. */
 const WRITE_BATCH_SIZE = 250;
+/** Below this many changed files, parsing in-process is faster than starting worker threads. */
+const PARALLEL_PARSE_MIN_FILES = 200;
 
 // Bitrix i18n message files live in `lang/` directories across modules,
 // components and templates. They are huge and rarely useful for code search,
@@ -230,59 +232,83 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     writer.writeFiles(batch);
     batch = [];
   };
+  let pool: ParsePool | undefined;
 
   try {
     reporter.start({ scope, phase: "parse", status: "start", message: "Parse files", total, startedAt: Date.now() });
     let processed = 0;
-    for (const scanRelativePath of queued) {
+    const progress = (relativePath: string) => {
       processed += 1;
+      reporter.update({ scope, phase: "parse", status: "progress", current: processed, total, file: relativePath, module: detectModule(relativePath) });
+    };
+
+    // Pass 1: stat every file and keep unchanged ones out of the parser.
+    const toParse: IndexFile[] = [];
+    for (const scanRelativePath of queued) {
       const absolutePath = path.join(root, scanRelativePath);
       const relativePath = baseRoot === root ? scanRelativePath : path.relative(baseRoot, absolutePath).replace(/\\/gu, "/");
-      reporter.update({ scope, phase: "parse", status: "progress", current: processed, total, file: relativePath, module: detectModule(relativePath) });
-
       let stat: Awaited<ReturnType<typeof fs.stat>>;
       try {
         stat = await fs.stat(absolutePath);
       } catch (error) {
         // Removed between discovery and parsing: leave it out; the next run prunes it.
         warnings.push({ type: "file_error", file: absolutePath, message: `Skipped: ${(error as Error).message}` });
+        progress(relativePath);
         continue;
       }
-      const language = detectLanguage(absolutePath);
-      const unchanged = writer.isUnchanged(absolutePath, stat.size, stat.mtimeMs);
-      const indexFile: IndexFile = { path: absolutePath, relativePath, kind: options.kind, size: stat.size, mtimeMs: stat.mtimeMs, language, symbols: [] };
-      if (unchanged) {
+      const indexFile: IndexFile = { path: absolutePath, relativePath, kind: options.kind, size: stat.size, mtimeMs: stat.mtimeMs, language: detectLanguage(absolutePath), symbols: [] };
+      if (writer.isUnchanged(absolutePath, stat.size, stat.mtimeMs)) {
         skippedFiles += 1;
         files.push(indexFile);
-        continue;
+        progress(relativePath);
+      } else {
+        toParse.push(indexFile);
       }
+    }
 
-      try {
-        const parsed = await parseFile(absolutePath, language);
-        warnings.push(...parsed.warnings);
-        if (debugParse) {
-          for (const warning of parsed.warnings) {
-            console.warn(`[bitrix-mcp] PHP parse fallback: ${warning.file}: ${warning.message}`);
+    // Pass 2: parse changed files (in worker threads for large runs) and write them in batches.
+    const workers = indexWorkerCount();
+    pool = workers > 1 && toParse.length >= PARALLEL_PARSE_MIN_FILES ? new ParsePool(workers) : undefined;
+    const parse = (file: IndexFile) => (pool ? pool.parse(file.path, file.language) : parseFile(file.path, file.language));
+    const window = pool ? workers * 8 : 1;
+    const parseWindow = (offset: number) => {
+      const slice = toParse.slice(offset, offset + window);
+      return Promise.all(slice.map((file) => parse(file).then((parsed) => ({ parsed }), (error: unknown) => ({ error: error as Error })))).then((results) => ({ slice, results }));
+    };
+    // Pipeline: the next window parses in the workers while this one is written to SQLite.
+    let pending = toParse.length > 0 ? parseWindow(0) : undefined;
+    for (let offset = 0; pending; offset += window) {
+      const { slice, results } = await pending;
+      pending = offset + window < toParse.length ? parseWindow(offset + window) : undefined;
+      slice.forEach((indexFile, index) => {
+        const outcome = results[index];
+        if ("error" in outcome) {
+          // One unreadable or unparsable file must not abort the whole run: index it without symbols.
+          warnings.push({ type: "file_error", file: indexFile.path, message: `Parse failed: ${outcome.error.message}` });
+        } else {
+          const { parsed } = outcome;
+          warnings.push(...parsed.warnings);
+          if (debugParse) {
+            for (const warning of parsed.warnings) {
+              console.warn(`[bitrix-mcp] PHP parse fallback: ${warning.file}: ${warning.message}`);
+            }
           }
+          const withContext = <T extends object>(records: T[]) => records.map((record) => ({ ...record, kind: options.kind, relativeFile: indexFile.relativePath }));
+          indexFile.symbols = parsed.symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? indexFile.language }));
+          indexFile.moduleUsages = withContext(parsed.moduleUsages);
+          indexFile.ormEntities = withContext(parsed.ormEntities);
+          indexFile.ormUsages = withContext(parsed.ormUsages);
+          indexFile.iblockUsages = withContext(parsed.iblockUsages);
+          indexFile.hlblockUsages = withContext(parsed.hlblockUsages);
+          indexFile.optionUsages = withContext(parsed.optionUsages);
+          symbolCount += parsed.symbols.length;
+          relationCount += parsed.moduleUsages.length + parsed.ormUsages.length + parsed.iblockUsages.length + parsed.hlblockUsages.length + parsed.optionUsages.length + parsed.ormEntities.length;
         }
-        const withContext = <T extends object>(records: T[]) => records.map((record) => ({ ...record, kind: options.kind, relativeFile: relativePath }));
-        indexFile.symbols = parsed.symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? language }));
-        indexFile.moduleUsages = withContext(parsed.moduleUsages);
-        indexFile.ormEntities = withContext(parsed.ormEntities);
-        indexFile.ormUsages = withContext(parsed.ormUsages);
-        indexFile.iblockUsages = withContext(parsed.iblockUsages);
-        indexFile.hlblockUsages = withContext(parsed.hlblockUsages);
-        indexFile.optionUsages = withContext(parsed.optionUsages);
-        symbolCount += parsed.symbols.length;
-        relationCount += parsed.moduleUsages.length + parsed.ormUsages.length + parsed.iblockUsages.length + parsed.hlblockUsages.length + parsed.optionUsages.length + parsed.ormEntities.length;
-      } catch (error) {
-        // One unreadable or unparsable file must not abort the whole run: index it without symbols.
-        warnings.push({ type: "file_error", file: absolutePath, message: `Parse failed: ${(error as Error).message}` });
-      }
-
-      batch.push(indexFile);
-      files.push(retainSymbols ? indexFile : { ...indexFile, symbols: [], moduleUsages: undefined, ormEntities: undefined, ormUsages: undefined, iblockUsages: undefined, hlblockUsages: undefined, optionUsages: undefined });
-      if (batch.length >= WRITE_BATCH_SIZE) flush();
+        progress(indexFile.relativePath);
+        batch.push(indexFile);
+        files.push(retainSymbols ? indexFile : { ...indexFile, symbols: [], moduleUsages: undefined, ormEntities: undefined, ormUsages: undefined, iblockUsages: undefined, hlblockUsages: undefined, optionUsages: undefined });
+        if (batch.length >= WRITE_BATCH_SIZE) flush();
+      });
     }
     reporter.done({ scope, phase: "parse", status: "done", symbols: symbolCount, relations: relationCount });
 
@@ -291,6 +317,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     writer.finish({ files: files.length, warnings });
     reporter.done({ scope, phase: "write", status: "done" });
   } finally {
+    await pool?.close();
     writer.close();
   }
 
@@ -320,29 +347,6 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
   // index from SQLite). Unchanged files carry no symbols; they stay fully indexed
   // in SQLite either way.
   return manifest;
-}
-
-interface ParsedFile {
-  symbols: SymbolRecord[];
-  moduleUsages: ModuleUsageRecord[];
-  ormEntities: OrmEntityRecord[];
-  ormUsages: OrmUsageRecord[];
-  iblockUsages: IblockUsageRecord[];
-  hlblockUsages: HlblockUsageRecord[];
-  optionUsages: OptionUsageRecord[];
-  warnings: IndexWarning[];
-}
-
-async function parseFile(absolutePath: string, language: string): Promise<ParsedFile> {
-  const empty: ParsedFile = { symbols: [], moduleUsages: [], ormEntities: [], ormUsages: [], iblockUsages: [], hlblockUsages: [], optionUsages: [], warnings: [] };
-  if (language === "php") {
-    const result = parsePhpSymbolsWithDiagnostics(await fs.readFile(absolutePath, "utf8"), absolutePath);
-    return { ...empty, ...result, warnings: result.warnings };
-  }
-  if (language === "javascript" || language === "typescript") {
-    return { ...empty, symbols: parseJsSymbols(await fs.readFile(absolutePath, "utf8"), absolutePath) };
-  }
-  return empty;
 }
 
 export async function readIndex(indexFile: string, kind?: IndexKind): Promise<IndexManifest | undefined> {
