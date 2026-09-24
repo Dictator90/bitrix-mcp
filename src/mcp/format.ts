@@ -413,3 +413,22 @@ export function formatAutoloadSearchResults(results: AutoloadRecord[] | undefine
     sourceFile: record.sourceFile
   }));
 }
+
+export interface InheritanceSearchFormatOptions { format?: "compact" | "full"; }
+
+export function formatInheritanceResults(results: BitrixRelationRecord[] | undefined, options: InheritanceSearchFormatOptions = {}): unknown[] | undefined {
+  if (options.format === "full") return results;
+  return results?.map((relation) => compactObject({
+    className: relation.sourceName,
+    relation: relation.relationType,
+    targetType: relation.targetType,
+    targetName: relation.targetName,
+    targetKind: relation.metadata?.targetKind,
+    depth: relation.metadata?.depth,
+    module: relation.module,
+    kind: relation.kind,
+    file: relation.file,
+    line: relation.line,
+    signature: relation.signature
+  }));
+}

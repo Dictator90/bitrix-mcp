@@ -105,20 +105,22 @@ BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all
 
 Считайте непустые результаты MCP авторитетными для символов проекта, API фреймворка, обработчиков событий, ORM-сущностей и документации. Переходите к ручному `grep`/чтению файлов только если MCP ничего не вернул, сообщил об устаревшем индексе или вы сами просите ручную проверку. Это экономит токены и предотвращает галлюцинации по неполным просмотрам файлов. (`init` сам прописывает эту инструкцию в файл правил каждого клиента.)
 
-Рекомендуемый порядок: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` → `bitrix_read_file_context` / `bitrix_read_symbol_context`.
+Рекомендуемый порядок: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_event_search` / `bitrix_entity_search` / `bitrix_docs_search` → `bitrix_read_file_context` / `bitrix_read_symbol_context`. Сервер также передаёт этот порядок клиентам в MCP `instructions`.
 
 ## MCP-инструменты
 
 Обзор по группам (полная справка с параметрами и примерами — в **[docs/tools.md](./docs/tools.md)**):
 
-- **Индекс / статус** — `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status`
-- **Поиск символов и LiveAPI** — `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`
-- **Контекст исходников** — `bitrix_read_file_context`, `bitrix_read_symbol_context`
-- **Компоненты и ORM** — `bitrix_component_search`, `bitrix_component_context`, `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`
-- **Инфоблоки / HL-блоки / опции / агенты / почта** — `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`, `bitrix_agent_search`, `bitrix_mail_event_search`
-- **Граф и влияние** — `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`, `bitrix_detect_changes`
+- **Индекс / статус** — `bitrix_index` (`scope`: `project`, `template`, `bitrix`, `install`, `docs`, `all`), `bitrix_index_status`, `bitrix_project_overview`
+- **Поиск** — `bitrix_liveapi_search` (символы), `bitrix_event_search` (обработчики событий), `bitrix_entity_search` (`entity`: `agent`, `mail_event`, `component`, `module_usage`, `iblock_usage`, `hlblock_usage`, `option`, `orm_entity`, `orm_usage`, `autoload`, `relation`, `inheritance`)
+- **Контекст исходников** — `bitrix_read_file_context`, `bitrix_read_symbol_context`, `bitrix_component_context`, `bitrix_orm_entity_map`
+- **Граф и влияние** — `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`, `bitrix_detect_changes`
 - **Документация** — `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage` и опциональный `bitrix_semantic_docs_search`
-- **Обзор / автозагрузка** — `bitrix_project_overview`, `bitrix_autoload_search`
+- **Опциональный рантайм** — `bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`, `bitrix_db_execute`, `bitrix_tinker` (см. ниже)
+
+По умолчанию 17 инструментов. Поисковые инструменты возвращают `{ count, total?, truncated, nextCursor?, results }` (и как `structuredContent`); следующую страницу запрашивай, передав `nextCursor` в `cursor`. У каждого инструмента есть MCP-аннотации (только чтение / опасный). Сервер также предлагает три промпта — `review-changes`, `explain-api`, `trace-event` — с автодополнением аргументов из индекса.
+
+**Несовместимое изменение:** поисковые инструменты по сущностям (`bitrix_agent_search`, `bitrix_orm_search`, `bitrix_relation_search` и др.) и `bitrix_index_project` / `_template` / `_all` / `_docs` объединены в `bitrix_entity_search` и `bitrix_index`, а результаты поиска теперь конверт, а не массив. Чтобы сохранить старые имена на один релиз, задай `BITRIX_MCP_LEGACY_TOOLS=1` — см. [docs/tools.md](./docs/tools.md#legacy-tool-names-breaking-change).
 
 ## Конфигурация
 

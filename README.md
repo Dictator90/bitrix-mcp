@@ -102,20 +102,22 @@ BITRIX_MCP_OFFICIAL_DOCS_ENABLED=0 bitrix-mcp index-all
 
 Treat non-empty MCP results as authoritative for project symbols, framework APIs, event handlers, ORM entities, and docs. Fall back to manual `grep`/file reads only when MCP returns nothing, reports a stale index, or you ask for a manual check. This saves tokens and avoids hallucinations from partial file scans. (`init` writes this guidance into each client's rule file automatically.)
 
-Recommended flow: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` → `bitrix_read_file_context` / `bitrix_read_symbol_context`.
+Recommended flow: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_event_search` / `bitrix_entity_search` / `bitrix_docs_search` → `bitrix_read_file_context` / `bitrix_read_symbol_context`. The server also sends this flow to clients as MCP `instructions`.
 
 ## MCP tools
 
-Grouped overview (full reference with parameters and examples in **[docs/tools.md](./docs/tools.md)**):
+17 tools by default, grouped (full reference with parameters and examples in **[docs/tools.md](./docs/tools.md)**):
 
-- **Index / status** — `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_all`, `bitrix_index_docs`, `bitrix_index_status`
-- **Symbol & LiveAPI search** — `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_module_usage_search`, `bitrix_inheritance_search`
-- **Source context** — `bitrix_read_file_context`, `bitrix_read_symbol_context`
-- **Components & ORM** — `bitrix_component_search`, `bitrix_component_context`, `bitrix_orm_search`, `bitrix_orm_entity_map`, `bitrix_orm_usage_search`
-- **IBlock / HLBlock / Options / Agents / Mail** — `bitrix_iblock_usage_search`, `bitrix_hlblock_usage_search`, `bitrix_option_search`, `bitrix_agent_search`, `bitrix_mail_event_search`
-- **Graph & impact** — `bitrix_relation_search`, `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`, `bitrix_detect_changes`
+- **Index / status** — `bitrix_index` (`scope`: `project`, `template`, `bitrix`, `install`, `docs`, `all`), `bitrix_index_status`, `bitrix_project_overview`
+- **Search** — `bitrix_liveapi_search` (symbols), `bitrix_event_search` (event handlers), `bitrix_entity_search` (`entity`: `agent`, `mail_event`, `component`, `module_usage`, `iblock_usage`, `hlblock_usage`, `option`, `orm_entity`, `orm_usage`, `autoload`, `relation`, `inheritance`)
+- **Source context** — `bitrix_read_file_context`, `bitrix_read_symbol_context`, `bitrix_component_context`, `bitrix_orm_entity_map`
+- **Graph & impact** — `bitrix_graph_neighbors`, `bitrix_graph_traverse`, `bitrix_impact_radius`, `bitrix_detect_changes`
 - **Docs** — `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_explain_api_usage`, and optional `bitrix_semantic_docs_search`
-- **Overview / autoload** — `bitrix_project_overview`, `bitrix_autoload_search`
+- **Optional runtime** — `bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`, `bitrix_db_execute`, `bitrix_tinker` (see below)
+
+Search tools return `{ count, total?, truncated, nextCursor?, results }` (also as `structuredContent`); pass `nextCursor` as `cursor` for the next page. Every tool carries MCP annotations (read-only / destructive). The server also offers three prompts — `review-changes`, `explain-api`, `trace-event` — with arguments auto-completed from the index.
+
+**Breaking change:** the per-entity search tools (`bitrix_agent_search`, `bitrix_orm_search`, `bitrix_relation_search`, …) and `bitrix_index_project` / `_template` / `_all` / `_docs` were merged into `bitrix_entity_search` and `bitrix_index`, and search results are envelopes instead of bare arrays. Set `BITRIX_MCP_LEGACY_TOOLS=1` to keep the old names for one release — see [docs/tools.md](./docs/tools.md#legacy-tool-names-breaking-change).
 
 ## Configuration
 

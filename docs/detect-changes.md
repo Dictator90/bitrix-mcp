@@ -1,6 +1,6 @@
 # Detect changes and review workflow
 
-Workflow: `bitrix_detect_changes` (includes a symbol diff and graph impact by default) → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → `bitrix_read_file_context` or `bitrix_read_symbol_context`.
+Workflow: `bitrix_detect_changes` (includes a symbol diff and graph impact by default) → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_entity_search` (`entity: "relation"`) → `bitrix_read_file_context` or `bitrix_read_symbol_context`. The `review-changes` MCP prompt (argument `base`) runs `bitrix_detect_changes` and `bitrix_impact_radius` for you.
 
 Example prompt: "Use Bitrix MCP to analyze changes since origin/main."
 

@@ -42,7 +42,7 @@ export function workerPoolSize(): number {
 }
 
 /** Tasks that write the SQLite index: serialized through {@link indexMutex}. */
-const INDEX_TASKS = new Set(["indexProject", "indexTemplate", "indexAll", "indexDocs"]);
+const INDEX_TASKS = new Set(["indexProject", "indexTemplate", "indexBitrix", "indexInstall", "indexAll", "indexDocs"]);
 /** Long-running or side-effecting tasks: each runs in its own worker with the heavy timeout. */
 const HEAVY_TASKS = new Set([...INDEX_TASKS, "tinker", "dbExecute"]);
 

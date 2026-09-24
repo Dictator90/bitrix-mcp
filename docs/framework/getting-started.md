@@ -1,6 +1,6 @@
 # Bitrix Framework MCP reference
 
-This resource is a seed documentation page shipped with the server. By default, `bitrix-mcp index-docs`, `bitrix-mcp index-all`, and the `bitrix_index_docs` MCP tool register and clone or pull the official Bitrix Framework documentation repository before indexing Markdown/text documentation into local SQLite FTS. Put extra exported Bitrix Framework Markdown or text files into the `docs/` directory when you need project-local references too.
+This resource is a seed documentation page shipped with the server. By default, `bitrix-mcp index-docs`, `bitrix-mcp index-all`, and the `bitrix_index` MCP tool (`scope: "docs"`) register and clone or pull the official Bitrix Framework documentation repository before indexing Markdown/text documentation into local SQLite FTS. Put extra exported Bitrix Framework Markdown or text files into the `docs/` directory when you need project-local references too.
 
 ## LiveAPI workflow
 

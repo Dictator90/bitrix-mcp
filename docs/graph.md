@@ -19,8 +19,8 @@ The graph follows Bitrix concepts that are often dynamic or configured through f
 
 ## Tools
 
-- `bitrix_relation_search`: edge lookup. `sourceType`/`targetType` `class` also matches the legacy class-like types, and PHP names are matched case-insensitively.
-- `bitrix_inheritance_search`: classes that extend, implement or use a target. A target with a backslash matches that exact FQN; a short name matches only the last namespace segment exactly (`Base` matches `Foo\Base`, not `Foo\MyBase`). With `transitive: true` it also returns indirect descendants, breadth-first up to `maxDepth` (default 5, max 10), cycle-safe, each result with `depth` (`metadata.depth` and `metadata.via` in full format). Deeper levels follow `extends` too, because subclasses inherit their parents' interfaces and traits. `kind`/`module` filter the returned rows only, so a project class extending a core class that implements the target is still found.
+- `bitrix_entity_search` with `entity: "relation"`: edge lookup. `sourceType`/`targetType` `class` also matches the legacy class-like types, and PHP names are matched case-insensitively.
+- `bitrix_entity_search` with `entity: "inheritance"`: classes that extend, implement or use a target. A target with a backslash matches that exact FQN; a short name matches only the last namespace segment exactly (`Base` matches `Foo\Base`, not `Foo\MyBase`). With `transitive: true` it also returns indirect descendants, breadth-first up to `maxDepth` (default 5, max 10), cycle-safe, each result with `depth` (`metadata.depth` and `metadata.via` in full format). Deeper levels follow `extends` too, because subclasses inherit their parents' interfaces and traits. `kind`/`module` filter the returned rows only, so a project class extending a core class that implements the target is still found.
 - `bitrix_graph_neighbors`: direct or bounded-depth neighbors. Params: `nodeType`, `nodeName`, `direction` (`out`/`in`/`both`), `relationType`, `depth`, `limit`, `maxEdgesPerNode`, `format`.
 - `bitrix_graph_traverse`: safe BFS with cycle protection. Params: `startType`, `startName`, `direction`, `maxDepth`, `relationTypes`, `limit`, `maxEdgesPerNode`, `format`.
 - `bitrix_impact_radius`: starts from the given files, or from the files changed since `base` (default `HEAD~1`, including untracked files), and groups impacted events, handlers, components, templates, ORM entities, agents, mail events, iblocks, hlblocks, modules, options, classes, and methods. Start nodes are the files, the endpoints of their relations, and the graph nodes of their indexed symbols. Methods start as `method:<Class FQN>::<method>`, so a changed handler class reaches the events that call it. With `includeRisk`, it weights high-impact relations such as `handles_event`, `registers_event_handler`, `registers_agent`, `sends_mail_event`, `references_orm_entity`, `includes_component`, `uses_template`, `extends`, and `implements`. If git fails (not a repository, unknown base), the result has no changed files and a `warnings` array says why.
@@ -47,7 +47,7 @@ bitrix_graph_traverse({ "startType": "class", "startName": "Vendor\\Module\\Leaf
 bitrix_graph_traverse({ "startType": "component", "startName": "bitrix:catalog.section",
   "maxDepth": 2, "relationTypes": ["uses_iblock", "uses_template"] })
 
-bitrix_inheritance_search({ "target": "Bitrix\\Main\\ORM\\Data\\DataManager", "relation": "extends", "transitive": true })
+bitrix_entity_search({ "entity": "inheritance", "target": "Bitrix\\Main\\ORM\\Data\\DataManager", "relation": "extends", "transitive": true })
 
 bitrix_impact_radius({ "files": ["local/php_interface/init.php"], "maxDepth": 2, "includeRisk": true })
 ```

@@ -86,7 +86,7 @@ test("MCP bitrix_read_symbol_context reads method context with a file filter", a
   const server = createMcpServer(runtimePaths(dataDir));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   const result = await tools.bitrix_read_symbol_context.handler({ name: "executeComponent", type: "method", file: "index.php", before: 1, after: 1, maxChars: 1000 });
   const context = JSON.parse(result.content[0].text) as { ambiguous: boolean; symbol: { type: string; name: string; file: string; line: number; lineEnd?: number }; context: { metadata: { relativePath: string; startLine: number; endLine: number }; numberedLines: string } };
 
@@ -105,7 +105,7 @@ test("MCP bitrix_read_symbol_context reads class context", async () => {
   const server = createMcpServer(runtimePaths(dataDir));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   const result = await tools.bitrix_read_symbol_context.handler({ name: "DemoComponent", type: "class", before: 0, after: 1, maxChars: 1000 });
   const context = JSON.parse(result.content[0].text) as { ambiguous: boolean; symbol: { type: string; lineEnd?: number }; context: { metadata: { startLine: number; endLine: number }; numberedLines: string } };
 
@@ -122,7 +122,7 @@ test("MCP bitrix_read_symbol_context returns candidates for ambiguous symbols", 
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
   const fixtureFile = path.join(fixtureRoot, "index.php");
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   await writeIndexToSqlite(sqlitePath(dataDir), {
     version: 1,
     generatedAt: new Date().toISOString(),
@@ -152,7 +152,7 @@ test("MCP bitrix_read_symbol_context includeBody uses indexed lineEnd", async ()
   const server = createMcpServer(runtimePaths(dataDir));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   const result = await tools.bitrix_read_symbol_context.handler({ name: "DemoComponent", type: "class", includeBody: true, before: 0, after: 0, maxChars: 1000 });
   const context = JSON.parse(result.content[0].text) as { context: { metadata: { startLine: number; endLine: number }; numberedLines: string } };
 
@@ -195,7 +195,7 @@ test("MCP bitrix_read_symbol_context maxChars truncates output", async () => {
   const server = createMcpServer(runtimePaths(dataDir));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   const result = await tools.bitrix_read_symbol_context.handler({ name: "demo_helper", type: "function", includeBody: true, before: 0, after: 20, maxChars: 100 });
   const context = JSON.parse(result.content[0].text) as { context: { metadata: { truncated: boolean }; numberedLines: string } };
 
@@ -203,7 +203,7 @@ test("MCP bitrix_read_symbol_context maxChars truncates output", async () => {
   assert.ok(context.context.numberedLines.length <= 100);
 });
 
-test("MCP bitrix_index_template accepts templatePath", async () => {
+test("MCP bitrix_index scope=template accepts templatePath", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-"));
   const paths: RuntimePaths = {
     workspaceRoot: fixtureRoot,
@@ -218,9 +218,9 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
     phpBin: "php"
   };
   const server = createMcpServer(paths);
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index;
 
-  const result = await tool.handler({ templatePath: "local/templates/my_template" });
+  const result = await tool.handler({ scope: "template", templatePath: "local/templates/my_template" });
   await assert.rejects(fs.readFile(path.join(dataDir, "template-index.json"), "utf8"));
   const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
 
@@ -230,7 +230,7 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 
-test("MCP bitrix_index_template keeps root as deprecated templatePath alias", async () => {
+test("MCP legacy bitrix_index_template keeps root as deprecated templatePath alias", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-root-"));
   const paths: RuntimePaths = {
     workspaceRoot: fixtureRoot,
@@ -244,7 +244,7 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
     tinkerEnabled: false,
     phpBin: "php"
   };
-  const server = createMcpServer(paths);
+  const server = createMcpServer(paths, { legacyTools: true });
   const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
 
   await tool.handler({ root: "local/templates/my_template" });
@@ -256,27 +256,27 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 
-test("MCP bitrix_index_project rejects roots outside workspace by default", async () => {
+test("MCP bitrix_index scope=project rejects roots outside workspace by default", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-project-guard-"));
   const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-project-"));
   const server = createMcpServer(runtimePaths(dataDir));
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_project;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index;
 
   await assert.rejects(
-    tool.handler({ root: outsideRoot }),
-    /MCP path restriction: bitrix_index_project parameter "root" must resolve inside workspaceRoot .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+    tool.handler({ scope: "project", root: outsideRoot }),
+    /MCP path restriction: bitrix_index parameter "root" must resolve inside workspaceRoot .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
   );
 });
 
-test("MCP bitrix_index_project allows outside workspace when explicitly enabled", async () => {
+test("MCP bitrix_index scope=project allows outside workspace when explicitly enabled", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-project-opt-in-"));
   const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-project-opt-in-"));
   await fs.writeFile(path.join(outsideRoot, "outside.php"), "<?php\nfunction outside_workspace_helper() {}\n");
   const server = createMcpServer(runtimePaths(dataDir));
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_project;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index;
 
   await withOutsideWorkspaceOptIn(async () => {
-    await tool.handler({ root: outsideRoot });
+    await tool.handler({ scope: "project", root: outsideRoot });
   });
   const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "project");
 
@@ -284,32 +284,32 @@ test("MCP bitrix_index_project allows outside workspace when explicitly enabled"
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "outside_workspace_helper")));
 });
 
-test("MCP bitrix_index_template rejects absolute templatePath and parent traversal by default", async () => {
+test("MCP bitrix_index scope=template rejects absolute templatePath and parent traversal by default", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-template-guard-"));
   const server = createMcpServer(runtimePaths(dataDir));
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index;
 
   await assert.rejects(
-    tool.handler({ templatePath: path.join(fixtureRoot, "local/templates/my_template") }),
-    /MCP path restriction: bitrix_index_template parameter "templatePath" must be relative .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+    tool.handler({ scope: "template", templatePath: path.join(fixtureRoot, "local/templates/my_template") }),
+    /MCP path restriction: bitrix_index parameter "templatePath" must be relative .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
   );
   await assert.rejects(
-    tool.handler({ templatePath: "../outside-template" }),
-    /MCP path restriction: bitrix_index_template parameter "templatePath" must not contain "\.\." .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
+    tool.handler({ scope: "template", templatePath: "../outside-template" }),
+    /MCP path restriction: bitrix_index parameter "templatePath" must not contain "\.\." .*BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1/
   );
 });
 
-test("MCP bitrix_index_template allows absolute or parent paths when explicitly enabled", async () => {
+test("MCP bitrix_index scope=template allows absolute or parent paths when explicitly enabled", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-template-opt-in-"));
   const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-outside-template-opt-in-"));
   await fs.writeFile(path.join(outsideRoot, "outside-template.php"), "<?php\nfunction outside_template_helper() {}\n");
   const server = createMcpServer(runtimePaths(dataDir));
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index_template;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<unknown> }> })._registeredTools.bitrix_index;
   const traversingTemplatePath = path.relative(fixtureRoot, outsideRoot);
 
   await withOutsideWorkspaceOptIn(async () => {
-    await tool.handler({ templatePath: traversingTemplatePath });
-    await tool.handler({ templatePath: outsideRoot });
+    await tool.handler({ scope: "template", templatePath: traversingTemplatePath });
+    await tool.handler({ scope: "template", templatePath: outsideRoot });
   });
   const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
 
@@ -318,14 +318,14 @@ test("MCP bitrix_index_template allows absolute or parent paths when explicitly 
 });
 
 
-test("MCP bitrix_relation_search is registered and searches relation storage", async () => {
+test("MCP bitrix_entity_search entity=relation searches relation storage", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-relations-"));
   const paths = runtimePaths(dataDir);
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
   const relationFile = path.join(fixtureRoot, "local", "modules", "vendor.module", "lib", "relation.php");
 
-  assert.ok(tools.bitrix_relation_search);
+  assert.ok(tools.bitrix_entity_search);
   await writeBitrixRelations(sqlitePath(dataDir), [
     {
       sourceType: "event",
@@ -341,15 +341,15 @@ test("MCP bitrix_relation_search is registered and searches relation storage", a
     }
   ]);
 
-  const compactResult = await tools.bitrix_relation_search.handler({ sourceType: "event" });
-  const compact = JSON.parse(compactResult.content[0].text) as Array<{ source: string; target: string; relationType: string; file: string; line: number; item?: unknown }>;
+  const compactResult = await tools.bitrix_entity_search.handler({ entity: "relation", sourceType: "event" });
+  const compact = (JSON.parse(compactResult.content[0].text) as { results: Array<{ source: string; target: string; relationType: string; file: string; line: number; item?: unknown }> }).results;
   assert.equal(compact[0]?.source, "event:main:OnBeforeProlog");
   assert.equal(compact[0]?.target, "method:Vendor\\Module\\Handler::run");
   assert.equal(compact[0]?.relationType, "handles");
   assert.equal(compact[0]?.item, undefined);
 
-  const fullResult = await tools.bitrix_relation_search.handler({ targetType: "method", format: "full" });
-  const full = JSON.parse(fullResult.content[0].text) as Array<{ sourceType: string; metadata: { sort: number } }>;
+  const fullResult = await tools.bitrix_entity_search.handler({ entity: "relation", targetType: "method", format: "full" });
+  const full = (JSON.parse(fullResult.content[0].text) as { results: Array<{ sourceType: string; metadata: { sort: number } }> }).results;
   assert.equal(full[0]?.sourceType, "event");
   assert.deepEqual(full[0]?.metadata, { sort: 100 });
 });
@@ -402,9 +402,9 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
   const result = await tools.bitrix_liveapi_search.handler({ query: "demo_helper", limit: 5 });
-  const results = JSON.parse(result.content[0].text) as Array<{ name: string; type: string; file: string; line: number }>;
+  const results = (JSON.parse(result.content[0].text) as { results: Array<{ name: string; type: string; file: string; line: number }> }).results;
 
   assert.equal(results[0]?.name, "demo_helper");
   assert.equal(results[0]?.type, "function");
@@ -412,7 +412,7 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   assert.ok(results[0]?.line);
 
   const eventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5 });
-  const eventResults = JSON.parse(eventResult.content[0].text) as Array<{ type: string; name: string; module: string; file: string; line: number }>;
+  const eventResults = (JSON.parse(eventResult.content[0].text) as { results: Array<{ type: string; name: string; module: string; file: string; line: number }> }).results;
 
   assert.equal(eventResults[0]?.type, "event");
   assert.equal(eventResults[0]?.name, "OnBeforeProlog");
@@ -420,7 +420,7 @@ test("MCP bitrix_liveapi_search reads symbols from SQLite", async () => {
   assert.equal(eventResults[0]?.file, "index.php");
 
   const fullEventResult = await tools.bitrix_event_search.handler({ query: "Demo", module: "main", limit: 5, format: "full" });
-  const fullEventResults = JSON.parse(fullEventResult.content[0].text) as Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }>;
+  const fullEventResults = (JSON.parse(fullEventResult.content[0].text) as { results: Array<{ item: { eventName: string; handlerClass: string; handlerMethod: string } }> }).results;
   assert.equal(fullEventResults[0]?.item.handlerClass, "Demo");
   assert.equal(fullEventResults[0]?.item.handlerMethod, "handler");
 });
@@ -443,9 +443,9 @@ test("MCP bitrix_docs_search searches local docs without embeddings service", as
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_docs.handler({});
+  await tools.bitrix_index.handler({ scope: "docs" });
   const result = await tools.bitrix_docs_search.handler({ query: "managed cache", limit: 5 });
-  const results = JSON.parse(result.content[0].text) as Array<{ excerpt: string; type: string; uri: string }>;
+  const results = (JSON.parse(result.content[0].text) as { results: Array<{ excerpt: string; type: string; uri: string }> }).results;
 
   assert.equal(results[0]?.type, "doc");
   assert.match(results[0]?.excerpt ?? "", /\*\*managed\*\* \*\*cache\*\*/i);
@@ -466,11 +466,12 @@ test("MCP bitrix_docs_for_symbol returns compact symbol documentation links", as
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_docs.handler({});
+  await tools.bitrix_index.handler({ scope: "docs" });
   const result = await tools.bitrix_docs_for_symbol.handler({ symbol: "CIBlockElement::GetList", limit: 5 });
-  const payload = JSON.parse(result.content[0].text) as { symbol: string; results: Array<{ title: string; uri: string; path: string; chunkIndex: number; excerpt: string }> };
+  const payload = JSON.parse(result.content[0].text) as { count: number; truncated: boolean; results: Array<{ title: string; uri: string; path: string; chunkIndex: number; excerpt: string }> };
 
-  assert.equal(payload.symbol, "CIBlockElement::GetList");
+  assert.equal(payload.count, 1);
+  assert.equal(payload.truncated, false);
   assert.equal(payload.results.length, 1);
   assert.equal(payload.results[0]?.title, "CIBlockElement::GetList");
   assert.ok(payload.results[0]?.uri.startsWith("bitrix-docs://"));
@@ -485,9 +486,9 @@ test("MCP bitrix_docs_for_symbol returns empty results when no docs match", asyn
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
   const result = await tools.bitrix_docs_for_symbol.handler({ symbol: "CEvent::Send", limit: 5 });
-  const payload = JSON.parse(result.content[0].text) as { symbol: string; results: unknown[] };
+  const payload = JSON.parse(result.content[0].text) as { count: number; truncated: boolean; results: unknown[] };
 
-  assert.equal(payload.symbol, "CEvent::Send");
+  assert.equal(payload.count, 0);
   assert.deepEqual(payload.results, []);
 });
 
@@ -523,7 +524,7 @@ test("MCP bitrix_explain_api_usage combines docs, local usages, core definitions
 
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
-  await tools.bitrix_index_docs.handler({});
+  await tools.bitrix_index.handler({ scope: "docs" });
   const result = await tools.bitrix_explain_api_usage.handler({ query: "CIBlockElement::GetList", limit: 5 });
   const payload = JSON.parse(result.content[0].text) as { query: string; docs: unknown[]; localUsages: Array<{ kind: string; name: string }>; coreDefinitions: Array<{ kind: string; name: string }>; relations: unknown[]; recommendations: string[] };
 
@@ -585,7 +586,7 @@ test("MCP semantic docs search tool is optional", async () => {
 });
 
 
-test("MCP bitrix_module_usage_search is registered and returns compact module usages", async () => {
+test("MCP bitrix_entity_search entity=module_usage returns compact module usages", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-module-usages-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-module-root-"));
   await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
@@ -594,10 +595,10 @@ test("MCP bitrix_module_usage_search is registered and returns compact module us
   const server = createMcpServer(runtimePaths(dataDir, root));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_module_usage_search);
-  await tools.bitrix_index_project.handler({});
-  const result = await tools.bitrix_module_usage_search.handler({ module: "iblock", limit: 5 });
-  const compact = JSON.parse(result.content[0].text) as Array<{ module: string; call: string; kind: string; file: string; line: number; signature: string }>;
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
+  const result = await tools.bitrix_entity_search.handler({ entity: "module_usage", module: "iblock", limit: 5 });
+  const compact = (JSON.parse(result.content[0].text) as { results: Array<{ module: string; call: string; kind: string; file: string; line: number; signature: string }> }).results;
 
   assert.deepEqual(compact[0], {
     module: "iblock",
@@ -609,7 +610,7 @@ test("MCP bitrix_module_usage_search is registered and returns compact module us
   });
 });
 
-test("MCP bitrix_agent_search is registered and returns compact agents", async () => {
+test("MCP bitrix_entity_search entity=agent returns compact agents", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-agents-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-agent-root-"));
   const installFile = path.join(root, "local", "modules", "vendor.module", "install", "index.php");
@@ -621,13 +622,13 @@ CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400)
   const server = createMcpServer({ ...runtimePaths(dataDir, root), bitrixRoot: root });
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_agent_search);
-  await tools.bitrix_index_all.handler({});
-  // Install assets are opt-in (not indexed by bitrix_index_all by default), so
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "all" });
+  // Install assets are opt-in (not indexed by bitrix_index scope=all by default), so
   // index the install scope explicitly to exercise install-agent search.
   await buildIndex({ root, kind: "install", outFile: indexPath(dataDir, "install"), patterns: DEFAULT_INSTALL_ASSET_PATTERNS, force: true });
-  const result = await tools.bitrix_agent_search.handler({ query: "Agent::run", module: "vendor.module", kind: "install", limit: 5 });
-  const compact = JSON.parse(result.content[0].text) as Array<{ name: string; module: string; periodic: string; interval: number; kind: string; file: string; line: number; signature: string }>;
+  const result = await tools.bitrix_entity_search.handler({ entity: "agent", query: "Agent::run", module: "vendor.module", kind: "install", limit: 5 });
+  const compact = (JSON.parse(result.content[0].text) as { results: Array<{ name: string; module: string; periodic: string; interval: number; kind: string; file: string; line: number; signature: string }> }).results;
 
   assert.deepEqual(compact[0], {
     name: "\\Vendor\\Module\\Agent::run",
@@ -641,7 +642,7 @@ CAgent::AddAgent("\\Vendor\\Module\\Agent::run();", "vendor.module", "N", 86400)
   });
 });
 
-test("MCP bitrix_mail_event_search is registered and returns compact mail events", async () => {
+test("MCP bitrix_entity_search entity=mail_event returns compact mail events", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-mail-events-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-mail-root-"));
   await fs.mkdir(path.join(root, "local/php_interface"), { recursive: true });
@@ -653,10 +654,10 @@ AddEventHandler('main', 'OnBeforeEventSend', ['MailHandlers', 'beforeSend']);
   const server = createMcpServer(runtimePaths(dataDir, root));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_mail_event_search);
-  await tools.bitrix_index_project.handler({});
-  const result = await tools.bitrix_mail_event_search.handler({ eventName: "SALE_NEW_ORDER", includeHandlers: true, limit: 5 });
-  const compact = JSON.parse(result.content[0].text) as Array<{ eventName: string; api: string; siteId: string; kind: string; file: string; line: number; signature: string; handlers: Array<{ eventName: string; handlerClass: string; handlerMethod: string }> }>;
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
+  const result = await tools.bitrix_entity_search.handler({ entity: "mail_event", eventName: "SALE_NEW_ORDER", includeHandlers: true, limit: 5 });
+  const compact = (JSON.parse(result.content[0].text) as { results: Array<{ eventName: string; api: string; siteId: string; kind: string; file: string; line: number; signature: string; handlers: Array<{ eventName: string; handlerClass: string; handlerMethod: string }> }> }).results;
 
   assert.equal(compact[0]?.eventName, "SALE_NEW_ORDER");
   assert.equal(compact[0]?.api, "CEvent::Send");
@@ -693,24 +694,24 @@ ProductTable::getList([]);
   const server = createMcpServer({ ...runtimePaths(dataDir, root), bitrixRoot: root });
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_orm_search);
+  assert.ok(tools.bitrix_entity_search);
   assert.ok(tools.bitrix_orm_entity_map);
-  assert.ok(tools.bitrix_orm_usage_search);
-  await tools.bitrix_index_all.handler({});
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "all" });
 
-  const searchResult = await tools.bitrix_orm_search.handler({ tableName: "vendor_product", kind: "bitrix", limit: 5 });
-  const entities = JSON.parse(searchResult.content[0].text) as Array<{ className: string; tableName: string; fields: Array<{ name: string; type: string }>; references: Array<{ name: string; referenceClass: string }> }>;
+  const searchResult = await tools.bitrix_entity_search.handler({ entity: "orm_entity", tableName: "vendor_product", kind: "bitrix", limit: 5 });
+  const entities = (JSON.parse(searchResult.content[0].text) as { results: Array<{ className: string; tableName: string; fields: Array<{ name: string; type: string }>; references: Array<{ name: string; referenceClass: string }> }> }).results;
   assert.equal(entities[0]?.className, "Vendor\\Module\\ProductTable");
   assert.equal(entities[0]?.tableName, "vendor_product");
   assert.equal(entities[0]?.fields[0]?.name, "ID");
   assert.equal(entities[0]?.references[0]?.referenceClass, "Vendor\\Module\\UserTable");
 
   const mapResult = await tools.bitrix_orm_entity_map.handler({ className: "Vendor\\Module\\ProductTable" });
-  const maps = JSON.parse(mapResult.content[0].text) as Array<{ tableName: string }>;
+  const maps = (JSON.parse(mapResult.content[0].text) as { results: Array<{ tableName: string }> }).results;
   assert.equal(maps[0]?.tableName, "vendor_product");
 
-  const usageResult = await tools.bitrix_orm_usage_search.handler({ entity: "Vendor\\Module\\ProductTable", method: "getList" });
-  const usages = JSON.parse(usageResult.content[0].text) as Array<{ entity: string; method: string; usageKind: string }>;
+  const usageResult = await tools.bitrix_entity_search.handler({ entity: "orm_usage", ormEntity: "Vendor\\Module\\ProductTable", method: "getList" });
+  const usages = (JSON.parse(usageResult.content[0].text) as { results: Array<{ entity: string; method: string; usageKind: string }> }).results;
   assert.equal(usages[0]?.entity, "Vendor\\Module\\ProductTable");
   assert.equal(usages[0]?.method, "getList");
   assert.equal(usages[0]?.usageKind, "datamanager");
@@ -731,11 +732,11 @@ $APPLICATION->IncludeComponent("bitrix:catalog.section", "", ["IBLOCK_ID" => 7, 
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_project.handler({});
-  await tools.bitrix_index_template.handler({});
+  await tools.bitrix_index.handler({ scope: "project" });
+  await tools.bitrix_index.handler({ scope: "template" });
 
-  const searchResult = await tools.bitrix_component_search.handler({ component: "bitrix:catalog.section", limit: 5 });
-  const searchPayload = JSON.parse(searchResult.content[0].text) as Array<{ component: string; template: string }>;
+  const searchResult = await tools.bitrix_entity_search.handler({ entity: "component", component: "bitrix:catalog.section", limit: 5 });
+  const searchPayload = (JSON.parse(searchResult.content[0].text) as { results: Array<{ component: string; template: string }> }).results;
   assert.equal(searchPayload[0]?.component, "bitrix:catalog.section");
   assert.equal(searchPayload[0]?.template, ".default");
 
@@ -748,7 +749,7 @@ $APPLICATION->IncludeComponent("bitrix:catalog.section", "", ["IBLOCK_ID" => 7, 
   assert.ok(contextPayload.parameters.some((param) => param.name === "IBLOCK_ID" && param.value === 7));
 });
 
-test("MCP bitrix_hlblock_usage_search is registered and searches indexed Highloadblock usages", async () => {
+test("MCP bitrix_entity_search entity=hlblock_usage searches indexed Highloadblock usages", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-hlblock-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-hlblock-root-"));
   await fs.writeFile(path.join(root, "index.php"), "<?php\nHighloadBlockTable::getById(3);\n", "utf8");
@@ -756,20 +757,20 @@ test("MCP bitrix_hlblock_usage_search is registered and searches indexed Highloa
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_hlblock_usage_search);
-  await tools.bitrix_index_project.handler({});
-  const result = await tools.bitrix_hlblock_usage_search.handler({ hlblockId: "3", limit: 5 });
-  const compact = JSON.parse(result.content[0].text) as Array<{ hlblockId: string; api: string; file: string; line: number }>;
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
+  const result = await tools.bitrix_entity_search.handler({ entity: "hlblock_usage", hlblockId: "3", limit: 5 });
+  const compact = (JSON.parse(result.content[0].text) as { results: Array<{ hlblockId: string; api: string; file: string; line: number }> }).results;
   assert.equal(compact[0]?.hlblockId, "3");
   assert.equal(compact[0]?.api, "HighloadBlockTable::getById");
   assert.equal(compact[0]?.file, "index.php");
 
-  const fullResult = await tools.bitrix_hlblock_usage_search.handler({ api: "HighloadBlockTable::getById", format: "full" });
-  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; hlblockId: string }>;
+  const fullResult = await tools.bitrix_entity_search.handler({ entity: "hlblock_usage", api: "HighloadBlockTable::getById", format: "full" });
+  const full = (JSON.parse(fullResult.content[0].text) as { results: Array<{ type: string; hlblockId: string }> }).results;
   assert.equal(full[0]?.type, "hlblock_usage");
 });
 
-test("MCP bitrix_iblock_usage_search is registered and searches indexed IBlock usages", async () => {
+test("MCP bitrix_entity_search entity=iblock_usage searches indexed IBlock usages", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-"));
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-iblock-root-"));
   await fs.writeFile(path.join(root, "index.php"), "<?php\nCIBlockElement::GetList([], ['IBLOCK_ID' => CATALOG_IBLOCK_ID]);\n", "utf8");
@@ -777,46 +778,46 @@ test("MCP bitrix_iblock_usage_search is registered and searches indexed IBlock u
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_iblock_usage_search);
-  await tools.bitrix_index_project.handler({});
-  const result = await tools.bitrix_iblock_usage_search.handler({ iblockId: "CATALOG_IBLOCK_ID", limit: 5 });
-  const compact = JSON.parse(result.content[0].text) as Array<{ iblockId: string; api: string; file: string; line: number }>;
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
+  const result = await tools.bitrix_entity_search.handler({ entity: "iblock_usage", iblockId: "CATALOG_IBLOCK_ID", limit: 5 });
+  const compact = (JSON.parse(result.content[0].text) as { results: Array<{ iblockId: string; api: string; file: string; line: number }> }).results;
   assert.equal(compact[0]?.iblockId, "CATALOG_IBLOCK_ID");
   assert.equal(compact[0]?.api, "CIBlockElement::GetList");
   assert.equal(compact[0]?.file, "index.php");
 
-  const fullResult = await tools.bitrix_iblock_usage_search.handler({ api: "CIBlockElement::GetList", format: "full" });
-  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; iblockId: string }>;
+  const fullResult = await tools.bitrix_entity_search.handler({ entity: "iblock_usage", api: "CIBlockElement::GetList", format: "full" });
+  const full = (JSON.parse(fullResult.content[0].text) as { results: Array<{ type: string; iblockId: string }> }).results;
   assert.equal(full[0]?.type, "iblock_usage");
 });
 
-test("MCP bitrix_option_search is registered and searches indexed options", async () => {
+test("MCP bitrix_entity_search entity=option searches indexed options", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-options-root-"));
   await fs.writeFile(path.join(root, "options.php"), "<?php\nuse Bitrix\\Main\\Config\\Option;\nOption::get('vendor.module', 'server_option');\nCOption::SetOptionString('vendor.module', 'server_set', 'Y');\n");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-options-"));
   const server = createMcpServer(runtimePaths(dataDir, root));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_option_search);
-  await tools.bitrix_index_project.handler({});
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
 
-  const compactResult = await tools.bitrix_option_search.handler({ module: "vendor.module", name: "server_option" });
-  const compact = JSON.parse(compactResult.content[0].text) as Array<{ type: string; module: string; name: string; operation: string; api: string }>;
+  const compactResult = await tools.bitrix_entity_search.handler({ entity: "option", module: "vendor.module", name: "server_option" });
+  const compact = (JSON.parse(compactResult.content[0].text) as { results: Array<{ type: string; module: string; name: string; operation: string; api: string }> }).results;
   assert.equal(compact[0]?.type, "option");
   assert.equal(compact[0]?.module, "vendor.module");
   assert.equal(compact[0]?.name, "server_option");
   assert.equal(compact[0]?.operation, "get");
   assert.equal(compact[0]?.api, "Option::get");
 
-  const fullResult = await tools.bitrix_option_search.handler({ operation: "set", format: "full" });
-  const full = JSON.parse(fullResult.content[0].text) as Array<{ type: string; name: string; operation: string; api: string }>;
+  const fullResult = await tools.bitrix_entity_search.handler({ entity: "option", operation: "set", format: "full" });
+  const full = (JSON.parse(fullResult.content[0].text) as { results: Array<{ type: string; name: string; operation: string; api: string }> }).results;
   assert.equal(full[0]?.type, "option");
   assert.equal(full[0]?.name, "server_set");
   assert.equal(full[0]?.operation, "set");
   assert.equal(full[0]?.api, "COption::SetOptionString");
 });
 
-test("MCP bitrix_inheritance_search finds extends, implements, and trait usage relations", async () => {
+test("MCP bitrix_entity_search entity=inheritance finds extends, implements, and trait usage relations", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-inheritance-"));
   const file = path.join(fixtureRoot, "local/modules/vendor.module/lib/inheritance.php");
   await writeIndexToSqlite(sqlitePath(dataDir), {
@@ -848,23 +849,23 @@ test("MCP bitrix_inheritance_search finds extends, implements, and trait usage r
   }, { force: true });
 
   const server = createMcpServer(runtimePaths(dataDir));
-  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_inheritance_search;
+  const tool = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools.bitrix_entity_search;
 
-  const extendsResult = JSON.parse((await tool.handler({ target: "\\Bitrix\\Main\\ORM\\Data\\DataManager", relation: "extends" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  const extendsResult = JSON.parse((await tool.handler({ entity: "inheritance", target: "\\Bitrix\\Main\\ORM\\Data\\DataManager", relation: "extends" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
   assert.equal(extendsResult.count, 1);
   assert.equal(extendsResult.results[0]?.className, "Vendor\\Module\\Service");
   assert.equal(extendsResult.results[0]?.relation, "extends");
 
-  const implementsResult = JSON.parse((await tool.handler({ target: "ServiceInterface", relation: "implements" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  const implementsResult = JSON.parse((await tool.handler({ entity: "inheritance", target: "ServiceInterface", relation: "implements" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
   assert.equal(implementsResult.count, 1);
   assert.equal(implementsResult.results[0]?.targetName, "Vendor\\Module\\Contract\\ServiceInterface");
 
-  const traitResult = JSON.parse((await tool.handler({ target: "SomeTrait", relation: "uses_trait" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
+  const traitResult = JSON.parse((await tool.handler({ entity: "inheritance", target: "SomeTrait", relation: "uses_trait" })).content[0].text) as { count: number; results: Array<{ className: string; relation: string; targetName: string }> };
   assert.equal(traitResult.count, 1);
   assert.equal(traitResult.results[0]?.targetName, "Vendor\\Module\\Support\\SomeTrait");
 });
 
-test("MCP bitrix_autoload_search is registered and returns compact Composer records", async () => {
+test("MCP bitrix_entity_search entity=autoload returns compact Composer records", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-autoload-root-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-server-autoload-data-"));
   await fs.mkdir(path.join(root, "local", "php_interface"), { recursive: true });
@@ -877,18 +878,18 @@ test("MCP bitrix_autoload_search is registered and returns compact Composer reco
   const server = createMcpServer(runtimePaths(dataDir, root));
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  assert.ok(tools.bitrix_autoload_search);
-  await tools.bitrix_index_project.handler({});
-  const psr4Result = await tools.bitrix_autoload_search.handler({ namespace: "Vendor\\Module\\" });
-  const psr4 = JSON.parse(psr4Result.content[0].text) as Array<{ type: string; namespace: string; paths: string[] }>;
+  assert.ok(tools.bitrix_entity_search);
+  await tools.bitrix_index.handler({ scope: "project" });
+  const psr4Result = await tools.bitrix_entity_search.handler({ entity: "autoload", namespace: "Vendor\\Module\\" });
+  const psr4 = (JSON.parse(psr4Result.content[0].text) as { results: Array<{ type: string; namespace: string; paths: string[] }> }).results;
   assert.deepEqual(psr4[0], { type: "psr-4", namespace: "Vendor\\Module\\", paths: ["local/modules/vendor.module/lib"], sourceFile: "composer.json" });
 
-  const bootstrapResult = await tools.bitrix_autoload_search.handler({ type: "bootstrap" });
-  const bootstraps = JSON.parse(bootstrapResult.content[0].text) as Array<{ type: string; file: string }>;
+  const bootstrapResult = await tools.bitrix_entity_search.handler({ entity: "autoload", autoloadType: "bootstrap" });
+  const bootstraps = (JSON.parse(bootstrapResult.content[0].text) as { results: Array<{ type: string; file: string }> }).results;
   assert.equal(bootstraps[0]?.file, "local/php_interface/init.php");
 
-  const depResult = await tools.bitrix_autoload_search.handler({ package: "phpunit/phpunit" });
-  const deps = JSON.parse(depResult.content[0].text) as Array<{ type: string; package: string; dev: boolean }>;
+  const depResult = await tools.bitrix_entity_search.handler({ entity: "autoload", package: "phpunit/phpunit" });
+  const deps = (JSON.parse(depResult.content[0].text) as { results: Array<{ type: string; package: string; dev: boolean }> }).results;
   assert.equal(deps[0]?.type, "dev_dependency");
   assert.equal(deps[0]?.dev, true);
 });
@@ -913,7 +914,7 @@ test("MCP bitrix_project_overview summarizes indexed Bitrix entities", async () 
   const server = createMcpServer({ ...runtimePaths(dataDir), bitrixRoot: fixtureRoot });
   const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown) => Promise<{ content: Array<{ text: string }> }> }> })._registeredTools;
 
-  await tools.bitrix_index_all.handler({});
+  await tools.bitrix_index.handler({ scope: "all" });
   const agentFile = path.join(fixtureRoot, "local", "modules", "vendor.module", "install", "agent.php");
   await writeIndexToSqlite(sqlitePath(dataDir), {
     version: 1,

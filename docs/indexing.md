@@ -1,6 +1,6 @@
 # Indexing
 
-Bitrix MCP stores indexes in `.bitrix-mcp/bitrix-mcp.sqlite`. Use `bitrix-mcp index-all` or MCP `bitrix_index_all` for project, template, Bitrix core, and docs (module install assets only with `--install` / `includeInstall: true`). Use narrower commands/tools when only one scope changed: `index-project`, `index-template`, `index-bitrix`, `index-install`, `index-docs` or MCP `bitrix_index_project`, `bitrix_index_template`, `bitrix_index_docs`.
+Bitrix MCP stores indexes in `.bitrix-mcp/bitrix-mcp.sqlite`. Use `bitrix-mcp index-all` or MCP `bitrix_index` with `scope: "all"` for project, template, Bitrix core, and docs (module install assets only with `--install` / `includeInstall: true`). Use a narrower command or scope when only one part changed: `index-project`, `index-template`, `index-bitrix`, `index-install`, `index-docs`, or `bitrix_index` with `scope` `project`, `template`, `bitrix`, `install`, or `docs`.
 
 For the full command list, Bitrix core module selection, incremental reindex behavior, and progress options, see [cli.md](./cli.md). Reindexing is incremental — a file is re-parsed only when its size or mtime changed, or when it was indexed by an older parser version (each file records the parser version, so upgrading bitrix-mcp re-parses what the new parser reads differently without `--force`).
 
