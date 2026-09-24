@@ -1,11 +1,24 @@
-import { fork } from "node:child_process";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import type { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
+import { AsyncMutex } from "./asyncMutex.js";
+import type { WorkerTask } from "./worker.js";
+import { cancelledError, WorkerPool, type WorkerPoolStats } from "./workerPool.js";
 
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const HEAVY_TOOL_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_POOL_SIZE = 2;
+const MAX_POOL_SIZE = 16;
 
+/**
+ * Per-call options. The MCP SDK's tool-callback `extra` argument fits this
+ * shape, so handlers can pass it straight through for cancellation
+ * (`signal`) and progress notifications (`_meta.progressToken`).
+ */
 export interface McpToolGuardOptions {
   timeoutMs?: number;
+  signal?: AbortSignal;
+  _meta?: { progressToken?: string | number };
+  sendNotification?: (notification: ServerNotification) => Promise<void>;
 }
 
 export function toolTimeoutMs(envName: string, fallback = DEFAULT_TOOL_TIMEOUT_MS): number {
@@ -23,99 +36,138 @@ export function heavyToolTimeoutMs(): number {
   return toolTimeoutMs("BITRIX_MCP_HEAVY_TOOL_TIMEOUT_MS", HEAVY_TOOL_TIMEOUT_MS);
 }
 
+export function workerPoolSize(): number {
+  const parsed = Number(process.env.BITRIX_MCP_WORKERS);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE;
+}
+
+/** Tasks that write the SQLite index: serialized through {@link indexMutex}. */
+const INDEX_TASKS = new Set(["indexProject", "indexTemplate", "indexAll", "indexDocs"]);
+/** Long-running or side-effecting tasks: each runs in its own worker with the heavy timeout. */
+const HEAVY_TASKS = new Set([...INDEX_TASKS, "tinker", "dbExecute"]);
+
+export type WorkerTaskClass = "read" | "heavy" | "index";
+
+export function classifyWorkerTask(name: string): WorkerTaskClass {
+  if (INDEX_TASKS.has(name)) return "index";
+  return HEAVY_TASKS.has(name) ? "heavy" : "read";
+}
+
 export async function withMcpToolGuard<T>(toolName: string, work: () => Promise<T>, options: McpToolGuardOptions = {}): Promise<T> {
   const timeoutMs = options.timeoutMs ?? defaultToolTimeoutMs();
+  const { signal } = options;
+  if (signal?.aborted) throw cancelledError(toolName);
   let timeout: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   try {
     return await Promise.race([
       work(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => reject(new Error(`MCP tool ${toolName} exceeded timeout of ${timeoutMs}ms`)), timeoutMs);
         timeout.unref?.();
+        if (signal) {
+          onAbort = () => reject(cancelledError(toolName));
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
       })
     ]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 
-type WorkerSuccess<T> = { ok: true; result: T };
-type WorkerFailure = { ok: false; error: string; stack?: string };
-type WorkerMessage<T> = WorkerSuccess<T> | WorkerFailure;
+let readPool: WorkerPool | undefined;
+let workerFactory: (() => Worker) | undefined;
+const heavyPools = new Set<WorkerPool>();
+let shutdown = new AbortController();
+export const indexMutex = new AsyncMutex();
 
-function messageError(message: WorkerFailure): Error {
-  const error = new Error(message.error);
-  if (message.stack) error.stack = message.stack;
-  return error;
+function getReadPool(): WorkerPool {
+  readPool ??= new WorkerPool({ size: workerPoolSize(), respawnOnKill: true, createWorker: workerFactory });
+  return readPool;
 }
 
-async function runChildProcessTask<T>(toolName: string, workerData: unknown, timeoutMs: number): Promise<T> {
-  const childUrl = new URL("./child.ts", import.meta.url);
-  const child = fork(childUrl, [], { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "pipe", "ipc"] });
-  let timeout: NodeJS.Timeout | undefined;
-  let stderr = "";
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk) => { stderr += chunk; });
+/** Test hook: closes the pools and replaces the task-worker factory (undefined restores the default). */
+export async function setTaskWorkerFactory(factory: (() => Worker) | undefined): Promise<void> {
+  await closeWorkerPools();
+  workerFactory = factory;
+}
 
+export function readPoolStats(): WorkerPoolStats | undefined {
+  return readPool?.stats();
+}
+
+/** Terminates the read pool and any running heavy task; called when the MCP server closes. */
+export async function closeWorkerPools(): Promise<void> {
+  const pools = [...heavyPools, ...(readPool ? [readPool] : [])];
+  readPool = undefined;
+  heavyPools.clear();
+  shutdown.abort();
+  shutdown = new AbortController();
+  await Promise.all(pools.map((pool) => pool.close()));
+}
+
+type ProgressFields = { scope?: string; phase?: string; status?: string; message?: string; current?: number; total?: number };
+
+function progressMessage(event: ProgressFields): string {
+  const parts = [event.scope, event.phase].filter(Boolean).join(" ");
+  const counter = event.current !== undefined && event.total !== undefined ? ` ${event.current}/${event.total}` : "";
+  return `${parts}${counter}${event.message ? `: ${event.message}` : ""}`.trim();
+}
+
+function progressNotifier(options: McpToolGuardOptions): ((message: string) => void) | undefined {
+  const progressToken = options._meta?.progressToken;
+  const send = options.sendNotification;
+  if (progressToken === undefined || !send) return undefined;
+  let progress = 0;
+  return (message) => {
+    progress += 1;
+    void send({ method: "notifications/progress", params: { progressToken, progress, message } }).catch(() => undefined);
+  };
+}
+
+async function runHeavyTask<T>(toolName: string, workerData: WorkerTask, timeoutMs: number, options: McpToolGuardOptions, notify?: (message: string) => void): Promise<T> {
+  const pool = new WorkerPool({ size: 1, createWorker: workerFactory });
+  heavyPools.add(pool);
   try {
-    return await new Promise<T>((resolve, reject) => {
-      timeout = setTimeout(() => {
-        child.kill();
-        reject(new Error(`MCP tool ${toolName} was cancelled after exceeding timeout of ${timeoutMs}ms`));
-      }, timeoutMs);
-      timeout.unref?.();
-
-      child.once("message", (message: WorkerMessage<T>) => {
-        if (message.ok) {
-          resolve(message.result);
-          return;
-        }
-        reject(messageError(message));
-      });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        if (code !== 0 && signal == null) reject(new Error(`MCP tool ${toolName} child exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
-      });
-      child.send(workerData as Parameters<typeof child.send>[0]);
+    return await pool.run<T>(toolName, workerData, {
+      timeoutMs,
+      signal: options.signal,
+      onProgress: notify ? (event) => notify(progressMessage(event as ProgressFields)) : undefined
     });
   } finally {
-    if (timeout) clearTimeout(timeout);
-    if (!child.killed) child.kill();
+    heavyPools.delete(pool);
+    await pool.close();
   }
 }
 
-async function runWorkerThreadTask<T>(toolName: string, workerData: unknown, timeoutMs: number): Promise<T> {
-  const worker = new Worker(new URL("./workerThread.js", import.meta.url), { workerData });
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      timeout = setTimeout(() => {
-        void worker.terminate();
-        reject(new Error(`MCP tool ${toolName} was cancelled after exceeding timeout of ${timeoutMs}ms`));
-      }, timeoutMs);
-      timeout.unref?.();
-
-      worker.once("message", (message: WorkerMessage<T>) => {
-        if (message.ok) {
-          resolve(message.result);
-          return;
-        }
-        reject(messageError(message));
-      });
-      worker.once("error", reject);
-      worker.once("exit", (code) => {
-        if (code !== 0) reject(new Error(`MCP tool ${toolName} worker exited with code ${code}`));
-      });
-    });
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    await worker.terminate().catch(() => undefined);
+/**
+ * Runs a {@link runTask} task off the main thread. Read tasks share a pool of
+ * long-lived workers (BITRIX_MCP_WORKERS, default 2) with the default timeout;
+ * index, tinker, and DB write tasks get a dedicated worker with the heavy
+ * timeout, and index tasks queue behind each other so they never contend for
+ * the SQLite write lock. The timeout of a queued index task starts once it runs.
+ */
+export async function runWorkerTask<T>(toolName: string, workerData: WorkerTask, options: McpToolGuardOptions = {}): Promise<T> {
+  const taskClass = classifyWorkerTask(workerData.name);
+  if (taskClass === "read") {
+    return getReadPool().run<T>(toolName, workerData, { timeoutMs: options.timeoutMs ?? defaultToolTimeoutMs(), signal: options.signal });
   }
-}
-
-export async function runWorkerTask<T>(toolName: string, workerData: unknown, options: McpToolGuardOptions = {}): Promise<T> {
   const timeoutMs = options.timeoutMs ?? heavyToolTimeoutMs();
-  return import.meta.url.endsWith(".ts")
-    ? runChildProcessTask(toolName, workerData, timeoutMs)
-    : runWorkerThreadTask(toolName, workerData, timeoutMs);
+  const notify = progressNotifier(options);
+  if (taskClass === "heavy") return runHeavyTask<T>(toolName, workerData, timeoutMs, options, notify);
+  if (options.signal?.aborted) throw cancelledError(toolName);
+  if (indexMutex.isLocked) notify?.("Waiting for another index task to finish");
+  let release: () => void;
+  try {
+    release = await indexMutex.acquire(options.signal ? AbortSignal.any([options.signal, shutdown.signal]) : shutdown.signal);
+  } catch {
+    throw options.signal?.aborted ? cancelledError(toolName) : new Error(`MCP tool ${toolName} was cancelled: the worker pool closed`);
+  }
+  try {
+    return await runHeavyTask<T>(toolName, workerData, timeoutMs, options, notify);
+  } finally {
+    release();
+  }
 }

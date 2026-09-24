@@ -11,7 +11,7 @@ import { ALLOW_SECRET_FILES_ENV, isSecretFile, secretFilesAllowed } from "../con
 import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
 import { annotateRegisteredTools, confirmDangerousCall } from "./annotations.js";
-import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
+import { closeWorkerPools, runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { formatSemanticDocSearchResults } from "./format.js";
 import type { SymbolRecord } from "../types.js";
@@ -261,13 +261,13 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       after: z.number().int().min(0).max(500).default(20).describe("Number of lines to include after the target line; default is 20."),
       maxChars: z.number().int().min(100).max(50_000).default(12_000).describe("Maximum characters of numbered line text to return; default is 12000.")
     },
-    async ({ file, line, before, after, maxChars }) => {
+    async ({ file, line, before, after, maxChars }, extra) => {
       return withMcpToolGuard("bitrix_read_file_context", async () => {
         const { absolutePath, relativePath } = await assertFileInsideReadAllowlist(paths, file);
         const contents = await readContextFile(absolutePath, relativePath);
         const context = buildFileContext(contents, absolutePath, relativePath, line, before, after, maxChars);
         return { content: [{ type: "text", text: JSON.stringify(context, null, 2) }] };
-      });
+      }, extra);
     }
   );
 
@@ -285,7 +285,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       maxChars: z.number().int().min(100).max(50_000).default(12_000),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ name, type, kind, file, before, after, includeBody, maxChars, format }) => {
+    async ({ name, type, kind, file, before, after, includeBody, maxChars, format }, extra) => {
       return withMcpToolGuard("bitrix_read_symbol_context", async () => {
         const matches = await searchSymbolsForContext(sqlitePath(paths.dataDir), { name, type, kind, file, limit: 25 }) ?? [];
         const resultBase = { query: { name, type, kind, file } };
@@ -324,7 +324,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
           context
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      });
+      }, extra);
     }
   );
 
@@ -339,7 +339,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ target, relation, kind, module, limit, format }) => {
+    async ({ target, relation, kind, module, limit, format }, extra) => {
       return withMcpToolGuard("bitrix_inheritance_search", async () => {
         const relations = await searchInheritanceRelations(sqlitePath(paths.dataDir), { target, relation, kind, module, limit }) ?? [];
         const result = {
@@ -348,7 +348,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
           results: format === "full" ? relations : relations.map(compactInheritanceRelation)
         };
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      });
+      }, extra);
     }
   );
 
@@ -364,8 +364,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20),
       ...searchFormatSchema
     },
-    async ({ query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
-      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
+    async ({ query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }, extra) => {
+      return runWorkerTask("bitrix_liveapi_search", { name: "searchLiveApi", paths, query: { query, type, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } }, extra);
     }
   );
 
@@ -380,8 +380,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20),
       ...searchFormatSchema
     },
-    async ({ query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
-      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
+    async ({ query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format }, extra) => {
+      return runWorkerTask("bitrix_event_search", { name: "searchEvents", paths, query: { query, module, kind, preferLocal, limit, includeSignature, maxSignatureChars, maxTextChars, format } }, extra);
     }
   );
 
@@ -398,8 +398,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns agent name/module/schedule/location; full returns raw agent symbol records.")
     },
-    async ({ query, module, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_agent_search", { name: "searchAgents", paths, query: { query, module, kind, file, limit, format } });
+    async ({ query, module, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_agent_search", { name: "searchAgents", paths, query: { query, module, kind, file, limit, format } }, extra);
     }
   );
 
@@ -417,8 +417,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns eventName/api/kind/file/line/signature; full returns raw mail event symbol records.")
     },
-    async ({ query, eventName, api, kind, file, includeHandlers, limit, format }) => {
-      return runWorkerTask("bitrix_mail_event_search", { name: "searchMailEvents", paths, query: { query, eventName, api, kind, file, includeHandlers, limit, format } });
+    async ({ query, eventName, api, kind, file, includeHandlers, limit, format }, extra) => {
+      return runWorkerTask("bitrix_mail_event_search", { name: "searchMailEvents", paths, query: { query, eventName, api, kind, file, includeHandlers, limit, format } }, extra);
     }
   );
 
@@ -435,8 +435,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ query, component, template, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_component_search", { name: "searchComponents", paths, query: { query, component, template, kind, file, limit, format } });
+    async ({ query, component, template, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_component_search", { name: "searchComponents", paths, query: { query, component, template, kind, file, limit, format } }, extra);
     }
   );
 
@@ -452,8 +452,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       includeParams: z.boolean().optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ component, template, callFile, includeFiles, includeAssets, includeParams, format }) => {
-      return runWorkerTask("bitrix_component_context", { name: "getComponentContext", paths, query: { component, template, callFile, includeFiles, includeAssets, includeParams, format } });
+    async ({ component, template, callFile, includeFiles, includeAssets, includeParams, format }, extra) => {
+      return runWorkerTask("bitrix_component_context", { name: "getComponentContext", paths, query: { component, template, callFile, includeFiles, includeAssets, includeParams, format } }, extra);
     }
   );
 
@@ -468,8 +468,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns module/call/kind/file/line/signature fields; full returns raw module usage records.")
     },
-    async ({ module, call, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_module_usage_search", { name: "searchModuleUsages", paths, query: { module, call, kind, file, limit, format } });
+    async ({ module, call, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_module_usage_search", { name: "searchModuleUsages", paths, query: { module, call, kind, file, limit, format } }, extra);
     }
   );
 
@@ -485,8 +485,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns iblockId/api/kind/file/line/context/signature; full returns raw IBlock usage records.")
     },
-    async ({ query, iblockId, api, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_iblock_usage_search", { name: "searchIblockUsages", paths, query: { query, iblockId, api, kind, file, limit, format } });
+    async ({ query, iblockId, api, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_iblock_usage_search", { name: "searchIblockUsages", paths, query: { query, iblockId, api, kind, file, limit, format } }, extra);
     }
   );
 
@@ -502,8 +502,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns hlblockId/api/kind/file/line/context/signature; full returns raw Highloadblock usage records.")
     },
-    async ({ query, hlblockId, api, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_hlblock_usage_search", { name: "searchHlblockUsages", paths, query: { query, hlblockId, api, kind, file, limit, format } });
+    async ({ query, hlblockId, api, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_hlblock_usage_search", { name: "searchHlblockUsages", paths, query: { query, hlblockId, api, kind, file, limit, format } }, extra);
     }
   );
 
@@ -522,8 +522,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns option module/name/operation/api/kind/file/line/context/signature; full returns raw option records.")
     },
-    async ({ query, module, name, operation, api, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_option_search", { name: "searchOptionUsages", paths, query: { query, module, name, operation, api, kind, file, limit, format } });
+    async ({ query, module, name, operation, api, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_option_search", { name: "searchOptionUsages", paths, query: { query, module, name, operation, api, kind, file, limit, format } }, extra);
     }
   );
 
@@ -539,8 +539,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ query, tableName, className, module, kind, limit, format }) => {
-      return runWorkerTask("bitrix_orm_search", { name: "searchOrmEntities", paths, query: { query, tableName, className, module, kind, limit, format } });
+    async ({ query, tableName, className, module, kind, limit, format }, extra) => {
+      return runWorkerTask("bitrix_orm_search", { name: "searchOrmEntities", paths, query: { query, tableName, className, module, kind, limit, format } }, extra);
     }
   );
 
@@ -553,8 +553,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       file: z.string().optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ className, tableName, file, format }) => {
-      return runWorkerTask("bitrix_orm_entity_map", { name: "getOrmEntityMap", paths, query: { className, tableName, file, format } });
+    async ({ className, tableName, file, format }, extra) => {
+      return runWorkerTask("bitrix_orm_entity_map", { name: "getOrmEntityMap", paths, query: { className, tableName, file, format } }, extra);
     }
   );
 
@@ -570,8 +570,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ query, entity, method, file, kind, limit, format }) => {
-      return runWorkerTask("bitrix_orm_usage_search", { name: "searchOrmUsages", paths, query: { query, entity, method, file, kind, limit, format } });
+    async ({ query, entity, method, file, kind, limit, format }, extra) => {
+      return runWorkerTask("bitrix_orm_usage_search", { name: "searchOrmUsages", paths, query: { query, entity, method, file, kind, limit, format } }, extra);
     }
   );
 
@@ -586,8 +586,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ query, namespace, package: packageName, type, limit, format }) => {
-      return runWorkerTask("bitrix_autoload_search", { name: "searchAutoloadRecords", paths, query: { query, namespace, package: packageName, type, limit, format } });
+    async ({ query, namespace, package: packageName, type, limit, format }, extra) => {
+      return runWorkerTask("bitrix_autoload_search", { name: "searchAutoloadRecords", paths, query: { query, namespace, package: packageName, type, limit, format } }, extra);
     }
   );
 
@@ -606,8 +606,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(500).default(20),
       format: z.enum(["compact", "full"]).optional().describe("compact returns short source/target fields by default; full returns raw relation records.")
     },
-    async ({ sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format }) => {
-      return runWorkerTask("bitrix_relation_search", { name: "searchBitrixRelations", paths, query: { sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format } });
+    async ({ sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format }, extra) => {
+      return runWorkerTask("bitrix_relation_search", { name: "searchBitrixRelations", paths, query: { sourceType, sourceName, targetType, targetName, relationType, module, kind, file, limit, format } }, extra);
     }
   );
 
@@ -624,8 +624,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(1000).default(100),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ nodeType, nodeName, direction, relationType, depth, limit, format }) => {
-      return runWorkerTask("bitrix_graph_neighbors", { name: "graphNeighbors", paths, query: { nodeType, nodeName, direction, relationType, depth, limit, format } });
+    async ({ nodeType, nodeName, direction, relationType, depth, limit, format }, extra) => {
+      return runWorkerTask("bitrix_graph_neighbors", { name: "graphNeighbors", paths, query: { nodeType, nodeName, direction, relationType, depth, limit, format } }, extra);
     }
   );
 
@@ -641,8 +641,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(1000).default(100),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ startType, startName, direction, maxDepth, relationTypes, limit, format }) => {
-      return runWorkerTask("bitrix_graph_traverse", { name: "graphTraverse", paths, query: { startType, startName, direction, maxDepth, relationTypes, limit, format } });
+    async ({ startType, startName, direction, maxDepth, relationTypes, limit, format }, extra) => {
+      return runWorkerTask("bitrix_graph_traverse", { name: "graphTraverse", paths, query: { startType, startName, direction, maxDepth, relationTypes, limit, format } }, extra);
     }
   );
 
@@ -659,8 +659,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(1000).default(100),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format }) => {
-      return runWorkerTask("bitrix_impact_radius", { name: "impactRadius", paths, query: { files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format } });
+    async ({ files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format }, extra) => {
+      return runWorkerTask("bitrix_impact_radius", { name: "impactRadius", paths, query: { files, base, maxDepth, relationTypes, includeChangedSymbols, includeRisk, limit, format } }, extra);
     }
   );
 
@@ -680,8 +680,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       maxItems: z.number().int().min(1).max(1000).optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format }) => {
-      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format } });
+    async ({ base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format }, extra) => {
+      return runWorkerTask("bitrix_detect_changes", { name: "detectChanges", paths, query: { base, kind, includeSource, includeRelations, includeImpact, includeRisk, maxDepth, maxFiles, maxItems, format } }, extra);
     }
   );
 
@@ -699,8 +699,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       includeWarnings: z.boolean().optional(),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format }) => {
-      return runWorkerTask("bitrix_project_overview", { name: "projectOverview", paths, query: { includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format } });
+    async ({ includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format }, extra) => {
+      return runWorkerTask("bitrix_project_overview", { name: "projectOverview", paths, query: { includeTopFiles, includeModules, includeComponents, includeEvents, includeOrm, includeAgents, includeMailEvents, includeWarnings, format } }, extra);
     }
   );
 
@@ -710,9 +710,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     {
       root: z.string().optional()
     },
-    async ({ root }) => {
+    async ({ root }, extra) => {
       const resolvedRoot = normalizeProjectRoot(paths, root);
-      return runWorkerTask("bitrix_index_project", { name: "indexProject", paths, root: resolvedRoot });
+      return runWorkerTask("bitrix_index_project", { name: "indexProject", paths, root: resolvedRoot }, extra);
     }
   );
 
@@ -723,9 +723,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       templatePath: z.string().optional().describe("Template directory path relative to the project root, for example local/templates/site."),
       root: z.string().optional().describe("Deprecated: use templatePath instead. Temporary compatibility alias for a template path relative to the project root.")
     },
-    async ({ templatePath, root }) => {
+    async ({ templatePath, root }, extra) => {
       const resolvedRoot = normalizeTemplateRoot(paths, templatePath ?? root);
-      return runWorkerTask("bitrix_index_template", { name: "indexTemplate", paths, templatePath: resolvedRoot });
+      return runWorkerTask("bitrix_index_template", { name: "indexTemplate", paths, templatePath: resolvedRoot }, extra);
     }
   );
 
@@ -735,8 +735,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     {
       includeInstall: z.boolean().optional().describe("Also index module install/ assets (slow on large cores); default false.")
     },
-    async ({ includeInstall }) => {
-      return runWorkerTask("bitrix_index_all", { name: "indexAll", paths, includeInstall });
+    async ({ includeInstall }, extra) => {
+      return runWorkerTask("bitrix_index_all", { name: "indexAll", paths, includeInstall }, extra);
     }
   );
 
@@ -744,11 +744,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix_index_status",
     "Show the Bitrix MCP SQLite DB path and current index counters for files, symbols, events, documents, and last index time.",
     {},
-    async () => {
+    async (_args, extra) => {
       return withMcpToolGuard("bitrix_index_status", async () => {
         const status = await readIndexStatus(paths);
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
-      });
+      }, extra);
     }
   );
 
@@ -760,8 +760,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(50).default(5),
       ...searchFormatSchema
     },
-    async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
-      return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit, includeSignature, maxSignatureChars, maxTextChars, format } });
+    async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }, extra) => {
+      return runWorkerTask("bitrix_docs_search", { name: "searchDocs", paths, query: { query, limit, includeSignature, maxSignatureChars, maxTextChars, format } }, extra);
     }
   );
 
@@ -774,8 +774,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(20),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ symbol, limit, format }) => {
-      return runWorkerTask("bitrix_docs_for_symbol", { name: "docsForSymbol", paths, query: { symbol, limit, format } });
+    async ({ symbol, limit, format }, extra) => {
+      return runWorkerTask("bitrix_docs_for_symbol", { name: "docsForSymbol", paths, query: { symbol, limit, format } }, extra);
     }
   );
 
@@ -791,8 +791,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       limit: z.number().int().min(1).max(100).default(10),
       format: z.enum(["compact", "full"]).optional()
     },
-    async ({ query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format }) => {
-      return runWorkerTask("bitrix_explain_api_usage", { name: "explainApiUsage", paths, query: { query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format } });
+    async ({ query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format }, extra) => {
+      return runWorkerTask("bitrix_explain_api_usage", { name: "explainApiUsage", paths, query: { query, kind, includeDocs, includeLocalUsages, includeCoreDefinition, limit, format } }, extra);
     }
   );
 
@@ -800,8 +800,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
     "bitrix_index_docs",
     "Clone/pull and index Bitrix documentation sources into the local SQLite documentation index, including the official Bitrix Framework docs repository when enabled.",
     {},
-    async () => {
-      return runWorkerTask("bitrix_index_docs", { name: "indexDocs", paths });
+    async (_args, extra) => {
+      return runWorkerTask("bitrix_index_docs", { name: "indexDocs", paths }, extra);
     }
   );
 
@@ -816,11 +816,11 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         limit: z.number().int().min(1).max(20).default(5),
         ...searchFormatSchema
       },
-      async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }) => {
+      async ({ query, limit, includeSignature, maxSignatureChars, maxTextChars, format }, extra) => {
         return withMcpToolGuard("bitrix_semantic_docs_search", async () => {
           const results = await embeddings.search(query, limit);
           return { content: [{ type: "text", text: JSON.stringify(formatSemanticDocSearchResults(results, { query, includeSignature, maxSignatureChars, maxTextChars, format }), null, 2) }] };
-        });
+        }, extra);
       }
     );
   }
@@ -830,7 +830,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
       "bitrix_db_connections",
       "List Bitrix database connections parsed from bitrix/.settings.php. Passwords are redacted (only hasPassword is reported). Requires BITRIX_MCP_DB_ENABLED=1.",
       {},
-      async () => runWorkerTask("bitrix_db_connections", { name: "dbConnections", paths, query: {} })
+      async (_args, extra) => runWorkerTask("bitrix_db_connections", { name: "dbConnections", paths, query: {} }, extra)
     );
 
     server.tool(
@@ -842,7 +842,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\"."),
         limit: z.number().int().min(1).max(2000).optional().describe("Maximum number of tables to return; default 200.")
       },
-      async ({ table, prefix, connection, limit }) => runWorkerTask("bitrix_db_schema", { name: "dbSchema", paths, query: { table, prefix, connection, limit } })
+      async ({ table, prefix, connection, limit }, extra) => runWorkerTask("bitrix_db_schema", { name: "dbSchema", paths, query: { table, prefix, connection, limit } }, extra)
     );
 
     server.tool(
@@ -853,7 +853,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\"."),
         limit: z.number().int().min(1).max(10000).optional().describe("Maximum rows to return; default 500.")
       },
-      async ({ sql, connection, limit }) => runWorkerTask("bitrix_db_query", { name: "dbQuery", paths, query: { sql, connection, limit } })
+      async ({ sql, connection, limit }, extra) => runWorkerTask("bitrix_db_query", { name: "dbQuery", paths, query: { sql, connection, limit } }, extra)
     );
 
     if (paths.dbAllowWrite) {
@@ -864,9 +864,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
           sql: z.string().min(1).describe("Write SQL statement to execute."),
           connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\".")
         },
-        async ({ sql, connection }) => {
+        async ({ sql, connection }, extra) => {
           await confirmDangerousCall(server, "bitrix_db_execute", `Connection: ${connection ?? "default"}\n\n${sql}`);
-          return runWorkerTask("bitrix_db_execute", { name: "dbExecute", paths, query: { sql, connection } });
+          return runWorkerTask("bitrix_db_execute", { name: "dbExecute", paths, query: { sql, connection } }, extra);
         }
       );
     }
@@ -880,9 +880,9 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         code: z.string().min(1).describe("PHP code to run with Bitrix loaded. Use `return <expr>;` to get a serialized value back; echoed output is captured separately. A leading <?php tag is optional."),
         timeoutMs: z.number().int().min(1000).max(600000).optional().describe("Max execution time in milliseconds; default 30000.")
       },
-      async ({ code, timeoutMs }) => {
+      async ({ code, timeoutMs }, extra) => {
         await confirmDangerousCall(server, "bitrix_tinker", code);
-        return runWorkerTask("bitrix_tinker", { name: "tinker", paths, query: { code, timeoutMs } });
+        return runWorkerTask("bitrix_tinker", { name: "tinker", paths, query: { code, timeoutMs } }, extra);
       }
     );
   }
@@ -924,5 +924,8 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
 export async function serveStdio(paths: RuntimePaths = resolveRuntimePaths()): Promise<void> {
   const server = createMcpServer(paths);
+  server.server.onclose = () => { void closeWorkerPools(); };
+  // The stdio transport does not notice EOF on stdin; close explicitly so workers stop with the client.
+  process.stdin.once("end", () => { void server.close(); });
   await server.connect(new StdioServerTransport());
 }
