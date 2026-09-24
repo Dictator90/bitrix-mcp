@@ -3,6 +3,7 @@ import path from "node:path";
 import { openDatabase } from "../database.js";
 import { nullable } from "./rows.js";
 import { ensureSqliteStore } from "./schema.js";
+import { INSERT_DOC_FTS_SQL, docFtsValues } from "./fts.js";
 
 export interface ExistingDocIndexMetadata {
   uri: string;
@@ -89,7 +90,7 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
         relative_path = excluded.relative_path
       RETURNING id
     `);
-    const insertFts = db.prepare("INSERT INTO docs_fts (rowid, uri, title, path, text) VALUES (?, ?, ?, ?, ?)");
+    const insertFts = db.prepare(INSERT_DOC_FTS_SQL);
     const insertSymbolRef = db.prepare(`
       INSERT INTO doc_symbol_refs (symbol, doc_uri, doc_path, title, chunk_index, excerpt)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -144,7 +145,7 @@ export async function writeDocsToSqlite(dbFile: string, chunks: DocIndexChunk[],
           nullable(chunk.sourceUri),
           nullable(chunk.relativePath)
         ) as { id: number };
-        insertFts.run(row.id, chunk.uri, nullable(chunk.title), nullable(chunk.path), chunk.text);
+        insertFts.run(row.id, ...docFtsValues(chunk));
         for (const symbol of chunk.symbolRefs ?? []) {
           insertSymbolRef.run(symbol, chunk.uri, nullable(chunk.path), nullable(chunk.title), chunk.chunkIndex, excerptForSymbolRef(chunk.text, symbol));
         }

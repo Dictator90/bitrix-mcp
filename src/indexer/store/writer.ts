@@ -6,6 +6,7 @@ import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } 
 import { agentRelationsForSymbol, componentRelationsForFile, componentRelationsForSymbol, eventRelationsForSymbol, inheritanceRelationsForSymbol, mailEventRelationsForSymbol, moduleUsageRelationsForFile } from "./relations.js";
 import { nullable, relationFileForStorage, relationMetadataJson, rowToSymbol } from "./rows.js";
 import type { SymbolRow } from "./rows.js";
+import { INSERT_EVENT_FTS_SQL, INSERT_SYMBOL_FTS_SQL, eventFtsValues, symbolFtsValues } from "./fts.js";
 import { PARSER_VERSION, ensureSqliteStore } from "./schema.js";
 import type { ExistingIndexFile } from "./types.js";
 
@@ -106,14 +107,8 @@ function prepareWriteStatements(db: DatabaseSync) {
     INSERT INTO option_usages (file_id, kind, root, module, name, operation, api, file, relative_file, line, signature, context_type, context_name)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertSymbolFts = db.prepare(`
-    INSERT INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertEventFts = db.prepare(`
-    INSERT INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  const insertSymbolFts = db.prepare(INSERT_SYMBOL_FTS_SQL);
+  const insertEventFts = db.prepare(INSERT_EVENT_FTS_SQL);
   const insertRelation = db.prepare(`
     INSERT INTO bitrix_relations (source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -243,15 +238,7 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
         nullable(symbol.template),
         symbol.params && symbol.params.length ? JSON.stringify(symbol.params) : null
       ) as { id: number };
-      insertSymbolFts.run(
-        symbolIdRow.id,
-        symbol.name,
-        symbol.type,
-        nullable(symbol.module),
-        nullable(symbol.className),
-        nullable(symbol.signature),
-        nullable(symbol.description)
-      );
+      insertSymbolFts.run(symbolIdRow.id, ...symbolFtsValues(symbol));
       if (symbol.type === "event") {
         const eventResult = insertEvent.run(
           symbolIdRow.id,
@@ -268,16 +255,7 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
           nullable(symbol.signature),
           nullable(symbol.description)
         );
-        insertEventFts.run(
-          Number(eventResult.lastInsertRowid),
-          symbol.eventName ?? symbol.name,
-          nullable(symbol.module),
-          nullable(symbol.handlerClass),
-          nullable(symbol.handlerMethod),
-          nullable(symbol.handlerFunction),
-          nullable(symbol.signature),
-          nullable(symbol.description)
-        );
+        insertEventFts.run(Number(eventResult.lastInsertRowid), ...eventFtsValues({ ...symbol, name: symbol.eventName ?? symbol.name }));
         for (const relation of eventRelationsForSymbol(symbol, file)) {
           insertRelation.run(
             relation.sourceType,

@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase as openIndexDatabase } from "../indexer/database.js";
+import { DOCS_FTS_WEIGHTS, EVENTS_FTS_WEIGHTS, SYMBOLS_FTS_WEIGHTS } from "../indexer/store/fts.js";
+import { codeFtsQuery, proseFtsQuery } from "../search/textTokens.js";
+import type { EventRecord, IndexKind, SearchResult, SymbolRecord } from "../types.js";
 
 const openDatabase = (dbFile: string): DatabaseSync => openIndexDatabase(dbFile, { readOnly: true });
-import type { EventRecord, IndexKind, SearchResult, SymbolRecord } from "../types.js";
 
 export interface LiveApiQuery {
   query: string;
@@ -35,26 +37,25 @@ export interface DocSearchResult {
 }
 
 interface SymbolRow {
+  id: number;
   kind: IndexKind;
   type: SymbolRecord["type"];
   language: string | null;
   name: string;
   module: string | null;
   class_name: string | null;
+  fully_qualified_name: string | null;
   file: string;
-  relative_file?: string | null;
+  relative_file: string | null;
   line: number;
-  line_end?: number | null;
+  line_end: number | null;
   signature: string | null;
   description: string | null;
-  rank: number | null;
-  exact_rank: number;
-  prefix_rank: number;
-  like_rank: number;
-  local_rank: number;
+  rank?: number | null;
 }
 
 interface EventRow {
+  id: number;
   kind: IndexKind;
   module: string | null;
   name: string;
@@ -62,18 +63,15 @@ interface EventRow {
   handler_method: string | null;
   handler_function: string | null;
   file: string;
-  relative_file?: string | null;
+  relative_file: string | null;
   line: number;
   signature: string | null;
   description: string | null;
-  rank: number | null;
-  exact_rank: number;
-  prefix_rank: number;
-  like_rank: number;
-  local_rank: number;
+  rank?: number | null;
 }
 
 interface DocRow {
+  id: number;
   uri: string;
   title: string | null;
   path: string | null;
@@ -83,23 +81,16 @@ interface DocRow {
   relative_path: string | null;
   chunk_index: number;
   text: string;
-  rank: number | null;
-  exact_rank: number;
-  prefix_rank: number;
-  like_rank: number;
+  rank?: number | null;
 }
 
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, "\\$&").toLowerCase();
-}
-
-function ftsQuery(query: string): string {
-  const tokens = query
-    .toLowerCase()
-    .match(/[\p{L}\p{N}_]+/gu)
-    ?.map((token) => `"${token.replace(/"/g, '""')}"*`) ?? [];
-  return tokens.join(" ") || "__bitrix_mcp_no_match__";
-}
+/** Match quality tiers: exact name, name prefix, then full-text relevance. */
+const EXACT_SCORE = 1;
+const PREFIX_SCORE = 0.9;
+const FTS_MAX_SCORE = 0.85;
+const FTS_MIN_SCORE = 0.3;
+/** bm25 multiplier for project/template results when preferLocal is on (bm25 is negative: larger magnitude = better). */
+const LOCAL_BOOST = 1.25;
 
 function candidateLimit(limit: number): number {
   return Math.max(100, Math.min(1_000, limit * 25));
@@ -110,30 +101,69 @@ function kindValues(kind: IndexKind | IndexKind[] | undefined): IndexKind[] {
   return Array.isArray(kind) ? kind : [kind];
 }
 
-function localBoostExpression(alias: string, preferLocal: boolean | undefined): string {
-  if (preferLocal === false) return "0";
-  return `CASE WHEN ${alias}.kind IN ('project', 'template') THEN 1 ELSE 0 END`;
+/** Upper bound for a case-insensitive prefix range scan on a NOCASE index. */
+function prefixUpperBound(prefix: string): string {
+  return `${prefix}￿`;
 }
 
-function symbolScore(row: SymbolRow): number {
-  if (row.exact_rank) return 1;
-  if (row.prefix_rank) return 0.9;
-  if (row.like_rank) return 0.8;
-  return row.rank == null ? 0.65 : Math.max(0.4, Math.min(0.7, 0.7 - row.rank / 100));
+function isLocal(kind: IndexKind, preferLocal: boolean | undefined): boolean {
+  return preferLocal !== false && (kind === "project" || kind === "template");
 }
 
-function eventScore(row: EventRow): number {
-  if (row.exact_rank) return 1;
-  if (row.prefix_rank) return 0.9;
-  if (row.like_rank) return 0.8;
-  return row.rank == null ? 0.65 : Math.max(0.4, Math.min(0.7, 0.7 - row.rank / 100));
+/** `Class::method` / `$obj->method` → `method`. */
+function memberName(name: string): string {
+  const match = name.match(/(?:::|->)([^:>]+)$/u);
+  return match ? match[1] : name;
 }
 
-function docScore(row: DocRow): number {
-  if (row.exact_rank) return 1;
-  if (row.prefix_rank) return 0.9;
-  if (row.like_rank) return 0.8;
-  return row.rank == null ? 0.65 : Math.max(0.4, Math.min(0.7, 0.7 - row.rank / 100));
+function matchTier(query: string, names: Array<string | null | undefined>): number {
+  const needle = query.toLowerCase();
+  const candidates = names.filter((name): name is string => Boolean(name)).flatMap((name) => [name.toLowerCase(), memberName(name).toLowerCase()]);
+  if (candidates.some((candidate) => candidate === needle)) return EXACT_SCORE;
+  if (candidates.some((candidate) => candidate.startsWith(needle))) return PREFIX_SCORE;
+  return 0;
+}
+
+interface Ranked<T> {
+  row: T;
+  tier: number;
+  rank: number;
+  local: boolean;
+}
+
+/**
+ * Merges index (exact/prefix) and FTS candidates by row id and orders them:
+ * match tier first, then bm25 relevance with the local boost applied. FTS-only
+ * results get a score scaled against the best bm25 in the result set.
+ */
+function rankRows<T extends { id: number; rank?: number | null }>(rows: T[], tierOf: (row: T) => number, localOf: (row: T) => boolean, limit: number): Array<{ row: T; score: number }> {
+  const byId = new Map<number, Ranked<T>>();
+  for (const row of rows) {
+    const existing = byId.get(row.id);
+    const rank = row.rank ?? 0;
+    if (existing) {
+      existing.rank = Math.min(existing.rank, rank);
+      continue;
+    }
+    byId.set(row.id, { row, tier: tierOf(row), rank, local: localOf(row) });
+  }
+  const boosted = (entry: Ranked<T>) => entry.rank * (entry.local ? LOCAL_BOOST : 1);
+  const ranked = [...byId.values()].sort((a, b) => {
+    if (a.tier !== b.tier) return b.tier - a.tier;
+    // Within exact/prefix matches, local code first; FTS matches carry the local boost in their bm25.
+    if (a.tier > 0 && a.local !== b.local) return a.local ? -1 : 1;
+    return boosted(a) - boosted(b) || a.row.id - b.row.id;
+  });
+  const best = Math.min(0, ...ranked.filter((entry) => entry.tier === 0).map(boosted));
+  return ranked.slice(0, limit).map((entry) => ({
+    row: entry.row,
+    score: entry.tier > 0 ? entry.tier : best < 0 ? Math.max(FTS_MIN_SCORE, FTS_MAX_SCORE * (boosted(entry) / best)) : FTS_MIN_SCORE
+  }));
+}
+
+function isFtsSyntaxError(error: unknown): boolean {
+  const message = (error as Error).message ?? "";
+  return message.includes("fts5") || message.includes("MATCH");
 }
 
 function rowToEvent(row: EventRow): EventRecord {
@@ -160,6 +190,7 @@ function rowToSymbol(row: SymbolRow): SymbolRecord {
     name: row.name,
     module: row.module ?? undefined,
     className: row.class_name ?? undefined,
+    fullyQualifiedName: row.fully_qualified_name ?? undefined,
     file: row.file,
     relativeFile: row.relative_file ?? undefined,
     line: row.line,
@@ -173,258 +204,177 @@ export async function searchLiveApi(dbFile: string, query: LiveApiQuery): Promis
   return searchSqliteLiveApi(dbFile, query);
 }
 
+const SYMBOL_COLUMNS = "s.id, s.kind, s.type, s.language, s.name, s.module, s.class_name, s.fully_qualified_name, s.file, f.relative_path AS relative_file, s.line, s.line_end, s.signature, s.description";
+
+/**
+ * Symbol search: exact and prefix matches on the symbol or class name (NOCASE
+ * indexes), plus FTS over names, their camelCase/namespace parts, FQNs,
+ * signatures and descriptions, ranked with column-weighted bm25.
+ */
 export async function searchSqliteLiveApi(dbFile: string, query: LiveApiQuery): Promise<SearchResult<SymbolRecord>[] | undefined> {
   try {
     await fs.access(dbFile);
   } catch {
     return undefined;
   }
+  const text = query.query.trim();
+  if (!text) return [];
 
-  const normalizedQuery = query.query.trim();
-  if (!normalizedQuery) {
-    return [];
-  }
-
-  const fts = ftsQuery(normalizedQuery);
-  const exact = normalizedQuery.toLowerCase();
-  const prefix = `${escapeLike(normalizedQuery)}%`;
-  const like = `%${escapeLike(normalizedQuery)}%`;
   const limit = query.limit ?? 20;
   const maxCandidates = candidateLimit(limit);
-  const branchFilters: string[] = [];
+  const filters: string[] = [];
   const filterParams: Array<string | number> = [];
   if (query.type) {
-    branchFilters.push("s.type = ?");
+    filters.push("s.type = ?");
     filterParams.push(query.type);
   }
   if (query.module) {
-    branchFilters.push("s.module = ?");
+    filters.push("s.module = ?");
     filterParams.push(query.module);
   }
   const kinds = kindValues(query.kind);
   if (kinds.length) {
-    branchFilters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
+    filters.push(`s.kind IN (${kinds.map(() => "?").join(", ")})`);
     filterParams.push(...kinds);
   }
-  const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
-  const localRankSql = localBoostExpression("s", query.preferLocal);
+  const where = filters.length ? ` AND ${filters.join(" AND ")}` : "";
 
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
-      WITH candidates AS (
-        SELECT * FROM (
-          SELECT
-            s.*,
-            f.relative_path AS relative_file,
-            CASE WHEN lower(s.name) = ? OR lower(coalesce(s.class_name, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
-            CASE WHEN lower(s.name) LIKE ? ESCAPE '\\' OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-            CASE WHEN lower(s.name) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(s.class_name, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(s.module, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(s.signature, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(s.description, '')) LIKE ? ESCAPE '\\'
-            THEN 1 ELSE 0 END AS like_rank,
-            ${localRankSql} AS local_rank,
-            NULL AS rank
-          FROM symbols s
-          JOIN files f ON f.id = s.file_id
-          WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
-          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, s.name ASC
-          LIMIT ?
-        )
-        UNION ALL
-        SELECT * FROM (
-          SELECT
-            s.*,
-            f.relative_path AS relative_file,
-            0 AS exact_rank,
-            0 AS prefix_rank,
-            0 AS like_rank,
-            ${localRankSql} AS local_rank,
-            bm25(symbols_fts) AS rank
-          FROM symbols_fts
-          JOIN symbols s ON s.id = symbols_fts.rowid
-          JOIN files f ON f.id = s.file_id
-          WHERE symbols_fts MATCH ?${branchWhere}
-          ORDER BY rank ASC, local_rank DESC
-          LIMIT ?
-        )
-      )
-      SELECT kind, type, language, name, module, class_name, file, relative_file, line, line_end, signature, description,
-             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
-      FROM candidates
-      GROUP BY kind, type, language, name, module, class_name, file, relative_file, line, line_end, signature, description
-      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
+      SELECT ${SYMBOL_COLUMNS}, NULL AS rank
+      FROM symbols s JOIN files f ON f.id = s.file_id
+      WHERE (s.name = ? COLLATE NOCASE OR s.class_name = ? COLLATE NOCASE OR (s.name >= ? COLLATE NOCASE AND s.name < ? COLLATE NOCASE))${where}
       LIMIT ?
-    `).all(exact, exact, prefix, prefix, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as SymbolRow[];
+    `).all(text, text, text, prefixUpperBound(text), ...filterParams, maxCandidates) as unknown as SymbolRow[];
 
-    return rows.map((row) => ({ score: symbolScore(row), item: rowToSymbol(row) }));
-  } catch (error) {
-    if ((error as Error).message.includes("fts5") || (error as Error).message.includes("MATCH")) {
-      return [];
+    const fts = codeFtsQuery(text);
+    if (fts) {
+      try {
+        rows.push(...db.prepare(`
+          SELECT ${SYMBOL_COLUMNS}, bm25(symbols_fts, ${SYMBOLS_FTS_WEIGHTS}) AS rank
+          FROM symbols_fts JOIN symbols s ON s.id = symbols_fts.rowid JOIN files f ON f.id = s.file_id
+          WHERE symbols_fts MATCH ?${where}
+          ORDER BY rank
+          LIMIT ?
+        `).all(fts, ...filterParams, maxCandidates) as unknown as SymbolRow[]);
+      } catch (error) {
+        if (!isFtsSyntaxError(error)) throw error;
+      }
     }
-    throw error;
+
+    return rankRows(rows, (row) => matchTier(text, [row.name, row.class_name, row.fully_qualified_name]), (row) => isLocal(row.kind, query.preferLocal), limit)
+      .map(({ row, score }) => ({ score, item: rowToSymbol(row) }));
   } finally {
     db.close();
   }
 }
 
+const EVENT_COLUMNS = "e.id, e.kind, e.module, e.name, e.handler_class, e.handler_method, e.handler_function, e.file, f.relative_path AS relative_file, e.line, e.signature, e.description";
+
+/** Event search: exact/prefix on the event name (or `module:Event`), plus weighted FTS over names, handlers and signatures. */
 export async function searchSqliteEvents(dbFile: string, query: LiveApiEventQuery): Promise<SearchResult<EventRecord>[] | undefined> {
   try {
     await fs.access(dbFile);
   } catch {
     return undefined;
   }
+  const text = query.query.trim();
+  if (!text) return [];
 
-  const normalizedQuery = query.query.trim();
-  if (!normalizedQuery) {
-    return [];
-  }
-
-  const fts = ftsQuery(normalizedQuery);
-  const exact = normalizedQuery.toLowerCase();
-  const prefix = `${escapeLike(normalizedQuery)}%`;
-  const like = `%${escapeLike(normalizedQuery)}%`;
+  const moduleQualified = text.match(/^([\w.]+):(\w+)$/u);
+  const eventName = moduleQualified ? moduleQualified[2] : text;
   const limit = query.limit ?? 20;
   const maxCandidates = candidateLimit(limit);
+  const filters: string[] = [];
   const filterParams: Array<string | number> = [];
-  const branchFilters: string[] = [];
-  if (query.module) {
-    branchFilters.push("e.module = ?");
-    filterParams.push(query.module);
+  const moduleFilter = query.module ?? moduleQualified?.[1];
+  if (moduleFilter) {
+    filters.push("e.module = ?");
+    filterParams.push(moduleFilter);
   }
   const kinds = kindValues(query.kind);
   if (kinds.length) {
-    branchFilters.push(`e.kind IN (${kinds.map(() => "?").join(", ")})`);
+    filters.push(`e.kind IN (${kinds.map(() => "?").join(", ")})`);
     filterParams.push(...kinds);
   }
-  const branchWhere = branchFilters.length ? ` AND ${branchFilters.join(" AND ")}` : "";
-  const localRankSql = localBoostExpression("e", query.preferLocal);
+  const where = filters.length ? ` AND ${filters.join(" AND ")}` : "";
 
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
-      WITH candidates AS (
-        SELECT * FROM (
-          SELECT
-            e.*,
-            f.relative_path AS relative_file,
-            CASE WHEN lower(e.name) = ? OR lower(coalesce(e.module, '') || ':' || e.name) = ? THEN 1 ELSE 0 END AS exact_rank,
-            CASE WHEN lower(e.name) LIKE ? ESCAPE '\\' OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-            CASE WHEN lower(e.name) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.module, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.module, '') || ':' || e.name) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.handler_class, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.handler_method, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.handler_function, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.signature, '')) LIKE ? ESCAPE '\\'
-               OR lower(coalesce(e.description, '')) LIKE ? ESCAPE '\\'
-            THEN 1 ELSE 0 END AS like_rank,
-            ${localRankSql} AS local_rank,
-            NULL AS rank
-          FROM events e
-          JOIN files f ON f.id = e.file_id
-          WHERE (exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1)${branchWhere}
-          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, e.name ASC
-          LIMIT ?
-        )
-        UNION ALL
-        SELECT * FROM (
-          SELECT
-            e.*,
-            f.relative_path AS relative_file,
-            0 AS exact_rank,
-            0 AS prefix_rank,
-            0 AS like_rank,
-            ${localRankSql} AS local_rank,
-            bm25(events_fts) AS rank
-          FROM events_fts
-          JOIN events e ON e.id = events_fts.rowid
-          JOIN files f ON f.id = e.file_id
-          WHERE events_fts MATCH ?${branchWhere}
-          ORDER BY rank ASC, local_rank DESC
-          LIMIT ?
-        )
-      )
-      SELECT kind, module, name, handler_class, handler_method, handler_function, file, relative_file, line, signature, description,
-             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank, max(local_rank) AS local_rank
-      FROM candidates
-      GROUP BY kind, module, name, handler_class, handler_method, handler_function, file, relative_file, line, signature, description
-      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, local_rank DESC, rank ASC, name ASC
+      SELECT ${EVENT_COLUMNS}, NULL AS rank
+      FROM events e JOIN files f ON f.id = e.file_id
+      WHERE (e.name = ? COLLATE NOCASE OR (e.name >= ? COLLATE NOCASE AND e.name < ? COLLATE NOCASE))${where}
       LIMIT ?
-    `).all(exact, exact, prefix, prefix, like, like, like, like, like, like, like, like, ...filterParams, maxCandidates, fts, ...filterParams, maxCandidates, limit) as unknown as EventRow[];
+    `).all(eventName, eventName, prefixUpperBound(eventName), ...filterParams, maxCandidates) as unknown as EventRow[];
 
-    return rows.map((row) => ({ score: eventScore(row), item: rowToEvent(row) }));
-  } catch (error) {
-    if ((error as Error).message.includes("fts5") || (error as Error).message.includes("MATCH")) {
-      return [];
+    const fts = codeFtsQuery(moduleQualified ? eventName : text);
+    if (fts) {
+      try {
+        rows.push(...db.prepare(`
+          SELECT ${EVENT_COLUMNS}, bm25(events_fts, ${EVENTS_FTS_WEIGHTS}) AS rank
+          FROM events_fts JOIN events e ON e.id = events_fts.rowid JOIN files f ON f.id = e.file_id
+          WHERE events_fts MATCH ?${where}
+          ORDER BY rank
+          LIMIT ?
+        `).all(fts, ...filterParams, maxCandidates) as unknown as EventRow[]);
+      } catch (error) {
+        if (!isFtsSyntaxError(error)) throw error;
+      }
     }
-    throw error;
+
+    return rankRows(rows, (row) => matchTier(eventName, [row.name]), (row) => isLocal(row.kind, query.preferLocal), limit)
+      .map(({ row, score }) => ({ score, item: rowToEvent(row) }));
   } finally {
     db.close();
   }
 }
 
+const DOC_COLUMNS = "c.id, d.uri, d.title, d.path, c.heading_path, c.section_anchor, c.source_uri, c.relative_path, c.chunk_index, c.text";
+
+/**
+ * Documentation search: exact/prefix title matches, plus FTS with the porter
+ * stemmer for English and Snowball stems for Russian (`событий` finds
+ * `событие`), weighted towards titles and headings.
+ */
 export async function searchSqliteDocs(dbFile: string, query: { query: string; limit?: number }): Promise<SearchResult<DocSearchResult>[] | undefined> {
   try {
     await fs.access(dbFile);
   } catch {
     return undefined;
   }
+  const text = query.query.trim();
+  if (!text) return [];
 
-  const normalizedQuery = query.query.trim();
-  if (!normalizedQuery) {
-    return [];
-  }
-
-  const fts = ftsQuery(normalizedQuery);
-  const exact = normalizedQuery.toLowerCase();
-  const prefix = `${escapeLike(normalizedQuery)}%`;
-  const like = `%${escapeLike(normalizedQuery)}%`;
   const limit = query.limit ?? 5;
   const maxCandidates = candidateLimit(limit);
   const db = openDatabase(dbFile);
   try {
     const rows = db.prepare(`
-      WITH candidates AS (
-        SELECT * FROM (
-          SELECT d.uri, d.title, d.path, c.heading_path, c.section_anchor, c.source_uri, c.relative_path, c.chunk_index, c.text,
-                 CASE WHEN lower(coalesce(d.title, '')) = ? THEN 1 ELSE 0 END AS exact_rank,
-                 CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS prefix_rank,
-                 CASE WHEN lower(coalesce(d.title, '')) LIKE ? ESCAPE '\\' OR lower(c.text) LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS like_rank,
-                 NULL AS rank
-          FROM doc_chunks c
-          JOIN docs d ON d.id = c.doc_id
-          WHERE exact_rank = 1 OR prefix_rank = 1 OR like_rank = 1
-          ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, d.uri ASC, c.chunk_index ASC
-          LIMIT ?
-        )
-        UNION ALL
-        SELECT * FROM (
-          SELECT d.uri, d.title, d.path, c.heading_path, c.section_anchor, c.source_uri, c.relative_path, c.chunk_index, c.text,
-                 0 AS exact_rank,
-                 0 AS prefix_rank,
-                 0 AS like_rank,
-                 bm25(docs_fts) AS rank
-          FROM docs_fts
-          JOIN doc_chunks c ON c.id = docs_fts.rowid
-          JOIN docs d ON d.id = c.doc_id
-          WHERE docs_fts MATCH ?
-          ORDER BY rank ASC
-          LIMIT ?
-        )
-      )
-      SELECT uri, title, path, heading_path, section_anchor, source_uri, relative_path, chunk_index, text,
-             min(rank) AS rank, max(exact_rank) AS exact_rank, max(prefix_rank) AS prefix_rank, max(like_rank) AS like_rank
-      FROM candidates
-      GROUP BY uri, title, path, heading_path, section_anchor, source_uri, relative_path, chunk_index, text
-      ORDER BY exact_rank DESC, prefix_rank DESC, like_rank DESC, rank ASC, uri ASC, chunk_index ASC
+      SELECT ${DOC_COLUMNS}, NULL AS rank
+      FROM docs d JOIN doc_chunks c ON c.doc_id = d.id
+      WHERE (d.title = ? COLLATE NOCASE OR (d.title >= ? COLLATE NOCASE AND d.title < ? COLLATE NOCASE)) AND c.chunk_index = 0
       LIMIT ?
-    `).all(exact, prefix, like, like, maxCandidates, fts, maxCandidates, limit) as unknown as DocRow[];
+    `).all(text, text, prefixUpperBound(text), maxCandidates) as unknown as DocRow[];
 
-    return rows.map((row) => ({
-      score: docScore(row),
+    const fts = proseFtsQuery(text);
+    if (fts) {
+      try {
+        rows.push(...db.prepare(`
+          SELECT ${DOC_COLUMNS}, bm25(docs_fts, ${DOCS_FTS_WEIGHTS}) AS rank
+          FROM docs_fts JOIN doc_chunks c ON c.id = docs_fts.rowid JOIN docs d ON d.id = c.doc_id
+          WHERE docs_fts MATCH ?
+          ORDER BY rank
+          LIMIT ?
+        `).all(fts, maxCandidates) as unknown as DocRow[]);
+      } catch (error) {
+        if (!isFtsSyntaxError(error)) throw error;
+      }
+    }
+
+    return rankRows(rows, (row) => matchTier(text, [row.title]), () => false, limit).map(({ row, score }) => ({
+      score,
       item: {
         uri: row.uri,
         title: row.title ?? undefined,
@@ -437,11 +387,6 @@ export async function searchSqliteDocs(dbFile: string, query: { query: string; l
         text: row.text
       }
     }));
-  } catch (error) {
-    if ((error as Error).message.includes("fts5") || (error as Error).message.includes("MATCH")) {
-      return [];
-    }
-    throw error;
   } finally {
     db.close();
   }

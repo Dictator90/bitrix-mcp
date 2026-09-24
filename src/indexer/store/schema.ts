@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "../database.js";
+import { FTS_TABLES_DDL, rebuildOutdatedFtsTables } from "./fts.js";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Version of the parser output. Stored per file; bump it whenever parsing
@@ -328,17 +329,11 @@ function migrateSchema(db: DatabaseSync): void {
         metadata_json TEXT
       );
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
-        name, type, module, class_name, signature, description
-      );
+      ${FTS_TABLES_DDL}
 
-      CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-        name, module, handler_class, handler_method, handler_function, signature, description
-      );
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
-        uri, title, path, text
-      );
+      CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_symbols_class_name_nocase ON symbols(class_name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_events_name_nocase ON events(name COLLATE NOCASE);
 
       CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_symbol ON doc_symbol_refs(symbol);
       CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_doc_uri ON doc_symbol_refs(doc_uri);
@@ -395,15 +390,6 @@ function migrateSchema(db: DatabaseSync): void {
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_file ON bitrix_relations(file);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_kind ON bitrix_relations(kind);
       CREATE INDEX IF NOT EXISTS idx_bitrix_relations_module ON bitrix_relations(module);
-
-      INSERT OR IGNORE INTO symbols_fts (rowid, name, type, module, class_name, signature, description)
-      SELECT id, name, type, module, class_name, signature, description FROM symbols;
-
-
-      INSERT OR IGNORE INTO docs_fts (rowid, uri, title, path, text)
-      SELECT doc_chunks.id, docs.uri, docs.title, docs.path, doc_chunks.text
-      FROM doc_chunks
-      JOIN docs ON docs.id = doc_chunks.doc_id;
     `);
 
     const docSourceColumns = (db.prepare("PRAGMA table_info(doc_sources)").all() as Array<{ name: string }>).map((column) => column.name);
@@ -506,18 +492,6 @@ function migrateSchema(db: DatabaseSync): void {
       }
     }
 
-    const eventFtsColumns = (db.prepare("PRAGMA table_info(events_fts)").all() as Array<{ name: string }>).map((column) => column.name);
-    if (!eventFtsColumns.includes("handler_class")) {
-      db.exec(`
-        DROP TABLE IF EXISTS events_fts;
-        CREATE VIRTUAL TABLE events_fts USING fts5(
-          name, module, handler_class, handler_method, handler_function, signature, description
-        );
-      `);
-    }
-    db.exec(`
-      INSERT OR IGNORE INTO events_fts (rowid, name, module, handler_class, handler_method, handler_function, signature, description)
-      SELECT id, name, module, handler_class, handler_method, handler_function, signature, description FROM events;
-    `);
+    rebuildOutdatedFtsTables(db);
   }
 }
