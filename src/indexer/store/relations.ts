@@ -358,3 +358,28 @@ export function featureRelationsForFile(file: IndexFile): BitrixRelationRecord[]
   }
   return relations;
 }
+
+/**
+ * Where events are fired (`event_emit`: new Event(...), GetModuleEvents,
+ * findEventHandlers) and unregistered (`event_unregister`): edges from the
+ * enclosing class (or file) to the `event:module:Name` node, so a traversal
+ * from an event reaches both its handlers and the code that fires it.
+ */
+export function eventEmitRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
+  if (symbol.type !== "event_emit" && symbol.type !== "event_unregister") return [];
+  const eventName = symbol.eventName ?? (symbol.name.split(":").slice(1).join(":") || symbol.name);
+  const eventNode = symbol.module ? `${symbol.module}:${eventName}` : eventName;
+  const source = symbol.className ? { sourceType: "class", sourceName: symbol.className } : { sourceType: "file", sourceName: file.relativePath };
+  return [{
+    ...source,
+    targetType: "event",
+    targetName: eventNode,
+    relationType: symbol.type === "event_emit" ? "emits_event" : "unregisters_event_handler",
+    file: symbol.file,
+    line: symbol.line,
+    module: symbol.module,
+    kind: file.kind,
+    signature: symbol.signature,
+    metadata: { api: symbol.api, ...(symbol.handlerClass ? { handler: `${symbol.handlerClass}::${symbol.handlerMethod ?? ""}` } : {}) }
+  }];
+}

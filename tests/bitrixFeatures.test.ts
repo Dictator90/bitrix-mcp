@@ -169,3 +169,23 @@ test("indexing stores features and graph edges", async () => {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("fired events link the emitting class to the event node", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { buildIndex } = await import("../src/indexer/indexer.js");
+  const { searchBitrixRelations } = await import("../src/indexer/sqliteStore.js");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-emit-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-emit-data-"));
+  try {
+    await fs.writeFile(path.join(root, "order.php"), "<?php\nnamespace Acme;\nuse Bitrix\\Main\\Event;\nclass Order { public function save() { (new Event('acme.shop', 'OnOrderSaved', []))->send(); } }\n", "utf8");
+    const dbFile = path.join(dataDir, "bitrix-mcp.sqlite");
+    await buildIndex({ root, kind: "project", dbFile });
+    const edges = await searchBitrixRelations(dbFile, { relationType: "emits_event" }) ?? [];
+    assert.deepEqual(edges.map((edge) => [edge.sourceType, edge.sourceName, edge.targetName]), [["class", "Acme\\Order", "acme.shop:OnOrderSaved"]]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

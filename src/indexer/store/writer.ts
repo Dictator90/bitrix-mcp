@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "../database.js";
 import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../../types.js";
-import { agentRelationsForSymbol, featureRelationsForFile, componentRelationsForFile, componentRelationsForSymbol, eventRelationsForSymbol, inheritanceRelationsForSymbol, mailEventRelationsForSymbol, moduleUsageRelationsForFile } from "./relations.js";
+import { agentRelationsForSymbol, eventEmitRelationsForSymbol, featureRelationsForFile, componentRelationsForFile, componentRelationsForSymbol, eventRelationsForSymbol, inheritanceRelationsForSymbol, mailEventRelationsForSymbol, moduleUsageRelationsForFile } from "./relations.js";
 import { nullable, relationFileForStorage, relationMetadataJson, rowToSymbol } from "./rows.js";
 import type { SymbolRow } from "./rows.js";
 import { INSERT_EVENT_FTS_SQL, INSERT_SYMBOL_FTS_SQL, eventFtsValues, symbolFtsValues } from "./fts.js";
@@ -296,6 +296,9 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
         for (const relation of componentRelationsForSymbol(symbol, file)) {
           insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
         }
+      }
+      for (const relation of eventEmitRelationsForSymbol(symbol, file)) {
+        insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
       }
       if (symbol.type === "agent") {
         for (const relation of agentRelationsForSymbol(symbol, file)) {
