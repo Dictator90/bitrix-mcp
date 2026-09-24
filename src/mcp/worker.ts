@@ -10,6 +10,7 @@ import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentContextResult, formatComponentSearchResults, formatDocSearchResults, formatEventSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatLiveApiSearchResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults, type AutoloadSearchFormatOptions, type HlblockUsageSearchFormatOptions, type IblockUsageSearchFormatOptions, type MailEventSearchFormatOptions, type ModuleUsageSearchFormatOptions, type OptionSearchFormatOptions, type OrmSearchFormatOptions, type RelationSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 import { readBitrixConnections, redactConnection, resolveConnection, withReadOnlyCredentials } from "../liveapi/settingsPhpParser.js";
 import { runQuery, getSchema } from "../db/mysqlClient.js";
+import { heavyToolTimeoutMs } from "./toolGuards.js";
 import { runTinker } from "../php/tinker.js";
 
 type WorkerTask =
@@ -221,8 +222,10 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
     case "tinker": {
-      const result = await runTinker(task.paths, task.query.code, { timeoutMs: task.query.timeoutMs });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      // Keep the PHP timeout below the worker's own timeout so PHP is killed (and temp files removed) before the worker is terminated.
+      const maxTimeoutMs = Math.max(1000, heavyToolTimeoutMs() - 5000);
+      const result = await runTinker(task.paths, task.query.code, { timeoutMs: Math.min(task.query.timeoutMs ?? 30_000, maxTimeoutMs) });
+      return { ...(result.ok ? {} : { isError: true }), content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     }
   }
 }

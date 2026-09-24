@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,38 @@ import type { TinkerError, TinkerResult } from "./types.js";
 const DEFAULT_TIMEOUT_MS = 30000;
 const TEMP_DIR_PREFIX = "bitrix-mcp-tinker-";
 const RETURN_TEXT_MAX_LENGTH = 8192;
+/** A JSON `returnValue` larger than this is dropped; `returnText` (truncated var_export) still describes it. */
+const RETURN_VALUE_MAX_JSON_CHARS = 8192;
+/** Echoed output kept in the result. */
+const OUTPUT_MAX_CHARS = 20_000;
+/** Hard cap on captured stdout+stderr; the PHP process is killed when exceeded. */
+const CAPTURE_MAX_BYTES = 4 * 1024 * 1024;
+/** Grace period between SIGTERM and SIGKILL. */
+const KILL_GRACE_MS = 2000;
+
+/**
+ * Environment variables passed through to PHP. Everything else in the MCP
+ * client's environment (API tokens, cloud credentials, …) is withheld.
+ * Extend with BITRIX_MCP_TINKER_ENV_PASSTHROUGH=VAR1,VAR2.
+ */
+const PASSTHROUGH_ENV = [
+  "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TEMP", "TMP",
+  "PHPRC", "PHP_INI_SCAN_DIR",
+  "SystemRoot", "SYSTEMROOT", "windir", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA"
+];
+
+/** Builds the minimal environment for the PHP child process. */
+export function buildTinkerEnv(source: NodeJS.ProcessEnv, extra: Record<string, string>): NodeJS.ProcessEnv {
+  const names = new Set(PASSTHROUGH_ENV);
+  for (const name of (source.BITRIX_MCP_TINKER_ENV_PASSTHROUGH ?? "").split(",")) {
+    if (name.trim()) names.add(name.trim());
+  }
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of names) {
+    if (source[name] !== undefined) env[name] = source[name];
+  }
+  return { ...env, ...extra };
+}
 
 /**
  * Matches a leading UTF-8 BOM and/or an opening `<?php` or short `<?` tag at
@@ -24,6 +56,7 @@ interface PhpExecution {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  outputLimitExceeded: boolean;
 }
 
 /**
@@ -84,10 +117,15 @@ register_shutdown_function(function () use (&$__bxMcpEmitted, $__bxMcpEmit): voi
     }
     $__bxMcpLastError = error_get_last();
     $__bxMcpFatalMask = E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR;
+    $__bxMcpBuffered = '';
+    $__bxMcpBaseLevel = $GLOBALS['__bxMcpBaseLevel'] ?? 0;
+    while (ob_get_level() > $__bxMcpBaseLevel) {
+        $__bxMcpBuffered = (string) ob_get_clean() . $__bxMcpBuffered;
+    }
     if ($__bxMcpLastError !== null && ($__bxMcpLastError['type'] & $__bxMcpFatalMask) !== 0) {
         $__bxMcpEmit([
             'ok' => false,
-            'output' => '',
+            'output' => $__bxMcpBuffered,
             'error' => [
                 'type' => 'FatalError',
                 'message' => $__bxMcpLastError['message'],
@@ -95,7 +133,14 @@ register_shutdown_function(function () use (&$__bxMcpEmitted, $__bxMcpEmit): voi
                 'line' => $__bxMcpLastError['line']
             ]
         ]);
+        return;
     }
+    // The snippet (or code it called) ran exit()/die(): report its output instead of "no output".
+    $__bxMcpEmit([
+        'ok' => true,
+        'output' => $__bxMcpBuffered,
+        'exited' => true
+    ]);
 });
 
 $_SERVER['DOCUMENT_ROOT'] = getenv('BX_MCP_DOCROOT');
@@ -108,6 +153,7 @@ define('CHK_EVENT', false);
 
 require $_SERVER['DOCUMENT_ROOT'] . '/bitrix/modules/main/include/prolog_before.php';
 
+$GLOBALS['__bxMcpBaseLevel'] = ob_get_level();
 ob_start();
 try {
     $__bxMcpReturn = include getenv('BX_MCP_CODE_FILE');
@@ -118,7 +164,8 @@ try {
         'output' => $__bxMcpOutput
     ];
 
-    if (json_encode($__bxMcpReturn, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR) !== false) {
+    $__bxMcpReturnJson = json_encode($__bxMcpReturn, JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    if ($__bxMcpReturnJson !== false && strlen($__bxMcpReturnJson) <= ${RETURN_VALUE_MAX_JSON_CHARS}) {
         $__bxMcpPayload['returnValue'] = $__bxMcpReturn;
     }
 
@@ -159,56 +206,78 @@ function buildPhpArgs(runnerPath: string): string[] {
 function spawnPhp(phpBin: string, runnerPath: string, env: NodeJS.ProcessEnv) {
   const args = buildPhpArgs(runnerPath);
   return process.platform === "win32"
-    ? spawn("cmd", ["/c", phpBin, ...args], { env })
-    : spawn(phpBin, args, { env });
+    ? spawn("cmd", ["/c", phpBin, ...args], { env, windowsHide: true })
+    : spawn(phpBin, args, { env, detached: true });
+}
+
+/**
+ * Terminates the PHP process and anything it started: the whole process
+ * group on POSIX (SIGTERM, then SIGKILL after a grace period), and the process
+ * tree via `taskkill /T /F` on Windows, where PHP may run behind `cmd /c`.
+ */
+function killProcessTree(child: ChildProcess): void {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => child.kill());
+    return;
+  }
+  const signalGroup = (signal: NodeJS.Signals) => {
+    try {
+      process.kill(-child.pid!, signal);
+    } catch {
+      child.kill(signal);
+    }
+  };
+  signalGroup("SIGTERM");
+  const escalation = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) signalGroup("SIGKILL");
+  }, KILL_GRACE_MS);
+  escalation.unref?.();
 }
 
 /**
  * Runs the PHP runner as a child process, collecting stdout/stderr and
- * enforcing `timeoutMs` via a timer. Resolves as soon as the child closes,
- * *or* as soon as the timeout fires — whichever comes first — using
- * whatever stdout/stderr was captured up to that point; it never rejects,
- * so callers can always inspect what was captured. On a timeout, `kill()`
- * is attempted but the promise does not wait to see whether it succeeded.
- *
- * Windows limitation: when `phpBin` is a `.bat`/`.cmd` shim, the child is
- * spawned via `cmd /c`, and `child.kill()` only signals the `cmd.exe`
- * wrapper — the underlying `php.exe` process it launched may keep running
- * in the background after this function (and `runTinker`) has already
- * returned a `Timeout` result. A full process-tree kill (e.g. via
- * `taskkill /T` or a `tree-kill`-style helper) would be needed to
- * guarantee termination; this is left as a follow-up for v1. One
- * consequence is that the orphaned process may still be holding the temp
- * files open when `runTinker` tries to remove its temp directory —
- * see the cleanup note on {@link runTinker}.
+ * enforcing `timeoutMs` via a timer. Resolves as soon as the child closes, the
+ * timeout fires, or captured output exceeds {@link CAPTURE_MAX_BYTES} —
+ * whichever comes first — with whatever was captured up to that point; it
+ * never rejects. On timeout or overflow the process tree is killed.
  */
 function executePhp(phpBin: string, runnerPath: string, env: NodeJS.ProcessEnv, timeoutMs: number): Promise<PhpExecution> {
   return new Promise((resolve) => {
     const child = spawnPhp(phpBin, runnerPath, env);
     let stdout = "";
     let stderr = "";
+    let capturedBytes = 0;
     let timedOut = false;
+    let outputLimitExceeded = false;
     let settled = false;
 
     const settle = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout, stderr, timedOut });
+      resolve({ stdout, stderr, timedOut, outputLimitExceeded });
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      killProcessTree(child);
       settle();
     }, timeoutMs);
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
+    const capture = (chunk: Buffer, append: (text: string) => void) => {
+      if (settled) return;
+      capturedBytes += chunk.length;
+      if (capturedBytes > CAPTURE_MAX_BYTES) {
+        outputLimitExceeded = true;
+        killProcessTree(child);
+        settle();
+        return;
+      }
+      append(chunk.toString("utf8"));
+    };
+    child.stdout?.on("data", (chunk: Buffer) => capture(chunk, (text) => { stdout += text; }));
+    child.stderr?.on("data", (chunk: Buffer) => capture(chunk, (text) => { stderr += text; }));
 
     child.on("close", settle);
     child.on("error", (error) => {
@@ -216,6 +285,10 @@ function executePhp(phpBin: string, runnerPath: string, env: NodeJS.ProcessEnv, 
       settle();
     });
   });
+}
+
+function truncateOutput(text: string): string {
+  return text.length > OUTPUT_MAX_CHARS ? `${text.slice(0, OUTPUT_MAX_CHARS)}\n...[truncated, ${text.length} chars]` : text;
 }
 
 /**
@@ -236,7 +309,7 @@ function parseRunnerOutput(stdout: string, stderr: string, sentinel: string): Ti
       output: "",
       error: {
         type: "NoOutput",
-        message: [stdout, stderr].filter(Boolean).join("\n--- stderr ---\n") || "PHP produced no output and no result sentinel."
+        message: truncateOutput([stdout, stderr].filter(Boolean).join("\n--- stderr ---\n")) || "PHP produced no output and no result sentinel."
       }
     };
   }
@@ -246,9 +319,10 @@ function parseRunnerOutput(stdout: string, stderr: string, sentinel: string): Ti
     const payload = JSON.parse(payloadText) as Partial<TinkerResult>;
     return {
       ok: Boolean(payload.ok),
-      output: typeof payload.output === "string" ? payload.output : "",
+      output: truncateOutput(typeof payload.output === "string" ? payload.output : ""),
       returnValue: payload.returnValue,
       returnText: payload.returnText,
+      ...(payload.exited ? { exited: true } : {}),
       error: payload.error as TinkerError | undefined
     };
   } catch (parseError) {
@@ -312,19 +386,27 @@ export async function runTinker(paths: RuntimePaths, code: string, opts: RunTink
     await fs.writeFile(codePath, `<?php\n${stripOpeningPhpTag(code)}`, "utf8");
     await fs.writeFile(runnerPath, buildRunnerScript(sentinel), "utf8");
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      BX_MCP_DOCROOT: paths.bitrixRoot,
-      BX_MCP_CODE_FILE: codePath
-    };
+    const env = buildTinkerEnv(process.env, { BX_MCP_DOCROOT: paths.bitrixRoot, BX_MCP_CODE_FILE: codePath });
 
     const execution = await executePhp(paths.phpBin, runnerPath, env, timeoutMs);
     const durationMs = Date.now() - startedAt;
 
+    if (execution.outputLimitExceeded) {
+      return {
+        ok: false,
+        output: truncateOutput(execution.stdout),
+        error: {
+          type: "OutputLimit",
+          message: `PHP output exceeded ${CAPTURE_MAX_BYTES} bytes; the process was killed.`
+        },
+        durationMs
+      };
+    }
+
     if (execution.timedOut) {
       return {
         ok: false,
-        output: execution.stdout,
+        output: truncateOutput(execution.stdout),
         error: {
           type: "Timeout",
           message: `PHP execution exceeded ${timeoutMs}ms`

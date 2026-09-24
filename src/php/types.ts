@@ -24,6 +24,8 @@ export interface TinkerResult {
   returnValue?: unknown;
   returnText?: string;
   output: string;
+  /** True when the snippet ended the script with exit()/die(). */
+  exited?: boolean;
   error?: TinkerError;
   durationMs?: number;
 }
