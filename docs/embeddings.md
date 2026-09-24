@@ -2,7 +2,7 @@
 
 Bitrix MCP has two documentation search modes.
 
-1. **Local SQLite FTS (default)** — `bitrix-mcp index-docs` (or `index-all`, or MCP `bitrix_index_docs`) clones/pulls the official Bitrix docs, indexes registered Markdown/text docs into `.bitrix-mcp/bitrix-mcp.sqlite`, and serves `bitrix_docs_search`. No Python needed; network is used only when cloning/pulling Git sources.
+1. **Local SQLite FTS (default)** — `bitrix-mcp index-docs` (or `index-all`, or MCP `bitrix_index` with `scope: "docs"`) clones/pulls the official Bitrix docs, indexes registered Markdown/text docs into `.bitrix-mcp/bitrix-mcp.sqlite`, and serves `bitrix_docs_search`. No Python needed; network is used only when cloning/pulling Git sources.
 2. **Semantic embeddings (optional)** — adds embedding-based ranking via a local Python service. Enable it only when you need that and can run the service alongside the MCP server.
 
 ## MCP resources

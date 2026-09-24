@@ -231,7 +231,7 @@ const changedFileKindFilterSchema = z.union([changedFileKindSchema, z.array(chan
 const graphDirectionSchema = z.enum(["out", "in", "both"]).optional().describe("out (default), in, or both.");
 const maxEdgesPerNodeSchema = z.number().int().min(1).max(1000).optional().describe("Hub cap: edges read per node and direction; default limit.");
 
-/** Environment switch that re-registers the pre-0.9 tool names as thin wrappers (one-release compatibility). */
+/** Environment switch that re-registers the 0.8 tool names as thin wrappers (one-release compatibility). */
 export const LEGACY_TOOLS_ENV = "BITRIX_MCP_LEGACY_TOOLS";
 
 export function legacyToolsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -246,7 +246,7 @@ export const SERVER_INSTRUCTIONS = [
 ].join("\n");
 
 export interface CreateMcpServerOptions {
-  /** Register the pre-0.9 tool names; defaults to BITRIX_MCP_LEGACY_TOOLS=1. */
+  /** Register the 0.8 tool names; defaults to BITRIX_MCP_LEGACY_TOOLS=1. */
   legacyTools?: boolean;
 }
 
@@ -286,7 +286,7 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths(), opt
     "bitrix_index_status",
     {
       title: "Index status",
-      description: "SQLite DB path, index counters, and last index time per scope. Call first to check freshness.",
+      description: "SQLite DB path, index counters by kind/language, and last index time. Call first to check freshness.",
       inputSchema: {}
     },
     async (_args, extra) => withMcpToolGuard("bitrix_index_status", async () => jsonResult(await readIndexStatus(paths)), extra)

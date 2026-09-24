@@ -31,7 +31,7 @@ interface LegacyEntityTool {
   fields: Array<EntityField | [legacyName: string, field: EntityField]>;
 }
 
-/** Pre-0.9 per-entity search tools, now thin wrappers over bitrix_entity_search. */
+/** 0.8 per-entity search tools, now thin wrappers over bitrix_entity_search. */
 export const LEGACY_ENTITY_TOOLS: Record<string, LegacyEntityTool> = {
   bitrix_agent_search: { entity: "agent", fields: ["query", "module", "kind", "file"] },
   bitrix_mail_event_search: { entity: "mail_event", fields: ["query", "eventName", "api", "kind", "file", "includeHandlers"] },
@@ -47,7 +47,7 @@ export const LEGACY_ENTITY_TOOLS: Record<string, LegacyEntityTool> = {
   bitrix_inheritance_search: { entity: "inheritance", fields: ["target", "relation", "kind", "module", "transitive", "maxDepth"] }
 };
 
-/** Pre-0.9 index tools and the bitrix_index scope each maps to. */
+/** 0.8 index tools and the bitrix_index scope each maps to. */
 export const LEGACY_INDEX_TOOLS: Record<string, { scope: IndexToolArgs["scope"]; shape: ZodRawShape; description: string }> = {
   bitrix_index_project: { scope: "project", shape: { root: indexToolShape.root }, description: "Deprecated: use bitrix_index with scope=project." },
   bitrix_index_template: {
@@ -72,7 +72,7 @@ function legacyEntityShape(tool: LegacyEntityTool): ZodRawShape {
 }
 
 /**
- * Registers the pre-0.9 tool names (BITRIX_MCP_LEGACY_TOOLS=1) as thin
+ * Registers the 0.8 tool names (BITRIX_MCP_LEGACY_TOOLS=1) as thin
  * wrappers: entity searches forward to bitrix_entity_search and index tools
  * to bitrix_index. Output is the new envelope. Removed in the next release.
  */

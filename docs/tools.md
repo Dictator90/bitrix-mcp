@@ -1,279 +1,193 @@
 # MCP tools
 
-This page documents the MCP tools implemented in `src/mcp/server.ts`. Tools return JSON text; examples below are compact and illustrative.
+This page documents the MCP tools, prompts, and completions implemented in `src/mcp/`. Every tool returns compact (single-line) JSON text; search and list tools also return the same object as `structuredContent` and declare an `outputSchema`. Examples below come from the test fixture project.
 
-Recommended AI workflow:
+The server registers **17 tools** by default (up to 23 with semantic search, DB access, and tinker enabled). Every tool has a `title`, a description for each parameter, and annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) so clients can auto-approve read-only calls.
 
-- General project work: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_docs_search` as needed → `bitrix_read_file_context` or `bitrix_read_symbol_context`.
-- Review work: `bitrix_detect_changes` (includes impact by default) → `bitrix_graph_neighbors` or `bitrix_graph_traverse` → `bitrix_relation_search` → source context tools.
-- Bitrix events: `bitrix_event_search` → `bitrix_relation_search` → `bitrix_graph_neighbors` → `bitrix_read_file_context`.
-- ORM: `bitrix_orm_search` → `bitrix_orm_entity_map` → `bitrix_orm_usage_search` → `bitrix_graph_neighbors`.
-- Components: `bitrix_component_search` → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.
-- Live data (when `BITRIX_MCP_DB_ENABLED=1`): `bitrix_iblock_usage_search` / `bitrix_orm_search` in code → `bitrix_db_connections` → `bitrix_db_schema` → `bitrix_db_query` to inspect real rows.
+Recommended AI workflow (also sent to clients as the server `instructions`):
 
-Implemented tool groups: index/status, project overview, LiveAPI search, event search, module usage search, agents, mail events, components, ORM, IBlock/Highloadblock/options, relations, graph neighbors/traverse, impact radius, detect changes, autoload, docs search, docs for symbol / API usage explanation, file/symbol context, inheritance search, live project database access (connections, schema, query, execute), `bitrix_tinker` runtime PHP execution, and CLI benchmarks.
+- General project work: `bitrix_index_status` → `bitrix_project_overview` → `bitrix_liveapi_search` / `bitrix_event_search` / `bitrix_entity_search` / `bitrix_docs_search` → `bitrix_read_symbol_context` or `bitrix_read_file_context`.
+- Review work: `bitrix_detect_changes` (includes impact by default) → `bitrix_impact_radius` → `bitrix_graph_neighbors` / `bitrix_graph_traverse` → source context tools. The `review-changes` prompt runs this flow.
+- Bitrix events: `bitrix_event_search` → `bitrix_entity_search` (`entity: "relation"`) → `bitrix_graph_neighbors` → `bitrix_read_file_context`. The `trace-event` prompt runs this flow.
+- ORM: `bitrix_entity_search` (`entity: "orm_entity"`) → `bitrix_orm_entity_map` → `bitrix_entity_search` (`entity: "orm_usage"`) → `bitrix_graph_neighbors`.
+- Components: `bitrix_entity_search` (`entity: "component"`) → `bitrix_component_context` → `bitrix_impact_radius` when changing component files.
+- Live data (when `BITRIX_MCP_DB_ENABLED=1`): `bitrix_entity_search` (`iblock_usage` / `orm_entity`) in code → `bitrix_db_connections` → `bitrix_db_schema` → `bitrix_db_query` to inspect real rows.
 
 ## Tool results authority
 
 Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framework and project indexed data. Manual file search should be used as a fallback only when MCP tools return empty or stale results.
 
+## Result envelope and pagination
+
+`bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_entity_search`, `bitrix_docs_search`, `bitrix_docs_for_symbol`, `bitrix_orm_entity_map`, and `bitrix_semantic_docs_search` return one envelope:
+
+```json
+{"count":2,"truncated":true,"nextCursor":"eyJvIjoyfQ","results":[{"score":0.9,"type":"class","kind":"project","name":"DemoComponent","file":"index.php","line":2,"signature":"class DemoComponent"},{"score":0.9,"type":"class","kind":"template","name":"DemoComponent","file":"index.php","line":2,"signature":"class DemoComponent"}]}
+```
+
+- `count`: results on this page.
+- `total`: exact number of results; present only when the last page was reached.
+- `truncated`: `true` when more results exist than were returned. The server reads `limit + 1` rows, so a page that is exactly full at the end of the result set reports `truncated: false`.
+- `nextCursor`: opaque cursor for the next page. Pass it back unchanged as `cursor` with the same query and `limit`.
+- `results`: the rows (compact fields by default, raw indexed records with `format: "full"`).
+- `entity` (`bitrix_entity_search` only) and `warnings` (ignored filters, pagination notes) when relevant.
+
+Cursors reach the first 500 results of a query (100 for `bitrix_docs_for_symbol`). Past that window the envelope is `truncated: true` without `nextCursor` and has a warning; narrow the query with filters. An invalid cursor is a tool error.
+
 ## Tool reference
 
 ### `bitrix_index_status`
-- Purpose: show SQLite path and index counters.
+- Purpose: show SQLite path, index counters (with breakdowns by kind and language), and the last index time.
 - Parameters: none.
-- Example response: `{ "files": 1200, "symbols": 9000, "events": 45, "relations": 3000 }`.
-- Recommended prompt: "Use Bitrix MCP to check whether indexes are fresh before answering."
+- Example response: `{"dbFile":".bitrix-mcp/bitrix-mcp.sqlite","files":1200,"filesByKind":[{"label":"project","count":180},...],"symbols":9000,"events":45,"relations":3000,...,"lastIndexedAt":"2026-09-24T10:00:00.000Z"}`.
 - Use when: starting any task or checking benchmark/index health.
 - Limitations: counters are only as current as the last index run.
 
 ### `bitrix_project_overview`
 - Purpose: summarize indexed project structure, top entities, autoload coverage, and warnings.
-- Parameters: `includeTopFiles`, `includeModules`, `includeComponents`, `includeEvents`, `includeOrm`, `includeAgents`, `includeMailEvents`, `includeWarnings`, `format`.
-- Example response: `{ "summary": { "files": 1200, "components": 34 }, "warnings": ["no events found"] }`.
-- Recommended prompt: "Use Bitrix MCP to summarize the project before making changes."
+- Parameters: `includeTopFiles` (default `false`), `includeModules`, `includeComponents`, `includeEvents`, `includeOrm`, `includeAgents`, `includeMailEvents`, `includeWarnings` (all default `true`), `format`.
+- Example response: `{"summary":{"files":1200,"components":34},"warnings":["no events found"],...}`.
 - Use when: planning larger work.
 - Limitations: overview is derived from SQLite indexes and may omit unindexed/generated code.
 
-### `bitrix_index_project`
-- Purpose: index project files excluding Bitrix core/template scopes.
-- Parameters: `root` optional path inside workspace by default.
-- Example response: `{ "projectFiles": 180, "dbFile": ".bitrix-mcp/bitrix-mcp.sqlite" }`.
-- Recommended prompt: "Use Bitrix MCP to index the project before searching local symbols."
-- Use when: local code changed.
-- Limitations: MCP path restrictions keep indexing inside workspace unless explicitly configured.
-
-### `bitrix_index_template`
-- Purpose: index templates, components, scripts, styles, and layout assets.
-- Parameters: `templatePath`, deprecated alias `root`.
-- Example response: `{ "templateFiles": 75, "dbFile": ".bitrix-mcp/bitrix-mcp.sqlite" }`.
-- Recommended prompt: "Use Bitrix MCP to refresh template indexes for local/templates/site."
-- Use when: changing templates/components/assets.
-- Limitations: `templatePath` is relative to workspace by default.
-
-### `bitrix_index_all`
-- Purpose: index project, templates, Bitrix modules, and docs. Module install assets are skipped unless `includeInstall: true` is passed.
-- Parameters: optional `includeInstall` (boolean, default `false`) — also index module `install/` assets (slow on a full core).
-- Example response (text): `Indexed project files: 180`, `Indexed template files: 75`, `Indexed Bitrix module files: 0`, `Indexed install asset files: 0`, `Indexed documentation chunks: 420`, `SQLite DB: …`.
-- Recommended prompt: "Use Bitrix MCP to rebuild all indexes, then answer using indexed context."
-- Use when: initial setup or broad refresh.
-- Limitations: official docs may require network when enabled; Bitrix root is skipped if absent.
-
-### `bitrix_index_docs`
-- Purpose: clone/pull configured docs and index documentation chunks into SQLite.
-- Parameters: none.
-- Example response: `{ "docChunks": 420, "dbFile": ".bitrix-mcp/bitrix-mcp.sqlite" }`.
-- Recommended prompt: "Use Bitrix MCP to index docs before explaining Bitrix API usage."
-- Use when: docs search has no results or docs changed.
-- Limitations: Git sources require network; semantic indexing is separate.
+### `bitrix_index`
+- Purpose: build the SQLite index for one scope. Incremental: unchanged files are skipped. Runs in its own worker with the heavy timeout, queues behind other index calls, and sends progress notifications when the client passes a progress token.
+- Parameters:
+  - `scope` (required): `project` (workspace code), `template` (templates, components, scripts, styles), `bitrix` (Bitrix core modules/admin/tools/js; needs the Bitrix root), `install` (module `install/` assets), `docs` (registered documentation sources; git sources are cloned/pulled), or `all` (project + template + bitrix + docs, plus install with `includeInstall`).
+  - `root` (`project`): directory to index; must be inside the workspace unless `BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE=1`.
+  - `templatePath` (`template`): template directory relative to the workspace, e.g. `local/templates/site`; absolute paths and `..` segments are refused by default.
+  - `modules` (`bitrix`): core module ids, e.g. `["main", "iblock"]`; default all modules. Unknown modules are reported; none found is an error.
+  - `includeInstall` (`all`): also index module `install/` assets (slow on a full core); default `false`.
+- Example responses (text): `Indexed 4 project files.`, `Indexed 7 template files.`, `Indexed 12 documentation chunks.`; `scope: "all"` returns `Indexed project files: 180`, `Indexed template files: 75`, `Indexed Bitrix module files: 0`, `Indexed install asset files: 0`, `Indexed documentation chunks: 420`, `SQLite DB: …` on separate lines.
+- Use when: initial setup, after local changes, or when a search is empty because an index is stale.
+- Limitations: `docs`/`all` may need network for git documentation sources; `bitrix` fails without a Bitrix root, and `all` skips the core when it is absent. Lang files are not indexed from MCP (use the CLI `--include-lang`).
 
 ### `bitrix_liveapi_search`
-- Purpose: search indexed symbols: classes, methods, functions, events, components, constants, mail events, and frontend exports.
-- Parameters: `query` required; `type`, `module`, `kind`, `preferLocal`, `limit`, `includeSignature`, `maxSignatureChars`, `maxTextChars`, `format`.
-- Example response: `{ "count": 1, "results": [{ "type": "method", "name": "CIBlockElement::GetList", "file": "bitrix/...", "line": 10 }] }`.
-- Recommended prompt: "Use Bitrix MCP to find Loader::includeModule('iblock') usages."
+- Purpose: search indexed symbols: classes, interfaces, traits, methods, functions, events, components, constants, mail events, and frontend exports. Exact and prefix name matches rank first, then weighted full-text relevance.
+- Parameters: `query` (required); `type` (`class`, `interface`, `trait`, `function`, `method`, `event`, `component`, `constant`, `mail_event`), `module`, `kind` (`project`, `template`, `bitrix`, `install`, or an array), `preferLocal` (default `true`), `limit` (1–100, default 20), `cursor`, `includeSignature` (default `true`), `maxSignatureChars` (default 160), `format`.
+- Example response: see [Result envelope](#result-envelope-and-pagination).
 - Use when: looking for APIs or local symbols.
 - Limitations: depends on indexed files and parser coverage.
 
+### `bitrix_event_search`
+- Purpose: search indexed event handlers by event name (`OnBeforeProlog` or `main:OnBeforeProlog`), handler class, method, or function.
+- Parameters: `query` (required); `module`, `kind`, `preferLocal`, `limit` (1–100, default 20), `cursor`, `includeSignature`, `maxSignatureChars`, `format`.
+- Example response: `{"count":2,"total":2,"truncated":false,"results":[{"score":1,"type":"event","kind":"project","name":"OnBeforeProlog","module":"main","file":"index.php","line":13,"signature":"AddEventHandler('main', 'OnBeforeProlog', ['Demo', 'handler']);"},...]}`.
+- Use when: auditing event registrations.
+- Limitations: only registrations detectable from indexed code are returned.
+
+### `bitrix_entity_search`
+- Purpose: one search tool for every indexed Bitrix entity type. Set `entity`, then the filters that entity supports; other filters are ignored and listed in `warnings`.
+- Parameters: `entity` (required), the filters below, `limit` (1–100, default 20), `cursor`, `format`.
+
+| `entity` | Searches | Filters |
+|---|---|---|
+| `agent` | `CAgent::AddAgent`/`RemoveAgent`/`GetList` calls | `query`, `module`, `kind`, `file` |
+| `mail_event` | `CEvent::Send`/`SendImmediate`, `Event::send` calls | `query`, `eventName`, `api`, `kind`, `file`, `includeHandlers` (adds `OnBeforeEventSend`/`OnBeforeEventAdd` handlers) |
+| `component` | `IncludeComponent` calls | `query`, `component`, `template`, `kind`, `file` |
+| `module_usage` | `Loader::includeModule`, `CModule::IncludeModule`, module checks | `module`, `call`, `kind`, `file` |
+| `iblock_usage` | IBlock API calls and `IBLOCK_ID` references | `query`, `iblockId`, `api`, `kind`, `file` |
+| `hlblock_usage` | Highloadblock API calls | `query`, `hlblockId`, `api`, `kind`, `file` |
+| `option` | `Option`/`COption` reads and writes | `query`, `module`, `name`, `operation` (`get`/`set`), `api`, `kind`, `file` |
+| `orm_entity` | D7 ORM `DataManager` entities | `query`, `tableName`, `className`, `module`, `kind` |
+| `orm_usage` | ORM calls (`getList`, `query`, `add`, `update`, `delete`, `compileEntity`) | `query`, `ormEntity`, `method`, `file`, `kind` |
+| `autoload` | Composer autoload mappings, dependencies, classmaps, files, Bitrix bootstrap files | `query`, `namespace`, `package`, `autoloadType` (`psr-4`, `files`, `classmap`, `dependency`, `dev_dependency`, `bootstrap`) |
+| `relation` | canonical `bitrix_relations` graph edges | `sourceType`, `sourceName`, `targetType`, `targetName`, `relationType`, `module`, `kind` (single; also `autoload`), `file` |
+| `inheritance` | classes that extend, implement, or use a target | `target` (or `query`), `relation` (`extends`, `implements`, `uses_trait`, `any`), `kind`, `module`, `transitive`, `maxDepth` (1–10, default 5) |
+
+  Node types (`sourceType`/`targetType`, graph tools): `file`, `module`, `event`, `method`, `function`, `class`, `component`, `template`, `agent`, `mail_event`, `iblock`, `hlblock`, `option`, `orm_entity`, `asset`, `namespace_prefix`, `package`, `directory`, `bootstrap`. Classes, interfaces, and traits are all `class`.
+  Relation types: `registers_event_handler`, `handles_event`, `includes_module`, `registers_agent`, `removes_agent`, `queries_agents`, `calls_method`, `sends_mail_event`, `handles_mail_event`, `includes_component`, `uses_template`, `uses_asset`, `uses_iblock`, `uses_hlblock`, `uses_option`, `defines_option`, `defines_orm_entity`, `uses_orm_entity`, `references_orm_entity`, `extends`, `implements`, `uses_trait`, `autoloads_from`, `is_dependency`, `is_bootstrap`.
+- Example responses:
+  - `{"entity":"module_usage","module":"iblock"}` → `{"entity":"module_usage","count":1,"total":1,"truncated":false,"results":[{"module":"iblock","call":"Loader::includeModule","kind":"project","file":"local/php_interface/init.php","line":2,"signature":"\\Bitrix\\Main\\Loader::includeModule('iblock')"}]}`
+  - `{"entity":"inheritance","target":"Controller"}` → `{"entity":"inheritance","count":1,"total":1,"truncated":false,"results":[{"className":"OrderHandler","relation":"extends","targetType":"class","targetName":"Bitrix\\Main\\Engine\\Controller","targetKind":"class","kind":"project","file":"local/php_interface/init.php","line":5,"signature":"class OrderHandler extends \\Bitrix\\Main\\Engine\\Controller"}]}`
+  - `{"entity":"relation","targetType":"module","limit":1}` → `{"entity":"relation","count":1,"truncated":true,"nextCursor":"eyJvIjoxfQ","results":[{"source":"file:local/php_interface/init.php","target":"module:iblock","relationType":"includes_module","module":"iblock","kind":"project","file":"local/php_interface/init.php","line":2,"signature":"\\Bitrix\\Main\\Loader::includeModule('iblock')"}]}`
+  - `{"entity":"agent","iblockId":"7"}` → `{"entity":"agent","count":0,"total":0,"truncated":false,"results":[],"warnings":["Ignored filters for entity=agent: iblockId. Supported: query, module, kind, file."]}`
+- Use when: auditing agents, mail events, components, module/IBlock/Highloadblock/option usage, ORM, autoloading, graph edges, or class hierarchies.
+- Limitations: dynamic names (agent strings, event names, IBlock ids, option names) are best-effort; `inheritance` without `target` is an error. See [graph](./graph.md) for how inheritance and relation lookups match names.
+
 ### `bitrix_docs_search`
-- Purpose: SQLite FTS search across indexed documentation chunks.
-- Parameters: `query` required; `limit`, `includeSignature`, `maxSignatureChars`, `maxTextChars`, `format`.
-- Example response: `{ "count": 2, "results": [{ "title": "Managed cache", "uri": "bitrix-docs://..." }] }`.
-- Recommended prompt: "Use Bitrix MCP docs search to verify the API behavior before coding."
+- Purpose: SQLite FTS search across indexed documentation chunks (English porter and Russian Snowball stemming).
+- Parameters: `query` (required); `limit` (1–50, default 5), `cursor`, `maxTextChars` (excerpt cap, default 500), `format`.
+- Example response: `{"count":1,"truncated":true,"nextCursor":"eyJvIjoxfQ","results":[{"score":0.85,"type":"doc","title":"Framework Guide","uri":"bitrix-docs://path-1/framework/markdown-headings.md","headingPath":"Framework Guide > Caching > Managed Cache Details","sectionAnchor":"managed-cache-details","relativePath":"framework/markdown-headings.md","chunkIndex":10,"excerpt":"Heading path: Framework Guide > Caching > **Managed** **Cache** Details …"}]}`.
 - Use when: needing local Bitrix docs without embeddings.
-- Limitations: requires `bitrix_index_docs` or `index-all`; ranking is lexical.
+- Limitations: requires `bitrix_index` with `scope: "docs"` (or `all`); ranking is lexical.
 
 ### `bitrix_semantic_docs_search` *(optional)*
 - Purpose: semantic documentation search through an embeddings service.
-- Parameters: `query`, `limit`, `includeSignature`, `maxSignatureChars`, `maxTextChars`, `format`.
-- Example response: `{ "query": "managed cache invalidation", "results": [{ "score": 0.82, "title": "Cache" }] }`.
-- Recommended prompt: "Use semantic docs search if FTS misses conceptual documentation."
-- Use when: `BITRIX_MCP_SEMANTIC_ENABLED=1` and embeddings service is running.
-- Limitations: tool is not registered unless semantic mode is enabled.
+- Parameters: `query`, `limit` (1–20, default 5), `maxTextChars`, `format`.
+- Example response: `{"count":1,"total":1,"truncated":false,"results":[{"score":0.82,"type":"doc","title":"Cache","uri":"bitrix-docs://...","excerpt":"..."}]}`.
+- Use when: `BITRIX_MCP_SEMANTIC_ENABLED=1` and the embeddings service is running.
+- Limitations: not registered unless semantic mode is enabled; not paginated (`truncated` says whether more matches exist).
 
 ### `bitrix_docs_for_symbol`
 - Purpose: find doc chunks mentioning a specific API symbol.
-- Parameters: `symbol` required; `limit`, `format`.
-- Example response: `{ "symbol": "CIBlockElement::GetList", "results": [{ "uri": "bitrix-docs://..." }] }`.
-- Recommended prompt: "Use Bitrix MCP to find docs for CIBlockElement::GetList."
+- Parameters: `symbol` (required, case-insensitive exact match); `limit` (1–100, default 20), `cursor`, `format`.
+- Example response: `{"count":1,"total":1,"truncated":false,"results":[{"title":"CIBlockElement::GetList","uri":"bitrix-docs://...","path":"...","chunkIndex":0,"excerpt":"... filters and selected fields ..."}]}`.
 - Use when: moving from code symbol to documentation.
 - Limitations: depends on doc symbol extraction during docs indexing.
 
 ### `bitrix_explain_api_usage`
 - Purpose: combine docs, local usages, core definitions, relations, and deterministic recommendations for an API.
-- Parameters: `query` required; `kind`, `includeDocs`, `includeLocalUsages`, `includeCoreDefinition`, `limit`, `format`.
-- Example response: `{ "query": "Loader::includeModule", "docs": [], "localUsages": [], "recommendations": [] }`.
-- Recommended prompt: "Use Bitrix MCP to explain correct Loader::includeModule usage."
-- Use when: validating API usage before edits.
+- Parameters: `query` (required); `kind` (local-usage kinds, default project/template/install), `includeDocs`, `includeLocalUsages`, `includeCoreDefinition` (all default `true`), `limit` (items per section, default 10), `format`.
+- Example response: `{"query":"Loader::includeModule","docs":[],"localUsages":[],"coreDefinitions":[],"relations":[],"recommendations":["Check module availability before using module APIs."]}`.
+- Use when: validating API usage before edits. The `explain-api` prompt starts here.
 - Limitations: recommendations are deterministic summaries, not a replacement for official docs review.
 
 ### `bitrix_read_file_context`
 - Purpose: read bounded numbered source lines from an allowed file.
-- Parameters: `file`, `line`, `before`, `after`, `maxChars`.
-- Example response: `{ "metadata": { "relativePath": "local/php_interface/init.php", "startLine": 1 }, "numberedLines": "1: <?php" }`.
-- Recommended prompt: "Use Bitrix MCP to read context around line 42 of local/php_interface/init.php."
+- Parameters: `file`, `line` (required); `before` (default 5), `after` (default 20), `maxChars` (default 12000).
+- Example response: `{"metadata":{"absolutePath":"/…/index.php","relativePath":"index.php","language":"php","startLine":6,"endLine":9,"totalLines":14,"truncated":false},"numberedLines":"6: \n7: function demo_helper(string $name): string\n..."}`.
 - Use when: a search result points to a file/line.
 - Limitations: reads only inside workspace or data directory allowlist; refuses credential/dump files (`.settings.php`, `dbconn.php`, `.env`, keys, SQL dumps, `bitrix/backup/`, … — see [security](./security.md)), binary files, and files over 10 MB.
 
 ### `bitrix_read_symbol_context`
-- Purpose: resolve an indexed symbol and read source around its definition/usage.
-- Parameters: `name`, `type`, `kind`, `file`, `before`, `after`, `includeBody`, `maxChars`, `format`.
-- Example response: `{ "ambiguous": false, "symbol": { "name": "SaleHandler", "line": 12 }, "context": { "numberedLines": "..." } }`.
-- Recommended prompt: "Use Bitrix MCP to read the handler class body for OnSaleOrderSaved."
-- Use when: you know a symbol name but not exact file/line.
-- Limitations: ambiguous names require narrowing by type, kind, or file.
-
-### `bitrix_event_search`
-- Purpose: search indexed Bitrix event handlers by event module/name or handler.
-- Parameters: `query`, `module`, `kind`, `preferLocal`, `limit`, response formatting options.
-- Example response: `{ "count": 1, "results": [{ "module": "sale", "name": "OnSaleOrderSaved", "handlerMethod": "onSave" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find all handlers for sale module events."
-- Use when: auditing event registrations.
-- Limitations: only registrations detectable from indexed code are returned.
-
-### `bitrix_relation_search`
-- Purpose: search canonical `bitrix_relations` graph edges.
-- Parameters: `sourceType`, `sourceName`, `targetType`, `targetName`, `relationType`, `module`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "source": "event:main:OnBeforeProlog", "target": "handler:App\\Handler::run" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find relations for this event or component."
-- Use when: connecting indexed entities.
-- Limitations: graph quality depends on relation extraction; traversals are bounded.
-
-### `bitrix_graph_neighbors`
-- Purpose: return immediate or bounded-depth graph neighbors from `bitrix_relations`.
-- Parameters: `nodeType`, `nodeName`, `direction`, `relationType`, `depth`, `limit`, `format`.
-- Example response: `{ "node": { "type": "component", "name": "bitrix:catalog.section" }, "neighbors": [] }`.
-- Recommended prompt: "Use Bitrix MCP to show neighbors for bitrix:catalog.section."
-- Use when: checking direct dependencies.
-- Limitations: depth maximum is 5.
-
-### `bitrix_graph_traverse`
-- Purpose: cycle-safe BFS traversal of the Bitrix dependency graph.
-- Parameters: `startType`, `startName`, `direction`, `maxDepth`, `relationTypes`, `limit`, `format`.
-- Example response: `{ "nodes": [{ "type": "component", "name": "bitrix:catalog.section", "depth": 0 }], "edges": [] }`.
-- Recommended prompt: "Use Bitrix MCP to traverse graph dependencies for bitrix:catalog.section."
-- Use when: exploring transitive dependencies.
-- Limitations: bounded by depth and limit to avoid runaway traversals.
-
-### `bitrix_impact_radius`
-- Purpose: find likely impacted entities for changed files or Git diff.
-- Parameters: `files`, `base`, `maxDepth`, `relationTypes`, `includeChangedSymbols`, `includeRisk`, `limit`, `format`.
-- Example response: `{ "changedFiles": ["local/php_interface/init.php"], "impacted": { "events": [] }, "risk": { "level": "low" } }`.
-- Recommended prompt: "Use Bitrix MCP to show the impact radius for local/php_interface/init.php."
-- Use when: reviewing changes before tests/deploy.
-- Limitations: impact is graph-derived and should be validated with tests.
-
-### `bitrix_detect_changes`
-- Purpose: analyze Git-changed Bitrix files against indexed symbols, indexed Bitrix entity groups, relations, and graph impact.
-- Parameters: `base`, `kind`, `includeSource`, `includeRelations`, `includeImpact`, `includeRisk`, `maxFiles`, `maxItems`, `maxDepth`, `format`.
-- Example response: `{ "summary": { "files": 2, "symbols": 5, "components": 1, "relations": 3 }, "impact": { "truncated": false }, "recommendations": [] }`.
-- Recommended prompt: "Use Bitrix MCP to analyze changes since origin/main."
-- Use when: code review or PR preparation.
-- Limitations: requires Git to calculate changed files; if Git is unavailable or the base cannot be read, the tool returns an empty result with a `warnings` entry instead of crashing.
-
-### `bitrix_inheritance_search`
-- Purpose: find classes extending/implementing/using a target class/interface/trait.
-- Parameters: `target`, `relation`, `kind`, `module`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "className": "App\\Child", "relation": "extends", "targetName": "Base" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find implementations of this interface."
-- Use when: refactoring class hierarchies.
-- Limitations: PHP parser fallback may miss complex dynamic inheritance.
-
-### `bitrix_agent_search`
-- Purpose: search indexed `CAgent` registrations.
-- Parameters: `query`, `module`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "name": "App\\Agent::run();", "module": "main" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find scheduled agents for this module."
-- Use when: auditing background tasks.
-- Limitations: dynamic agent strings may be reported with limited context.
-
-### `bitrix_mail_event_search`
-- Purpose: search `CEvent::Send`, `Event::send`, and related mail-event handlers.
-- Parameters: `query`, `eventName`, `api`, `kind`, `file`, `includeHandlers`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "eventName": "SALE_NEW_ORDER", "api": "CEvent::Send" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find all CEvent::Send calls for SALE_NEW_ORDER."
-- Use when: tracing email notifications.
-- Limitations: event names built dynamically may not be exact.
-
-### `bitrix_component_search`
-- Purpose: search `IncludeComponent` usages.
-- Parameters: `query`, `component`, `template`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "component": "bitrix:catalog.section", "template": ".default" }] }`.
-- Recommended prompt: "Use Bitrix MCP to explain where this component template is used."
-- Use when: changing component calls or templates.
-- Limitations: parameters are best-effort extracted from static calls.
+- Purpose: resolve an indexed symbol and read source around its definition.
+- Parameters: `name` (required); `type` (`class`, `interface`, `trait`, `function`, `method`, `event`, `component`, `constant`), `kind`, `file`, `before`, `after`, `includeBody` (default `false`), `maxChars`, `format`.
+- Example response: `{"query":{"name":"DemoComponent","type":"class"},"ambiguous":false,"symbol":{"type":"class","name":"DemoComponent","kind":"project","file":"index.php","line":2,"lineEnd":5},"context":{"metadata":{…},"numberedLines":"2: class DemoComponent\n..."}}`.
+- Use when: you know a symbol name but not the exact file/line.
+- Limitations: ambiguous names return `candidates`; narrow by type, kind, or file.
 
 ### `bitrix_component_context`
 - Purpose: return component calls, resolved template files/assets, params, and relations.
-- Parameters: `component`, `template`, `callFile`, `includeFiles`, `includeAssets`, `includeParams`, `format`.
-- Example response: `{ "component": "bitrix:catalog.section", "calls": [], "templateFiles": [] }`.
-- Recommended prompt: "Use Bitrix MCP to inspect context for bitrix:catalog.section template .default."
+- Parameters: `component` (required); `template` (default `.default`), `callFile`, `includeFiles`, `includeAssets`, `includeParams` (all default `true`), `format`.
+- Example response: `{"component":"bitrix:catalog.section","template":".default","calls":[…],"templateFiles":[{"file":"local/templates/…/template.php","kind":"template"}],"assets":[…],"parameters":[…]}`.
 - Use when: assessing template impact.
-- Limitations: resolution follows indexed template conventions and may not execute Bitrix runtime logic.
-
-### `bitrix_module_usage_search`
-- Purpose: search `Loader::includeModule`, `CModule::IncludeModule`, and module checks.
-- Parameters: `module`, `call`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "module": "iblock", "call": "Loader::includeModule" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find all Loader::includeModule('iblock') usages."
-- Use when: auditing module dependencies.
-- Limitations: dynamic module names may not be resolved.
-
-### `bitrix_iblock_usage_search`
-- Purpose: search IBlock API usages and `IBLOCK_ID` references.
-- Parameters: `query`, `iblockId`, `api`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "iblockId": "7", "api": "CIBlockElement::GetList" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find iblock 7 usages."
-- Use when: migrating or changing IBlock code.
-- Limitations: symbolic/dynamic IDs may appear as context rather than exact IDs.
-
-### `bitrix_hlblock_usage_search`
-- Purpose: search Highloadblock API usage by ID/code/API.
-- Parameters: `query`, `hlblockId`, `api`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "hlblockId": "CatalogColors", "api": "HighloadBlockTable::getList" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find Highloadblock usages for CatalogColors."
-- Use when: refactoring HL-block entities.
-- Limitations: dynamic codes/IDs are best-effort.
-
-### `bitrix_option_search`
-- Purpose: search module option reads/writes via `Option`/`COption` APIs.
-- Parameters: `query`, `module`, `name`, `operation`, `api`, `kind`, `file`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "module": "sale", "name": "allow_deduction", "operation": "get" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find writes to this module option."
-- Use when: auditing configuration changes.
-- Limitations: dynamic option names may be partial.
-
-### `bitrix_orm_search`
-- Purpose: search D7 ORM DataManager entities.
-- Parameters: `query`, `tableName`, `className`, `module`, `kind`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "className": "ProductTable", "tableName": "b_catalog_product" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find all ORM entities and their table names."
-- Use when: mapping database entities.
-- Limitations: requires statically detectable DataManager classes.
+- Limitations: resolution follows indexed template conventions and does not execute Bitrix runtime logic.
 
 ### `bitrix_orm_entity_map`
 - Purpose: return `getMap()` fields and references for an entity.
 - Parameters: `className`, `tableName`, `file`, `format`.
-- Example response: `{ "entity": { "className": "ProductTable", "tableName": "b_catalog_product" }, "fields": [] }`.
-- Recommended prompt: "Use Bitrix MCP to show the ORM field map for ProductTable."
+- Example response: `{"count":1,"total":1,"truncated":false,"results":[{"className":"Vendor\\Module\\ProductTable","tableName":"vendor_product","fields":[{"name":"ID","type":"integer"}],"references":[]}]}`.
 - Use when: changing ORM queries or schema-dependent code.
 - Limitations: complex computed maps may be incomplete.
 
-### `bitrix_orm_usage_search`
-- Purpose: search ORM calls such as `getList`, `query`, `add`, `update`, `delete`, and `compileEntity`.
-- Parameters: `query`, `entity`, `method`, `file`, `kind`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "entity": "ProductTable", "method": "getList" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find ProductTable::getList usages."
-- Use when: assessing ORM change impact.
-- Limitations: dynamic class names may not map to entities.
+### `bitrix_graph_neighbors`
+- Purpose: return immediate or bounded-depth graph neighbors from `bitrix_relations`.
+- Parameters: `nodeType`, `nodeName` (required; node types listed under `bitrix_entity_search`); `direction` (`out` default, `in`, `both`), `relationType`, `depth` (1–5, default 1), `limit` (default 100), `maxEdgesPerNode`, `format`.
+- Example response: `{"node":{"type":"event","name":"main:OnBeforeProlog"},"neighbors":[{"type":"method","name":"Vendor\\Module\\Handler::run","relationType":"handles_event",…}],…}`.
+- Use when: checking direct dependencies. The `trace-event` prompt uses it.
+- Limitations: depth maximum is 5; see [graph](./graph.md) for bounds.
 
-### `bitrix_autoload_search`
-- Purpose: search Composer autoload mappings, dependencies, classmaps, autoload files, and bootstrap/config files.
-- Parameters: `query`, `namespace`, `package`, `type`, `limit`, `format`.
-- Example response: `{ "count": 1, "results": [{ "type": "psr-4", "namespace": "App\\", "path": "src/" }] }`.
-- Recommended prompt: "Use Bitrix MCP to find autoload mapping for App\\."
-- Use when: debugging class loading or package dependencies.
-- Limitations: reflects Composer/bootstrap files present during indexing.
+### `bitrix_graph_traverse`
+- Purpose: cycle-safe BFS traversal of the Bitrix dependency graph.
+- Parameters: `startType`, `startName` (required); `direction`, `maxDepth` (0–8, default 2), `relationTypes`, `limit` (default 100), `maxEdgesPerNode`, `format`.
+- Example response: `{"nodes":[{"id":"file:local/php_interface/init.php","depth":0},{"id":"event:main:OnBeforeProlog","depth":1},…],"edges":[…],"truncated":false}`.
+- Use when: exploring transitive dependencies.
+- Limitations: bounded by depth and limit to avoid runaway traversals.
+
+### `bitrix_impact_radius`
+- Purpose: find likely impacted entities for changed files or a git diff.
+- Parameters: `files`, `base` (default `HEAD~1`), `maxDepth` (0–8, default 2), `relationTypes`, `includeChangedSymbols`, `includeRisk`, `limit` (default 100), `maxEdgesPerNode`, `format`.
+- Example response: `{"changedFiles":["local/php_interface/init.php"],"impacted":{"events":[…],"methods":[…]},"risk":{"score":7,"level":"low"}}`.
+- Use when: reviewing changes before tests/deploy.
+- Limitations: impact is graph-derived and should be validated with tests.
+
+### `bitrix_detect_changes`
+- Purpose: analyze git-changed (including untracked and deleted) files against the index: symbol-level diff, affected Bitrix entities, relations, graph impact, risk, and recommendations.
+- Parameters: `base` (default `HEAD~1`), `kind` (`project`, `template`, `component`, `bitrix`, `install`, `docs`, `asset`, `unknown`, or an array), `includeSource`, `includeRelations`, `includeImpact`, `includeRisk`, `symbolDiff` (default `true`), `diffBaseline` (`auto`, `index`, `git`), `maxDepth`, `maxFiles`, `maxItems`, `format`. See [detect changes](./detect-changes.md).
+- Example response: `{"summary":{"files":2,"symbols":5,"components":1,"relations":3},"symbolDiff":{…},"impact":{"truncated":false},"recommendations":[]}`.
+- Use when: code review or PR preparation. The `review-changes` prompt starts here.
+- Limitations: needs git; if git is unavailable or the base cannot be read, the result is empty with a `warnings` entry.
 
 ### `bitrix_db_connections`
 - Purpose: list Bitrix DB connections parsed from `bitrix/.settings.php` (passwords redacted).
@@ -314,3 +228,49 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Recommended prompt: "Use Bitrix MCP tinker to list the first 3 iblocks via IblockTable::getList."
 - Use when: verifying real runtime behavior, ORM queries, options, or module APIs.
 - Limitations: requires `BITRIX_MCP_TINKER_ENABLED=1`; full code execution and write access — local trusted dev only; annotated `destructiveHint`, and clients with elicitation ask you to approve each call; PHP gets a minimal environment; `output` is truncated at 20k characters, `returnValue` is omitted above 8k characters (use `returnText`), and output over 4 MB kills the process; `exit()`/`die()` returns the output with `exited: true`; a snippet with no explicit `return` reports the PHP `include` value `1`.
+
+## Prompts
+
+The server registers three prompts (`prompts/list`, `prompts/get`). Each returns one user message with a short tool workflow.
+
+| Prompt | Arguments | Workflow |
+|---|---|---|
+| `review-changes` | `base` (optional git ref, default `HEAD~1`) | `bitrix_detect_changes` → `bitrix_impact_radius` (`includeRisk`) → `bitrix_read_symbol_context`; report what changed, what can break, what to test |
+| `explain-api` | `symbol` (e.g. `CIBlockElement::GetList`) | `bitrix_explain_api_usage` → `bitrix_read_symbol_context` / `bitrix_docs_for_symbol`; report signature, example, gotchas, local usages |
+| `trace-event` | `module`, `event` (e.g. `main`, `OnBeforeProlog`) | `bitrix_event_search` → `bitrix_graph_neighbors` (`event` node, both directions) → `bitrix_graph_traverse` → `bitrix_read_symbol_context` |
+
+## Completions
+
+Prompt arguments support `completion/complete` from the local index. Lookups are bounded prefix scans (at most 50 values) on a read-only connection and return nothing when no index exists.
+
+- `trace-event.module`: module ids from module includes and event registrations.
+- `trace-event.event`: event names, filtered by the `module` argument when it is already set.
+- `explain-api.symbol`: symbol and class names (at least two typed characters).
+- `review-changes.base`: common refs (`HEAD~1`, `HEAD`, `main`, `master`, `origin/main`, `origin/master`, `develop`).
+
+## Legacy tool names (breaking change)
+
+The release after 0.8.0 replaced sixteen tools with two:
+
+| Removed tool | Replacement |
+|---|---|
+| `bitrix_agent_search` | `bitrix_entity_search` with `entity: "agent"` |
+| `bitrix_mail_event_search` | `entity: "mail_event"` |
+| `bitrix_component_search` | `entity: "component"` |
+| `bitrix_module_usage_search` | `entity: "module_usage"` |
+| `bitrix_iblock_usage_search` | `entity: "iblock_usage"` |
+| `bitrix_hlblock_usage_search` | `entity: "hlblock_usage"` |
+| `bitrix_option_search` | `entity: "option"` |
+| `bitrix_orm_search` | `entity: "orm_entity"` |
+| `bitrix_orm_usage_search` | `entity: "orm_usage"` (`entity` filter renamed to `ormEntity`) |
+| `bitrix_autoload_search` | `entity: "autoload"` (`type` filter renamed to `autoloadType`) |
+| `bitrix_relation_search` | `entity: "relation"` |
+| `bitrix_inheritance_search` | `entity: "inheritance"` |
+| `bitrix_index_project` | `bitrix_index` with `scope: "project"` |
+| `bitrix_index_template` | `scope: "template"` |
+| `bitrix_index_all` | `scope: "all"` |
+| `bitrix_index_docs` | `scope: "docs"` |
+
+Search results also changed shape: the tools above, `bitrix_liveapi_search`, `bitrix_event_search`, `bitrix_docs_search`, `bitrix_docs_for_symbol`, and `bitrix_orm_entity_map` used to return a bare JSON array (`bitrix_docs_for_symbol`: `{ symbol, results }`; inheritance: `{ query, count, results }`); they now return the [result envelope](#result-envelope-and-pagination). Text output is compact JSON instead of indented JSON.
+
+For one release, set `BITRIX_MCP_LEGACY_TOOLS=1` to register the old names again as thin wrappers: same parameters (plus `cursor`), forwarded to `bitrix_entity_search` / `bitrix_index`, returning the new envelope. The variable and the wrappers will be removed in the next release.

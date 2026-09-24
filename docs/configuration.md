@@ -17,6 +17,7 @@
 | `BITRIX_MCP_DB_READONLY_USER` / `BITRIX_MCP_DB_READONLY_PASSWORD` | Optional credentials of a `SELECT`-only database account; when set, `bitrix_db_query` and `bitrix_db_schema` use them instead of the `.settings.php` account. |
 | `BITRIX_MCP_DB_ALLOW_WRITE` | Additionally register `bitrix_db_execute` for write SQL (INSERT/UPDATE/DELETE). Requires `BITRIX_MCP_DB_ENABLED`. Off by default. |
 | `BITRIX_MCP_TINKER_ENABLED` | Enable the `bitrix_tinker` tool (runs arbitrary PHP with the Bitrix kernel loaded). Off by default. Full code execution — local trusted dev only. |
+| `BITRIX_MCP_LEGACY_TOOLS` | Set `1` to also register the pre-consolidation tool names (`bitrix_agent_search`, `bitrix_orm_search`, `bitrix_index_all`, …) as thin wrappers over `bitrix_entity_search` / `bitrix_index`. Off by default; kept for one release. See [tools](./tools.md#legacy-tool-names-breaking-change). |
 | `BITRIX_MCP_TINKER_ENV_PASSTHROUGH` | Comma-separated extra environment variables to pass to tinker's PHP process (it otherwise gets only PATH, HOME, locale, temp, PHP ini and Windows system variables). |
 | `BITRIX_MCP_CONFIRM_DANGEROUS` | Set `0` to skip the elicitation prompt that asks you to approve each `bitrix_tinker` / `bitrix_db_execute` call (only shown by clients that support elicitation). |
 | `BITRIX_MCP_ALLOW_SECRET_FILES` | Set `1` to let `bitrix_read_file_context` / `bitrix_read_symbol_context` return, and indexing include, credential and dump files (`.settings.php`, `dbconn.php`, `.env`, keys, SQL dumps, …). Off by default. |
