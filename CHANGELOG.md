@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.9.0
+
+Search quality, parser coverage, Bitrix framework features, and a smaller, typed MCP tool surface. The index is migrated automatically (schema v5, parser version 3): full-text indexes are rebuilt and every file is re-parsed once.
+
+### Breaking changes
+
+- **Consolidated MCP tools (31 → 17 by default).**
+  - Twelve `*_search` tools are replaced by `bitrix_entity_search({ entity, … })`. The entities are `agent`, `mail_event`, `component`, `module_usage`, `iblock_usage`, `hlblock_usage`, `option`, `orm_entity`, `orm_usage`, `autoload`, `relation`, `inheritance`, plus the new `feature`. Two filters were renamed: `orm_usage` `entity` → `ormEntity`, and `autoload` `type` → `autoloadType`.
+  - `bitrix_index_project`, `_template`, `_all` and `_docs` are replaced by `bitrix_index({ scope })`, with scope `project`, `template`, `bitrix`, `install`, `docs` or `all`. The `bitrix` scope (with an optional `modules` list) and the `install` scope are new over MCP.
+  - `BITRIX_MCP_LEGACY_TOOLS=1` brings the old names back for this release; they forward to the new tools.
+  - `docs/tools.md` has a migration table. `init`/`configure` write guidance and hooks that name the new tools.
+- **Search and list tools return a result envelope** `{ count, total?, truncated, nextCursor?, results }` instead of bare arrays, and all text output is compact JSON.
+- **`bitrix_inheritance_search` / `entity: "inheritance"` matches strictly.** A name containing a backslash matches that FQN exactly. A short name matches only the last namespace segment.
+- **Graph node types changed.** Inheritance edges now point at `class:<FQN>` nodes for parent classes, interfaces and traits alike. The `relation_type` (`extends`, `implements`, `uses_trait`) and `metadata.targetKind` still carry the difference.
+- **`lang/` is indexed in the project and template scopes**, so `$MESS` phrases are searchable. The Bitrix core and install scopes still skip `lang/` by default.
+
+### Added
+
+- **Bitrix framework features**, via `bitrix_entity_search({ entity: "feature", featureType })`, with graph edges:
+  - controllers and routing: D7 controller actions, `routes/*.php` routes, `urlrewrite.php` rules;
+  - REST methods from `OnRestServiceBuildDescription` handlers;
+  - language phrases (`$MESS`) and their `Loc::getMessage` / `GetMessage` usages;
+  - JS extensions (with their dependencies) and where they are loaded;
+  - `Loader` autoload registrations;
+  - UF fields and iblock properties;
+  - component parameters and descriptions;
+  - JS side: `BX.ajax.runAction` / `runComponentAction` calls and JS custom events.
+
+  See `docs/indexing.md`.
+- **Fired events.**
+  - `new \Bitrix\Main\Event(...)`, `GetModuleEvents` and `EventManager::findEventHandlers` are indexed as `event_emit` symbols, with `emits_event` edges.
+  - Unregistering a handler is indexed as `event_unregister`.
+- **More PHP constructs are indexed:**
+  - enums and their cases, and every parent of an interface;
+  - PHPDoc summaries, stored as symbol descriptions;
+  - calls nested inside arrays and `new` arguments.
+- **MCP protocol features:**
+  - every tool is registered with a title, a description for every parameter, and annotations;
+  - search tools declare an `outputSchema` and return `structuredContent`;
+  - cursor pagination (`cursor` / `nextCursor`);
+  - the server sends `instructions` describing the recommended workflow;
+  - prompts `review-changes`, `explain-api` and `trace-event`;
+  - completions from the index for modules, events, symbols and git refs.
+- **Real diffs in `bitrix_detect_changes`.**
+  - `symbolDiff` reports added, removed and changed symbols per file.
+  - Deleted files are listed with the symbols they had; untracked files are included.
+  - `install/` paths are classified correctly, and git errors come back as warnings.
+- **Graph:**
+  - `bitrix_inheritance_search` has a `transitive` mode, bounded and cycle-safe.
+  - Graph tools accept `maxEdgesPerNode` to cap hub nodes; capped nodes are listed in `truncatedNodes`.
+- **New CLI commands:**
+  - `bitrix-mcp watch` re-indexes only what changed while you edit.
+  - `bitrix-mcp clean` removes index data, with `--dry-run`, `--yes` and `--all`.
+  - `init --dry-run` / `configure --dry-run` show per-file diffs without writing anything.
+- **New docs:** `ARCHITECTURE.md` and `CONTRIBUTING.md`.
+
+### Changed
+
+- **Search understands identifiers and Russian.**
+  - Names are split into camelCase, namespace and snake_case parts, and the legacy `C` prefix is recognised: `iblock` finds `CIBlockElement`, and `ElementAdd` finds `OnBeforeIBlockElementAdd`.
+  - Docs search uses Porter stemming for English and a Snowball stemmer for Russian: «обработчик события» finds «Обработчики событий».
+  - Ranking goes exact match → prefix → column-weighted bm25, with local code boosted inside relevance instead of as a hard tier.
+  - The `LIKE '%…%'` full-table scans are gone. On a 3000-file project, `iblock` takes 1.3 ms instead of 60 ms.
+- **PHP parsing:**
+  - A file with a syntax error keeps a partially recovered syntax tree instead of falling back to the regex parser.
+  - Uses php-parser 3.7 with PHP 8.4 syntax (property hooks).
+  - Two php-parser infinite loops on truncated input are guarded.
+- **ORM:**
+  - entity and field detection covers fluent fields, `Reference`/`OneToMany`/`ManyToMany`, legacy array maps, `$map` variables and `*Table` subclasses;
+  - ORM usages are limited to `*Table` classes and skip `self`/`static`/`parent`, `CUser` and variable targets.
+- **Event handlers** written as `[self::class, 'm']`, `[static::class, 'm']`, `__CLASS__` or `$this` resolve to the real class. `registerEventHandlerCompatible` is supported.
+- **Legacy cp1251 source files** are decoded correctly.
+- **JS:**
+  - `bitrix/js/<module>` files get their module;
+  - class `extends` is recorded;
+  - `BX.Foo = function`, `prototype` and `BX.namespace` declarations are indexed.
+- **Graph performance:**
+  - traversal uses one database connection and a batched query per BFS level;
+  - `bitrix_impact_radius` runs one combined traversal instead of up to 1000;
+  - method start nodes are fully qualified;
+  - PHP class and method names match case-insensitively.
+- **Startup:** `--version` and `--help` take about 70 ms (was about 700 ms), and `status` about 120 ms. Parsers, the MCP SDK and the MySQL/tinker modules load on first use.
+- **Embeddings service:**
+  - the default model is now `intfloat/multilingual-e5-small`, which reads 512 tokens (the old default truncated chunks at 128);
+  - encoding is batched and the index is written atomically;
+  - an optional `BITRIX_MCP_EMBEDDINGS_TOKEN` enables token auth;
+  - it binds to loopback by default;
+  - the client has timeouts.
+
+  Re-run `bitrix-mcp index-embeddings` after upgrading.
+
+### Fixed
+
+- Re-indexing a single directory (`index-template <path>` or `watch`) no longer drops the parse warnings and file count of the rest of the scope.
+- Duplicate ORM `extends` edges are no longer written.
+
 ## 0.8.0
 
 Storage and runtime release: no more "database is locked", faster indexing and searches, and partial re-indexing that no longer loses data. The index database is migrated automatically on first use, and every file is re-parsed once by the new parser version.

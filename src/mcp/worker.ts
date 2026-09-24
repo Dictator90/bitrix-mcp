@@ -11,10 +11,7 @@ import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { formatComponentContextResult, formatDocSearchResults, formatEventSearchResults, formatLiveApiSearchResults, formatOrmEntityResults, type OrmSearchFormatOptions, type SearchFormatOptions } from "./format.js";
 import { jsonResult, pageRequest, paginate, RANKED_MIN_FETCH, structuredResult, WHOLE_LIST } from "./envelope.js";
 import { runEntitySearch, type EntitySearchArgs } from "./entitySearch.js";
-import { readBitrixConnections, redactConnection, resolveConnection, withReadOnlyCredentials } from "../liveapi/settingsPhpParser.js";
-import { runQuery, getSchema } from "../db/mysqlClient.js";
 import { heavyToolTimeoutMs } from "./toolGuards.js";
-import { runTinker } from "../php/tinker.js";
 import type { ProgressReporter } from "../progress/types.js";
 
 /** Cursor-decoded page position carried by paginated search tasks. */
@@ -62,6 +59,12 @@ const NO_DB_CONNECTION = { error: "No matching DB connection found in bitrix/.se
 function textResult(text: string): { content: Array<{ type: "text"; text: string }> } {
   return { content: [{ type: "text", text }] };
 }
+
+// DB and tinker modules (mysql2, the .settings.php parser, the PHP runner) load on first use,
+// so the read-pool workers don't pay for them.
+const loadSettings = () => import("../liveapi/settingsPhpParser.js");
+const loadMysql = () => import("../db/mysqlClient.js");
+const loadTinker = () => import("../php/tinker.js");
 
 export async function runTask(task: WorkerTask, context: WorkerTaskContext = {}): Promise<unknown> {
   const { reporter } = context;
@@ -195,15 +198,18 @@ export async function runTask(task: WorkerTask, context: WorkerTaskContext = {})
       return jsonResult(await getImpactRadiusForPaths(task.paths, task.query));
     }
     case "dbConnections": {
+      const { readBitrixConnections, redactConnection } = await loadSettings();
       const { connections, source, error } = await readBitrixConnections(task.paths);
       return jsonResult({ connections: connections.map((connection) => redactConnection(connection, source)), source, ...(error ? { error } : {}) });
     }
     case "dbSchema": {
+      const [{ resolveConnection, withReadOnlyCredentials }, { runQuery, getSchema }] = await Promise.all([loadSettings(), loadMysql()]);
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) return jsonResult(NO_DB_CONNECTION, true);
       return jsonResult(await getSchema(withReadOnlyCredentials(conn), { table: task.query.table, prefix: task.query.prefix, limit: task.query.limit }));
     }
     case "dbQuery": {
+      const [{ resolveConnection, withReadOnlyCredentials }, { runQuery, getSchema }] = await Promise.all([loadSettings(), loadMysql()]);
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) return jsonResult(NO_DB_CONNECTION, true);
       return jsonResult(await runQuery(withReadOnlyCredentials(conn), task.query.sql, { readOnly: true, rowLimit: task.query.limit }));
@@ -212,6 +218,7 @@ export async function runTask(task: WorkerTask, context: WorkerTaskContext = {})
       if (!task.paths.dbAllowWrite) {
         return jsonResult({ error: "Write access disabled. Set BITRIX_MCP_DB_ALLOW_WRITE=1 to enable bitrix_db_execute." }, true);
       }
+      const [{ resolveConnection, withReadOnlyCredentials }, { runQuery, getSchema }] = await Promise.all([loadSettings(), loadMysql()]);
       const conn = await resolveConnection(task.paths, task.query.connection);
       if (!conn) return jsonResult(NO_DB_CONNECTION, true);
       return jsonResult(await runQuery(conn, task.query.sql, { readOnly: false }));
@@ -219,6 +226,7 @@ export async function runTask(task: WorkerTask, context: WorkerTaskContext = {})
     case "tinker": {
       // Keep the PHP timeout below the worker's own timeout so PHP is killed (and temp files removed) before the worker is terminated.
       const maxTimeoutMs = Math.max(1000, heavyToolTimeoutMs() - 5000);
+      const { runTinker } = await loadTinker();
       const result = await runTinker(task.paths, task.query.code, { timeoutMs: Math.min(task.query.timeoutMs ?? 30_000, maxTimeoutMs) });
       return jsonResult(result, !result.ok);
     }

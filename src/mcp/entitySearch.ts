@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { searchAgents, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchInheritanceRelations, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages } from "../indexer/sqliteStore.js";
+import { searchAgents, searchBitrixFeatures, searchAutoloadRecords, searchBitrixRelations, searchComponents, searchHlblockUsages, searchIblockUsages, searchInheritanceRelations, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages } from "../indexer/sqliteStore.js";
+import type { BitrixFeatureType } from "../liveapi/bitrixFeatures.js";
 import type { AutoloadRecordType, IndexKind } from "../types.js";
 import { cursorSchema, pageRequest, paginate, type ResultEnvelope } from "./envelope.js";
 import { formatAgentSearchResults, formatAutoloadSearchResults, formatBitrixRelationSearchResults, formatComponentSearchResults, formatHlblockUsageSearchResults, formatIblockUsageSearchResults, formatInheritanceResults, formatMailEventSearchResults, formatModuleUsageSearchResults, formatOptionSearchResults, formatOrmEntityResults, formatOrmUsageResults } from "./format.js";
@@ -7,8 +8,14 @@ import { formatSchema, INDEX_KINDS, NODE_TYPES_DESCRIPTION, RELATION_TYPES_DESCR
 
 export const ENTITY_TYPES = [
   "agent", "mail_event", "component", "module_usage", "iblock_usage", "hlblock_usage",
-  "option", "orm_entity", "orm_usage", "autoload", "relation", "inheritance"
+  "option", "orm_entity", "orm_usage", "autoload", "relation", "inheritance", "feature"
 ] as const;
+
+export const FEATURE_TYPES = [
+  "controller_action", "route", "urlrewrite_rule", "rest_method", "lang_phrase", "lang_usage",
+  "js_extension", "js_extension_usage", "autoload_class", "autoload_namespace", "user_field",
+  "iblock_property", "component_parameter", "component_description", "ajax_call", "js_event"
+] as const satisfies readonly BitrixFeatureType[];
 
 export type EntityType = typeof ENTITY_TYPES[number];
 
@@ -24,7 +31,7 @@ export const MAX_ENTITY_LIMIT = 100;
  * entity are ignored and reported in `warnings`.
  */
 export const entitySearchShape = {
-  entity: z.enum(ENTITY_TYPES).describe("agent: CAgent registrations; mail_event: CEvent::Send calls; component: IncludeComponent calls; module_usage: includeModule checks; iblock_usage/hlblock_usage: IBlock/Highloadblock API calls; option: Option get/set; orm_entity: DataManager entities; orm_usage: ORM calls; autoload: Composer/bootstrap records; relation: graph edges; inheritance: subclasses/implementors/trait users of target."),
+  entity: z.enum(ENTITY_TYPES).describe("agent: CAgent registrations; mail_event: CEvent::Send calls; component: IncludeComponent calls; module_usage: includeModule checks; iblock_usage/hlblock_usage: IBlock/Highloadblock API calls; option: Option get/set; orm_entity: DataManager entities; orm_usage: ORM calls; autoload: Composer/bootstrap records; relation: graph edges; inheritance: subclasses/implementors/trait users of target; feature: Bitrix framework features (see featureType)."),
   query: z.string().optional().describe("Free-text substring filter; for inheritance an alias of target."),
   module: z.string().optional().describe("Module id, e.g. iblock, vendor.module."),
   kind: z.union([entityKindSchema, z.array(entityKindSchema).min(1).max(5)]).optional().describe("Index kind(s): project, template, bitrix, install; autoload (relation only, single kind)."),
@@ -55,6 +62,7 @@ export const entitySearchShape = {
   relation: z.enum(["extends", "implements", "uses_trait", "any"]).optional().describe("Inheritance relation; default any."),
   transitive: z.boolean().optional().describe("Include indirect descendants (breadth-first, cycle-safe, with depth)."),
   maxDepth: z.number().int().min(1).max(10).optional().describe("Transitive depth; default 5."),
+  featureType: z.union([z.enum(FEATURE_TYPES), z.array(z.enum(FEATURE_TYPES)).min(1)]).optional().describe("feature: controller_action (D7 controller/Controllerable actions), route (routes/*.php), urlrewrite_rule, rest_method, lang_phrase ($MESS), lang_usage (Loc::getMessage), js_extension, js_extension_usage, autoload_class/autoload_namespace (Loader registrations), user_field (UF_*), iblock_property, component_parameter, component_description, ajax_call (BX.ajax.runAction/runComponentAction), js_event."),
   limit: z.number().int().min(1).max(MAX_ENTITY_LIMIT).default(DEFAULT_ENTITY_LIMIT).describe(`Page size, 1-${MAX_ENTITY_LIMIT}; default ${DEFAULT_ENTITY_LIMIT}.`),
   cursor: cursorSchema,
   format: formatSchema
@@ -81,7 +89,8 @@ export const ENTITY_FILTERS: Record<EntityType, readonly FilterKey[]> = {
   orm_usage: ["query", "ormEntity", "method", "file", "kind"],
   autoload: ["query", "namespace", "package", "autoloadType"],
   relation: ["sourceType", "sourceName", "targetType", "targetName", "relationType", "module", "kind", "file"],
-  inheritance: ["target", "query", "relation", "kind", "module", "transitive", "maxDepth"]
+  inheritance: ["target", "query", "relation", "kind", "module", "transitive", "maxDepth"],
+  feature: ["featureType", "query", "module", "kind"]
 };
 
 /** Compact "entity: filters" map for the tool description. */
@@ -144,6 +153,17 @@ export async function runEntitySearch(dbFile: string, args: EntitySearchArgs): P
       if (kinds.length > 1) warnings.push(`entity=relation takes a single kind; used ${kinds[0]}.`);
       return envelope(await searchBitrixRelations(dbFile, { sourceType: args.sourceType, sourceName: args.sourceName, targetType: args.targetType, targetName: args.targetName, relationType: args.relationType, module: args.module, kind: kinds[0], file: args.file, limit }), (rows) => formatBitrixRelationSearchResults(rows, { format }));
     }
+    case "feature":
+      return envelope(await searchBitrixFeatures(dbFile, { featureType: args.featureType, query: args.query, module: args.module, kind, limit }), (rows) => rows.map((row) => (format === "full" ? row : {
+        featureType: row.featureType,
+        name: row.name,
+        target: row.target,
+        module: row.module,
+        kind: row.kind,
+        file: row.relativeFile,
+        line: row.line,
+        detail: row.detail
+      })));
     case "inheritance": {
       const target = args.target ?? args.query;
       if (!target) throw new Error("bitrix_entity_search: entity=inheritance requires target (a parent class, interface, or trait name).");

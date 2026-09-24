@@ -339,3 +339,29 @@ test("completions return nothing without an index", async () => {
     await client.close();
   }
 });
+
+test("bitrix_entity_search finds Bitrix features by type", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-feature-tool-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-feature-tool-data-"));
+  const previousRoot = workspaceRoot;
+  workspaceRoot = root;
+  try {
+    await fs.mkdir(path.join(root, "local/routes"), { recursive: true });
+    await fs.writeFile(path.join(root, "local/routes/api.php"), "<?php\nreturn function ($routes) { $routes->post('/orders', ['Acme\\\\Orders', 'create']); };\n", "utf8");
+    const client = await connect(dataDir);
+    try {
+      await call(client, "bitrix_index", { scope: "project" });
+      const routes = await call(client, "bitrix_entity_search", { entity: "feature", featureType: "route" });
+      assert.equal(routes.isError, false, routes.text);
+      assert.deepEqual(routes.structured?.results.map((row) => [row.name, row.target, row.file]), [["POST /orders", "Acme\\Orders::create", "local/routes/api.php"]]);
+      const ignored = await call(client, "bitrix_entity_search", { entity: "feature", featureType: "route", iblockId: "5" });
+      assert.match(ignored.structured?.warnings?.[0] ?? "", /Ignored filters for entity=feature: iblockId/);
+    } finally {
+      await client.close();
+    }
+  } finally {
+    workspaceRoot = previousRoot;
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

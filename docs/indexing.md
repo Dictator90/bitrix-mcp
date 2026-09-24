@@ -16,3 +16,24 @@ Method call sites (`Class::method()`, `$obj->method()`) are stored in a separate
 The schema is migrated once per database when bitrix-mcp is upgraded (`PRAGMA user_version`); searches never run DDL.
 
 `npm run benchmark` and `bitrix-mcp benchmark` generate `.bitrix-mcp/benchmark.json` and `.bitrix-mcp/benchmark.md`. By default the benchmark uses incremental indexing and does not force a full reindex; pass `--force` only when you intentionally want cold/full timings. Missing Bitrix roots, docs, or optional indexes are reported as warnings instead of deleting data or failing the whole benchmark.
+
+## Bitrix framework features
+
+Besides classes, functions and events, indexing records Bitrix constructs that are not plain symbols. Find them with `bitrix_entity_search` (`entity: "feature"`, optional `featureType`); most also become graph edges.
+
+| Feature | Source | Graph edge |
+| --- | --- | --- |
+| `controller_action` | public `*Action` methods and `configureActions()` of `Bitrix\Main\Engine\Controller`/`JsonController` subclasses and `Controllerable` components | action → `handled_by` → method |
+| `route` | `routes/*.php` (`$routes->get/post/…`, `prefix`, `group`, `name`) | route → `handled_by` → method |
+| `urlrewrite_rule` | `urlrewrite.php` | rule → `routes_to_component` → component |
+| `rest_method` | arrays returned by `OnRestServiceBuildDescription` handlers | method → `handled_by` → handler |
+| `lang_phrase` / `lang_usage` | `$MESS['KEY']` in `lang/` files; `Loc::getMessage` / `GetMessage` | file → `defines_phrase` / `uses_phrase` → phrase |
+| `js_extension` / `js_extension_usage` | extension `config.php`, `CJSCore::RegisterExt`; `Extension::load`, `CJSCore::Init` | extension → `depends_on_extension` → extension; file → `loads_js_extension` |
+| `autoload_class` / `autoload_namespace` | `Loader::registerAutoLoadClasses` / `registerNamespace` | module → `autoloads_class` / `autoloads_namespace` |
+| `user_field` / `iblock_property` | UF field (`FIELD_NAME` + `ENTITY_ID`) and iblock property (`CODE` + `PROPERTY_TYPE` + `IBLOCK_ID`) definition arrays | file → `defines_user_field` / `defines_iblock_property` |
+| `component_parameter` / `component_description` | `.parameters.php` / `.description.php` | component → `has_parameter` |
+| `ajax_call` / `js_event` | `BX.ajax.runAction` / `runComponentAction`; `BX.addCustomEvent`, `EventEmitter.subscribe`/`emit`, `BX.onCustomEvent` | file → `calls_ajax_action` / `subscribes_js_event` / `emits_js_event` |
+
+Fired PHP events (`new \Bitrix\Main\Event(...)`, `GetModuleEvents`, `EventManager::findEventHandlers`) are indexed as `event_emit` symbols with a class → `emits_event` → event edge, so traversing from an event reaches both its handlers and the code that fires it.
+
+Project and template scopes index `lang/` directories so their phrases are searchable; the Bitrix core and install scopes still skip `lang/` unless `--include-lang` / `--full` is given.
