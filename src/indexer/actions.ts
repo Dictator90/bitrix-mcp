@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { indexPath, resolveBitrixProjectRoot, sqlitePath, type RuntimePaths } from "../config/paths.js";
-import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { buildIndex, DEFAULT_INSTALL_ASSET_PATTERNS, type IndexOptions } from "./indexer.js";
 import { getIndexStatus, ensureSqliteStore, readIndexWarnings, type IndexStatus, type StatusBreakdown } from "./sqliteStore.js";
 import { resolveTemplateIndexOptions } from "./template.js";
 import { resolveBitrixIndex, type BitrixModuleSelection } from "./bitrixModules.js";
-import { countDocChunks, indexDocResourcesToSqlite, listDocSources, prepareEmbeddingDocumentsFromSqlite } from "../resources/docs.js";
 import type { ProgressReporter } from "../progress/types.js";
+
+// Loaded on first use so `status` and the MCP server start without the docs
+// indexer and embeddings client.
+const docs = () => import("../resources/docs.js");
+const embeddingsClient = async (url: string) => new (await import("../search/embeddingsClient.js")).EmbeddingsClient(url);
 
 export interface IndexAllResult {
   projectFiles: number;
@@ -96,6 +99,7 @@ export async function indexCode(paths: RuntimePaths, options: IndexActionOptions
 export async function indexAll(paths: RuntimePaths, options: IndexActionOptions = {}): Promise<IndexAllResult> {
   const codeResult = await indexCode(paths, options);
   options.reporter?.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
+  const { indexDocResourcesToSqlite } = await docs();
   const docChunks = await indexDocResourcesToSqlite(paths.dataDir, paths.docsPaths, { includeOfficialDocs: paths.officialDocsEnabled ?? false, force: options.force });
   options.reporter?.done({ scope: "docs", phase: "done", status: "done", docsChunks: docChunks });
   return { ...codeResult, docChunks };
@@ -117,8 +121,9 @@ export interface IndexEmbeddingsResult {
 }
 
 export async function indexEmbeddings(paths: RuntimePaths): Promise<IndexEmbeddingsResult> {
+  const { prepareEmbeddingDocumentsFromSqlite } = await docs();
   const documents = await prepareEmbeddingDocumentsFromSqlite(paths.dataDir);
-  const result = await new EmbeddingsClient(paths.embeddingsUrl).index(documents);
+  const result = await (await embeddingsClient(paths.embeddingsUrl)).index(documents);
   return { indexed: result.indexed, sqliteDocChunks: documents.length, embeddingsUrl: paths.embeddingsUrl };
 }
 
@@ -151,6 +156,7 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
     checks.push({ name: "sqliteDb", status: "error", message: `SQLite DB check failed for ${dbFile}: ${error instanceof Error ? error.message : String(error)}` });
   }
 
+  const { countDocChunks, listDocSources } = await docs();
   const sources = await listDocSources(paths.dataDir);
   const docsPaths = [...new Set([...paths.docsPaths, ...sources.map((source) => source.rootPath ?? source.checkoutPath).filter((entry): entry is string => Boolean(entry))])];
   if (docsPaths.length === 0) {
@@ -176,7 +182,8 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
 
   if (paths.semanticEnabled === true) {
     try {
-      const [health, sqliteDocChunks] = await Promise.all([new EmbeddingsClient(paths.embeddingsUrl).health(), countDocChunks(paths.dataDir)]);
+      const client = await embeddingsClient(paths.embeddingsUrl);
+      const [health, sqliteDocChunks] = await Promise.all([client.health(), countDocChunks(paths.dataDir)]);
       if (health.status !== "ok") {
         checks.push({ name: "embeddingsService", status: "warning", message: `Embeddings service responded at ${paths.embeddingsUrl} with status ${health.status}.` });
       } else if (health.documents !== undefined && health.documents !== sqliteDocChunks) {
