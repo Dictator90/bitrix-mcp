@@ -95,6 +95,21 @@ function migrateSchema(db: DatabaseSync): void {
       CREATE INDEX IF NOT EXISTS idx_call_sites_name ON call_sites(name COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS idx_call_sites_file_id ON call_sites(file_id);
 
+      CREATE TABLE IF NOT EXISTS bitrix_features (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        feature_type TEXT NOT NULL,
+        name TEXT NOT NULL COLLATE NOCASE,
+        target TEXT,
+        module TEXT,
+        line INTEGER NOT NULL,
+        detail_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_bitrix_features_type_name ON bitrix_features(feature_type, name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_features_target ON bitrix_features(target COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_features_file_id ON bitrix_features(file_id);
+
       CREATE TABLE IF NOT EXISTS symbols (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,

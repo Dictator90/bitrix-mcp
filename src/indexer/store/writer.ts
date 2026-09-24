@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "../database.js";
 import type { IndexFile, IndexKind, IndexManifest, IndexWarning, SymbolRecord } from "../../types.js";
-import { agentRelationsForSymbol, componentRelationsForFile, componentRelationsForSymbol, eventRelationsForSymbol, inheritanceRelationsForSymbol, mailEventRelationsForSymbol, moduleUsageRelationsForFile } from "./relations.js";
+import { agentRelationsForSymbol, featureRelationsForFile, componentRelationsForFile, componentRelationsForSymbol, eventRelationsForSymbol, inheritanceRelationsForSymbol, mailEventRelationsForSymbol, moduleUsageRelationsForFile } from "./relations.js";
 import { nullable, relationFileForStorage, relationMetadataJson, rowToSymbol } from "./rows.js";
 import type { SymbolRow } from "./rows.js";
 import { INSERT_EVENT_FTS_SQL, INSERT_SYMBOL_FTS_SQL, eventFtsValues, symbolFtsValues } from "./fts.js";
@@ -135,7 +135,9 @@ function prepareWriteStatements(db: DatabaseSync) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const deleteCallSitesForFile = db.prepare("DELETE FROM call_sites WHERE file_id = ?");
-  return { upsertFile, insertSymbol, insertEvent, insertModuleUsage, insertOrmEntity, insertOrmUsage, insertIblockUsage, insertHlblockUsage, insertOptionUsage, insertSymbolFts, insertEventFts, insertRelation, setMeta, deleteSymbolsFtsForFile, deleteEventsFtsForFile, deleteEventsForFile, deleteModuleUsagesForFile, deleteOrmEntitiesForFile, deleteOrmUsagesForFile, deleteIblockUsagesForFile, deleteHlblockUsagesForFile, deleteOptionUsagesForFile, deleteSymbolsForFile, deleteRelationsForFile, deleteFileById, insertCallSite, deleteCallSitesForFile };
+  const insertFeature = db.prepare("INSERT INTO bitrix_features (file_id, kind, feature_type, name, target, module, line, detail_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+  const deleteFeaturesForFile = db.prepare("DELETE FROM bitrix_features WHERE file_id = ?");
+  return { upsertFile, insertSymbol, insertEvent, insertModuleUsage, insertOrmEntity, insertOrmUsage, insertIblockUsage, insertHlblockUsage, insertOptionUsage, insertSymbolFts, insertEventFts, insertRelation, setMeta, deleteSymbolsFtsForFile, deleteEventsFtsForFile, deleteEventsForFile, deleteModuleUsagesForFile, deleteOrmEntitiesForFile, deleteOrmUsagesForFile, deleteIblockUsagesForFile, deleteHlblockUsagesForFile, deleteOptionUsagesForFile, deleteSymbolsForFile, deleteRelationsForFile, deleteFileById, insertCallSite, deleteCallSitesForFile, insertFeature, deleteFeaturesForFile };
 }
 
 type WriteStatements = ReturnType<typeof prepareWriteStatements>;
@@ -174,7 +176,7 @@ interface IndexWriteScope {
 }
 
 function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexFile, existing: StoredFileState | undefined): void {
-  const { upsertFile, insertSymbol, insertEvent, insertModuleUsage, insertOrmEntity, insertOrmUsage, insertIblockUsage, insertHlblockUsage, insertOptionUsage, insertSymbolFts, insertEventFts, insertRelation, setMeta, deleteSymbolsFtsForFile, deleteEventsFtsForFile, deleteEventsForFile, deleteModuleUsagesForFile, deleteOrmEntitiesForFile, deleteOrmUsagesForFile, deleteIblockUsagesForFile, deleteHlblockUsagesForFile, deleteOptionUsagesForFile, deleteSymbolsForFile, deleteRelationsForFile, deleteFileById, insertCallSite, deleteCallSitesForFile } = st;
+  const { upsertFile, insertSymbol, insertEvent, insertModuleUsage, insertOrmEntity, insertOrmUsage, insertIblockUsage, insertHlblockUsage, insertOptionUsage, insertSymbolFts, insertEventFts, insertRelation, setMeta, deleteSymbolsFtsForFile, deleteEventsFtsForFile, deleteEventsForFile, deleteModuleUsagesForFile, deleteOrmEntitiesForFile, deleteOrmUsagesForFile, deleteIblockUsagesForFile, deleteHlblockUsagesForFile, deleteOptionUsagesForFile, deleteSymbolsForFile, deleteRelationsForFile, deleteFileById, insertCallSite, deleteCallSitesForFile, insertFeature, deleteFeaturesForFile } = st;
     if (existing && existing.size === file.size && existing.mtime_ms === file.mtimeMs && existing.parser_version === PARSER_VERSION) {
       return;
     }
@@ -191,6 +193,7 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
       deleteOptionUsagesForFile.run(existing.id);
       deleteSymbolsForFile.run(existing.id);
       deleteCallSitesForFile.run(existing.id);
+      deleteFeaturesForFile.run(existing.id);
       deleteRelationsForFile.run(file.path, file.relativePath);
     }
 
@@ -391,6 +394,12 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
       if (usage.contextType && usage.contextName) {
         insertRelation.run(usage.contextType, usage.contextName, "option", `${usage.module}:${usage.name}`, "uses_option", relationFileForStorage(usage.file, file), usage.line, usage.module, nullable(usageKind), nullable(usage.signature), JSON.stringify({ api: usage.api, operation: usage.operation }));
       }
+    }
+    for (const feature of file.bitrixFeatures ?? []) {
+      insertFeature.run(fileId, file.kind, feature.featureType, feature.name, nullable(feature.target), nullable(feature.module), feature.line, feature.detail ? JSON.stringify(feature.detail) : null);
+    }
+    for (const relation of featureRelationsForFile(file)) {
+      insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));
     }
     for (const relation of componentRelationsForFile(file)) {
       insertRelation.run(relation.sourceType, relation.sourceName, relation.targetType, relation.targetName, relation.relationType, relationFileForStorage(relation.file, file), relation.line, nullable(relation.module), nullable(relation.kind), nullable(relation.signature), relationMetadataJson(relation));

@@ -135,3 +135,37 @@ test("JS AJAX action calls and custom events", () => {
     ["js_event", "OnBasketChange", 6, "emit"]
   ]);
 });
+
+test("indexing stores features and graph edges", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { buildIndex } = await import("../src/indexer/indexer.js");
+  const { searchBitrixFeatures, searchBitrixRelations } = await import("../src/indexer/sqliteStore.js");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-features-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-features-data-"));
+  try {
+    const write = async (file: string, content: string) => {
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.writeFile(path.join(root, file), content, "utf8");
+    };
+    await write("local/routes/web.php", "<?php\nreturn function ($routes) { $routes->get('/items', [\\Vendor\\Api\\Items::class, 'list']); };\n");
+    await write("local/js/acme/widget/config.php", "<?php\nreturn ['js' => 'widget.js', 'rel' => ['main.core']];\n");
+    await write("local/js/acme/widget/widget.js", "BX.ajax.runAction('vendor:api.items.list');\n");
+    const dbFile = path.join(dataDir, "bitrix-mcp.sqlite");
+    // local/js belongs to the bitrix scope.
+    await buildIndex({ root, kind: "bitrix", dbFile, patterns: ["local/**/*.{php,js}"] });
+
+    const routes = await searchBitrixFeatures(dbFile, { featureType: "route" });
+    assert.deepEqual(routes.map((route) => [route.name, route.target, route.relativeFile]), [["GET /items", "Vendor\\Api\\Items::list", "local/routes/web.php"]]);
+    const ajax = await searchBitrixFeatures(dbFile, { query: "vendor:api.items" });
+    assert.equal(ajax[0]?.featureType, "ajax_call");
+    const edges = await searchBitrixRelations(dbFile, { sourceType: "route", sourceName: "GET /items" }) ?? [];
+    assert.deepEqual(edges.map((edge) => [edge.relationType, edge.targetType, edge.targetName]), [["handled_by", "method", "Vendor\\Api\\Items::list"]]);
+    const deps = await searchBitrixRelations(dbFile, { relationType: "depends_on_extension" }) ?? [];
+    assert.deepEqual(deps.map((edge) => [edge.sourceName, edge.targetName]), [["acme.widget", "main.core"]]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});

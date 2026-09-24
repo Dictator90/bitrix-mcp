@@ -1,4 +1,5 @@
 import { componentNameFromRelativePath, possibleComponentTemplateRelativePaths } from "../template.js";
+import type { BitrixFeatureRecord } from "../../liveapi/bitrixFeatures.js";
 import type { BitrixRelationRecord, IndexFile, SymbolRecord } from "../../types.js";
 
 function staticAgentTarget(name: string): string | undefined {
@@ -283,3 +284,77 @@ export function eventRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): 
  * Schema version stored in `PRAGMA user_version`. Bump it whenever
  * {@link migrateSchema} gains a step, so existing databases run it once.
  */
+
+function methodTarget(target: string | undefined): { targetType: string; targetName: string } | undefined {
+  if (!target || target === "closure") return undefined;
+  return target.includes("::") ? { targetType: "method", targetName: target } : { targetType: "function", targetName: target };
+}
+
+/**
+ * Graph edges for Bitrix framework features (see liveapi/bitrixFeatures.ts):
+ * actions/routes/REST methods → handler methods, urlrewrite rules → components,
+ * files → language phrases, JS extensions and events, extension dependencies,
+ * module autoload registrations, component parameters.
+ */
+export function featureRelationsForFile(file: IndexFile): BitrixRelationRecord[] {
+  const relations: BitrixRelationRecord[] = [];
+  const base = (feature: BitrixFeatureRecord) => ({ file: file.path, line: feature.line, module: feature.module, kind: file.kind });
+  const component = componentNameFromRelativePath(file.relativePath)?.component;
+  for (const feature of file.bitrixFeatures ?? []) {
+    const edge = (sourceType: string, sourceName: string, targetType: string, targetName: string, relationType: string, metadata?: Record<string, unknown>) =>
+      relations.push({ sourceType, sourceName, targetType, targetName, relationType, ...base(feature), ...(metadata ? { metadata } : {}) });
+    switch (feature.featureType) {
+      case "controller_action":
+      case "route":
+      case "rest_method": {
+        const handler = methodTarget(feature.target);
+        if (handler) edge(feature.featureType, feature.name, handler.targetType, handler.targetName, "handled_by");
+        break;
+      }
+      case "urlrewrite_rule":
+        if (feature.target) edge("urlrewrite_rule", feature.name, "component", feature.target, "routes_to_component", { path: feature.detail?.path });
+        break;
+      case "lang_phrase":
+        edge("file", file.relativePath, "lang_phrase", feature.name, "defines_phrase", { lang: feature.detail?.lang });
+        break;
+      case "lang_usage":
+        edge("file", file.relativePath, "lang_phrase", feature.name, "uses_phrase");
+        break;
+      case "js_extension": {
+        edge("file", file.relativePath, "js_extension", feature.name, "defines_js_extension");
+        const rel = feature.detail?.rel;
+        for (const dependency of Array.isArray(rel) ? rel : typeof rel === "string" ? [rel] : []) {
+          if (typeof dependency === "string") edge("js_extension", feature.name, "js_extension", dependency, "depends_on_extension");
+        }
+        break;
+      }
+      case "js_extension_usage":
+        edge("file", file.relativePath, "js_extension", feature.name, "loads_js_extension");
+        break;
+      case "autoload_class":
+        edge(feature.module ? "module" : "file", feature.module ?? file.relativePath, "class", feature.name, "autoloads_class", { file: feature.target });
+        break;
+      case "autoload_namespace":
+        edge(feature.module ? "module" : "file", feature.module ?? file.relativePath, "namespace", feature.name, "autoloads_namespace", { directory: feature.target });
+        break;
+      case "ajax_call":
+        edge("file", file.relativePath, "ajax_action", feature.name, "calls_ajax_action", feature.detail);
+        break;
+      case "js_event":
+        edge("file", file.relativePath, "js_event", feature.name, feature.detail?.role === "emit" ? "emits_js_event" : "subscribes_js_event");
+        break;
+      case "user_field":
+        edge("file", file.relativePath, "user_field", `${String(feature.detail?.entityId ?? "")}:${feature.name}`, "defines_user_field", feature.detail);
+        break;
+      case "iblock_property":
+        edge("file", file.relativePath, "iblock_property", `${String(feature.detail?.iblockId ?? "")}:${feature.name}`, "defines_iblock_property", feature.detail);
+        break;
+      case "component_parameter":
+        if (component) edge("component", component, "component_parameter", `${component}:${feature.name}`, "has_parameter", feature.detail);
+        break;
+      default:
+        break;
+    }
+  }
+  return relations;
+}

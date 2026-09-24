@@ -42,7 +42,7 @@ export class ParsePool {
 
   constructor(private readonly size: number) {}
 
-  parse(absolutePath: string, language: string): Promise<ParsedFile> {
+  parse(absolutePath: string, language: string, relativePath?: string): Promise<ParsedFile> {
     if (this.closed) return Promise.reject(new Error("Parse pool is closed."));
     const slot = this.nextWorker % this.size;
     this.nextWorker += 1;
@@ -50,7 +50,7 @@ export class ParsePool {
     const id = this.nextId++;
     return new Promise<ParsedFile>((resolve, reject) => {
       poolWorker.pending.set(id, { resolve, reject });
-      poolWorker.worker.postMessage({ id, absolutePath, language });
+      poolWorker.worker.postMessage({ id, absolutePath, language, relativePath });
     });
   }
 

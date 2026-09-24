@@ -105,9 +105,15 @@ const WRITE_BATCH_SIZE = 250;
 const PARALLEL_PARSE_MIN_FILES = 200;
 
 // Bitrix i18n message files live in `lang/` directories across modules,
-// components and templates. They are huge and rarely useful for code search,
-// so they are excluded from every scope by default (override with --include-lang).
+// components and templates. The core's are huge, so the bitrix and install
+// scopes exclude them by default (override with --include-lang). Project and
+// template scopes always index them: they are small and their $MESS phrases
+// are indexed for lookup (`lang_phrase` features).
 const LANG_IGNORES = ["**/lang/**"];
+
+function langIncluded(kind: IndexKind, includeLang: boolean | undefined): boolean {
+  return includeLang === true || kind === "project" || kind === "template";
+}
 
 /** Extract the Bitrix module name from a path like `bitrix/modules/iblock/lib/...`. */
 function detectModule(relativePath: string): string | undefined {
@@ -172,7 +178,7 @@ export async function discoverFiles(root: string, options: DiscoverFilesOptions)
   const patterns = options.patterns ?? defaultPatternsForKind(options.kind);
   const kindIgnores = [
     ...defaultIgnoresForKind(options.kind),
-    ...(options.includeLang ? [] : LANG_IGNORES),
+    ...(langIncluded(options.kind, options.includeLang) ? [] : LANG_IGNORES),
     ...(options.ignores ?? [])
   ];
   const ig = await loadIgnore(resolvedRoot, {
@@ -269,7 +275,7 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     // Pass 2: parse changed files (in worker threads for large runs) and write them in batches.
     const workers = indexWorkerCount();
     pool = workers > 1 && toParse.length >= PARALLEL_PARSE_MIN_FILES ? new ParsePool(workers) : undefined;
-    const parse = (file: IndexFile) => (pool ? pool.parse(file.path, file.language) : parseFile(file.path, file.language));
+    const parse = (file: IndexFile) => (pool ? pool.parse(file.path, file.language, file.relativePath) : parseFile(file.path, file.language, file.relativePath));
     const window = pool ? workers * 8 : 1;
     const parseWindow = (offset: number) => {
       const slice = toParse.slice(offset, offset + window);
@@ -301,12 +307,13 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
           indexFile.iblockUsages = withContext(parsed.iblockUsages);
           indexFile.hlblockUsages = withContext(parsed.hlblockUsages);
           indexFile.optionUsages = withContext(parsed.optionUsages);
+          indexFile.bitrixFeatures = parsed.bitrixFeatures;
           symbolCount += parsed.symbols.length;
-          relationCount += parsed.moduleUsages.length + parsed.ormUsages.length + parsed.iblockUsages.length + parsed.hlblockUsages.length + parsed.optionUsages.length + parsed.ormEntities.length;
+          relationCount += parsed.moduleUsages.length + parsed.ormUsages.length + parsed.iblockUsages.length + parsed.hlblockUsages.length + parsed.optionUsages.length + parsed.ormEntities.length + parsed.bitrixFeatures.length;
         }
         progress(indexFile.relativePath);
         batch.push(indexFile);
-        files.push(retainSymbols ? indexFile : { ...indexFile, symbols: [], moduleUsages: undefined, ormEntities: undefined, ormUsages: undefined, iblockUsages: undefined, hlblockUsages: undefined, optionUsages: undefined });
+        files.push(retainSymbols ? indexFile : { ...indexFile, symbols: [], moduleUsages: undefined, ormEntities: undefined, ormUsages: undefined, iblockUsages: undefined, hlblockUsages: undefined, optionUsages: undefined, bitrixFeatures: undefined });
         if (batch.length >= WRITE_BATCH_SIZE) flush();
       });
     }

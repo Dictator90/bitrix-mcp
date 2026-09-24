@@ -1,3 +1,5 @@
+import type { BitrixFeatureRecord } from "./liveapi/bitrixFeatures.js";
+
 export type IndexKind = "project" | "template" | "bitrix" | "install" | "docs";
 
 export interface IndexFile {
@@ -14,6 +16,7 @@ export interface IndexFile {
   iblockUsages?: IblockUsageRecord[];
   hlblockUsages?: HlblockUsageRecord[];
   optionUsages?: OptionUsageRecord[];
+  bitrixFeatures?: BitrixFeatureRecord[];
 }
 
 export interface ComponentParamRecord {

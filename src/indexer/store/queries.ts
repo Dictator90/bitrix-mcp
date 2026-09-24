@@ -8,6 +8,7 @@ import type { BitrixRelationRow, FileRow, HlblockUsageRow, IblockUsageRow, Modul
 import { ensureSqliteStore } from "./schema.js";
 import { CLASS_NODE_TYPE, INHERITANCE_RELATION_TYPES, isCaseInsensitiveNodeType, normalizeStoredRelation, phpNameKey, storedGraphNodeTypes } from "./relations.js";
 import type { AgentSearchQuery, AutoloadSearchQuery, BitrixRelationSearchQuery, ComponentContextQuery, ComponentContextResult, ComponentSearchQuery, HlblockUsageSearchQuery, IblockUsageSearchQuery, InheritanceSearchQuery, MailEventSearchQuery, MailEventSearchResult, ModuleUsageSearchQuery, OptionSearchQuery, OrmEntityMapQuery, OrmSearchQuery, OrmUsageSearchQuery, SymbolContextSearchQuery, WriteBitrixRelationsOptions } from "./types.js";
+import type { BitrixFeatureRecord, BitrixFeatureType } from "../../liveapi/bitrixFeatures.js";
 
 
 function rowToAutoloadRecord(row: { id: number; type: string; namespace_prefix: string | null; paths_json: string; file: string | null; package_name: string | null; version_constraint: string | null; source_file: string; root: string; dev: number; metadata_json: string | null }): AutoloadRecord {
@@ -971,6 +972,81 @@ export async function clearBitrixRelationsByFile(dbFile: string, file: string): 
   try {
     const result = db.prepare("DELETE FROM bitrix_relations WHERE file = ?").run(file);
     return Number(result.changes);
+  } finally {
+    db.close();
+  }
+}
+
+export interface BitrixFeatureSearchQuery {
+  /** Feature name or handler target; exact (case-insensitive) matches first, then prefix, then substring. */
+  query?: string;
+  featureType?: BitrixFeatureType | BitrixFeatureType[];
+  kind?: IndexKind | IndexKind[];
+  module?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface BitrixFeatureSearchResult extends BitrixFeatureRecord {
+  kind: IndexKind;
+  file: string;
+  relativeFile: string;
+}
+
+/** Searches indexed Bitrix features (controller actions, routes, REST methods, phrases, JS extensions, …). */
+export async function searchBitrixFeatures(dbFile: string, query: BitrixFeatureSearchQuery): Promise<BitrixFeatureSearchResult[]> {
+  try {
+    await fs.access(dbFile);
+  } catch {
+    return [];
+  }
+  await ensureSqliteStore(dbFile);
+  const filters: string[] = [];
+  const params: Array<string | number> = [];
+  const types = query.featureType === undefined ? [] : Array.isArray(query.featureType) ? query.featureType : [query.featureType];
+  if (types.length) {
+    filters.push(`b.feature_type IN (${types.map(() => "?").join(", ")})`);
+    params.push(...types);
+  }
+  const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
+  if (kinds.length) {
+    filters.push(`b.kind IN (${kinds.map(() => "?").join(", ")})`);
+    params.push(...kinds);
+  }
+  if (query.module) {
+    filters.push("b.module = ?");
+    params.push(query.module);
+  }
+  const text = query.query?.trim();
+  let rankSql = "0";
+  const rankParams: string[] = [];
+  if (text) {
+    const escaped = text.replace(/[\\%_]/gu, "\\$&");
+    filters.push("(b.name LIKE ? ESCAPE '\\' OR b.target LIKE ? ESCAPE '\\')");
+    params.push(`%${escaped}%`, `%${escaped}%`);
+    rankSql = "CASE WHEN b.name = ? COLLATE NOCASE OR b.target = ? COLLATE NOCASE THEN 2 WHEN b.name LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END";
+    rankParams.push(text, text, `${escaped}%`);
+  }
+  const db = openDatabase(dbFile, { readOnly: true });
+  try {
+    const rows = db.prepare(`
+      SELECT b.kind, b.feature_type, b.name, b.target, b.module, b.line, b.detail_json, f.path AS file, f.relative_path AS relative_file, ${rankSql} AS rank
+      FROM bitrix_features b JOIN files f ON f.id = b.file_id
+      ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+      ORDER BY rank DESC, b.feature_type, b.name, f.relative_path, b.line
+      LIMIT ? OFFSET ?
+    `).all(...rankParams, ...params, query.limit ?? 20, query.offset ?? 0) as Array<{ kind: IndexKind; feature_type: BitrixFeatureType; name: string; target: string | null; module: string | null; line: number; detail_json: string | null; file: string; relative_file: string }>;
+    return rows.map((row) => ({
+      featureType: row.feature_type,
+      name: row.name,
+      target: row.target ?? undefined,
+      module: row.module ?? undefined,
+      line: row.line,
+      detail: row.detail_json ? JSON.parse(row.detail_json) as Record<string, unknown> : undefined,
+      kind: row.kind,
+      file: row.file,
+      relativeFile: row.relative_file
+    }));
   } finally {
     db.close();
   }
