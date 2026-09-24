@@ -8,3 +8,4 @@ coverage/
 __pycache__/
 .pytest_cache/
 .venv/
+.claude/worktrees/
