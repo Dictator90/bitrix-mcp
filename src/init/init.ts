@@ -1,17 +1,29 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { stdin as input, stderr as output } from "node:process";
 import fg from "fast-glob";
+import { resolveHomeDir } from "../config/home.js";
 import { sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, DEFAULT_BITRIX_PATTERNS } from "../indexer/indexer.js";
 import { hasIndexMetadata } from "../indexer/sqliteStore.js";
 import { serveStdio } from "../mcp/server.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { createProgressReporter, detectCi, type ProgressReporter } from "../progress/index.js";
+import {
+  getJsonValue,
+  isPlainObject,
+  loadJsonConfig,
+  readTextFileIfExists,
+  replaceTomlTable,
+  saveJsonConfig,
+  setJsonValue,
+  writeTextIfChanged,
+  type JsonConfigDocument,
+  type WriteOutcome
+} from "./configFiles.js";
 
 export type Agent =
   | "cursor"
@@ -59,17 +71,23 @@ export interface InitContext {
   dbAllowWrite: boolean;
   tinkerEnabled: boolean;
   phpBin: string;
+  /** Home directory for global client configs; defaults to BITRIX_MCP_HOME_DIR or os.homedir(). */
+  homeDir?: string;
 }
 
 export interface WrittenConfig {
   label: string;
   path?: string;
   note?: string;
+  outcome?: WriteOutcome;
 }
 
 export interface AgentGuidanceResult {
   label: string;
   path: string;
+  outcome?: WriteOutcome;
+  /** Set when the file was intentionally skipped (e.g. user-owned hook file). */
+  warning?: string;
 }
 
 const BITRIX_MCP_SKILL = `---
@@ -139,15 +157,15 @@ If MCP returns no results for expected data, check \`bitrix_index_status\`, run 
 Do not edit Bitrix core under \`bitrix/\` unless explicitly requested; prefer \`local/\`, project modules, and templates.
 `;
 
-const GUIDANCE_SECTION_START = "<!-- bitrix-mcp:init-guidance:start -->";
-const GUIDANCE_SECTION_END = "<!-- bitrix-mcp:init-guidance:end -->";
+export const GUIDANCE_SECTION_START = "<!-- bitrix-mcp:init-guidance:start -->";
+export const GUIDANCE_SECTION_END = "<!-- bitrix-mcp:init-guidance:end -->";
 
 /**
  * Sentinel appended (as a shell comment) to every hook command bitrix-mcp
- * manages, so re-running init/configure can find and replace exactly its own
- * hooks without touching user-authored ones.
+ * manages, so re-running init/configure (or uninstall) can find exactly its
+ * own hooks without touching user-authored ones.
  */
-const BITRIX_MCP_HOOK_MARKER = "bitrix-mcp:auto-directive";
+export const BITRIX_MCP_HOOK_MARKER = "bitrix-mcp:auto-directive";
 const BITRIX_MCP_TOOL_PREFIX = "mcp__bitrix-mcp__";
 const BITRIX_MCP_HOOK_TOOLS = [
   "bitrix_index_status",
@@ -166,16 +184,16 @@ function hookToolSelect(tools: string[]): string {
 // being wrapped in a single-quoted `echo` argument on both bash and PowerShell.
 
 /**
- * Claude Code defers MCP tools behind its ToolSearch mechanism, so the main
- * thread must be told to load them before anything else.
+ * Claude Code defers MCP tools behind its ToolSearch mechanism, so the session
+ * is told once (SessionStart) to load them before anything else.
  */
-function claudePromptDirective(): string {
-  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). Its tools may be hidden behind ToolSearch. For any Bitrix-related request, FIRST load them in one ToolSearch call: ${hookToolSelect(BITRIX_MCP_HOOK_TOOLS)}. Then follow the Authority Rule: begin with bitrix_index_status and bitrix_project_overview and treat MCP results as the primary source of truth. Manual grep/read is a fallback only when MCP is empty, stale, or explicitly requested.`;
+function claudeSessionDirective(): string {
+  return `[bitrix-mcp] 1C-Bitrix project with the bitrix-mcp MCP server. For Bitrix tasks, first load its tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS)}), start with bitrix_index_status and bitrix_project_overview, and treat MCP results as the primary source of truth. Manual grep/read is a fallback when MCP is empty, stale, or explicitly requested.`;
 }
 
 /** Same as above, injected into every spawned Claude Code subagent at start. */
 function claudeSubagentDirective(): string {
-  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). For any Bitrix task, FIRST load its tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS.slice(0, 5))}) and treat them as the primary source of truth. Manual file search is a fallback only.`;
+  return `[bitrix-mcp] 1C-Bitrix project. For Bitrix tasks, first load bitrix-mcp tools via ToolSearch (${hookToolSelect(BITRIX_MCP_HOOK_TOOLS.slice(0, 5))}) and treat them as the primary source of truth; manual file search is a fallback.`;
 }
 
 /**
@@ -183,7 +201,7 @@ function claudeSubagentDirective(): string {
  * so there is no ToolSearch step — only the Authority Rule.
  */
 function directToolsDirective(): string {
-  return `[bitrix-mcp] This project uses the bitrix-mcp MCP server (1C-Bitrix). For any Bitrix-related request, use its tools as the primary source of truth: begin with bitrix_index_status and bitrix_project_overview, then bitrix_liveapi_search, bitrix_docs_search, bitrix_detect_changes, and bitrix_read_symbol_context. Manual grep/read is a fallback only when MCP is empty, stale, or explicitly requested.`;
+  return "[bitrix-mcp] 1C-Bitrix project with the bitrix-mcp MCP server. For Bitrix tasks, use its tools as the primary source of truth: start with bitrix_index_status and bitrix_project_overview, then bitrix_liveapi_search, bitrix_docs_search, bitrix_detect_changes, bitrix_read_symbol_context. Manual grep/read is a fallback when MCP is empty, stale, or explicitly requested.";
 }
 
 /** Wrap a hook JSON payload in a marked, single-quoted `echo` shell command. */
@@ -201,33 +219,72 @@ function cursorContextCommand(additionalContext: string): string {
   return hookEchoCommand({ additional_context: additionalContext });
 }
 
-function isManagedHookEntry(entry: unknown): boolean {
+export function isManagedHookEntry(entry: unknown): boolean {
   return JSON.stringify(entry).includes(BITRIX_MCP_HOOK_MARKER);
 }
 
+function hooksObject(doc: JsonConfigDocument): Record<string, unknown> {
+  const hooks = getJsonValue(doc, ["hooks"]);
+  if (hooks === undefined) {
+    return {};
+  }
+  if (!isPlainObject(hooks)) {
+    throw new Error(`Cannot update hooks in ${doc.filePath}: "hooks" is not an object. bitrix-mcp did not modify it.`);
+  }
+  return hooks;
+}
+
 /** Replace our previous managed entry for `event` (if any) and append the fresh one. */
-function upsertSettingsHook(hooks: Record<string, unknown>, event: string, entry: Record<string, unknown>): void {
-  const existing = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-  hooks[event] = [...existing.filter((item) => !isManagedHookEntry(item)), entry];
+function upsertManagedHook(doc: JsonConfigDocument, event: string, entry: Record<string, unknown>): void {
+  const current = hooksObject(doc)[event];
+  const existing = Array.isArray(current) ? current : [];
+  setJsonValue(doc, ["hooks", event], [...existing.filter((item) => !isManagedHookEntry(item)), entry]);
 }
 
 /**
- * Claude Code hooks (`.claude/settings.json`): UserPromptSubmit for the main
- * thread and SubagentStart for spawned agents. Merges into any existing config,
- * preserving user settings/hooks, and is idempotent across re-runs.
+ * Drops our managed entries from `event` (and the event key itself if nothing
+ * else is left). Returns true when something was removed.
+ */
+export function removeManagedHooks(doc: JsonConfigDocument, event: string): boolean {
+  const current = hooksObject(doc)[event];
+  if (!Array.isArray(current) || !current.some(isManagedHookEntry)) {
+    return false;
+  }
+  const remaining = current.filter((item) => !isManagedHookEntry(item));
+  setJsonValue(doc, ["hooks", event], remaining.length > 0 ? remaining : undefined);
+  return true;
+}
+
+function guidanceResult(label: string, filePath: string, outcome: WriteOutcome): AgentGuidanceResult {
+  return { label, path: filePath, outcome };
+}
+
+export function claudeSettingsPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".claude", "settings.json");
+}
+
+/**
+ * Claude Code hooks (`.claude/settings.json`): SessionStart injects the
+ * directive once per session (also after /clear and compaction) and
+ * SubagentStart covers spawned agents. Earlier releases used a per-prompt
+ * UserPromptSubmit hook; that managed entry is removed on re-run. Merges into
+ * any existing config, preserving user settings/hooks/comments.
  */
 export async function writeClaudeCodeHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".claude", "settings.json");
-  const config = await readJsonObject(filePath);
-  const hooks = ensureObject(config, "hooks");
-  upsertSettingsHook(hooks, "UserPromptSubmit", {
-    hooks: [{ type: "command", command: contextHookCommand("UserPromptSubmit", claudePromptDirective()), statusMessage: "bitrix-mcp directive" }]
+  const filePath = claudeSettingsPath(context);
+  const doc = await loadJsonConfig(filePath);
+  removeManagedHooks(doc, "UserPromptSubmit");
+  upsertManagedHook(doc, "SessionStart", {
+    hooks: [{ type: "command", command: contextHookCommand("SessionStart", claudeSessionDirective()), statusMessage: "bitrix-mcp directive" }]
   });
-  upsertSettingsHook(hooks, "SubagentStart", {
+  upsertManagedHook(doc, "SubagentStart", {
     hooks: [{ type: "command", command: contextHookCommand("SubagentStart", claudeSubagentDirective()), statusMessage: "bitrix-mcp directive" }]
   });
-  await writeJsonObject(filePath, config);
-  return { label: "Claude Code hooks", path: filePath };
+  return guidanceResult("Claude Code hooks", filePath, await saveJsonConfig(doc));
+}
+
+export function geminiSettingsPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".gemini", "settings.json");
 }
 
 /**
@@ -236,15 +293,17 @@ export async function writeClaudeCodeHooks(context: InitContext): Promise<AgentG
  * the file with the MCP server config and merges non-destructively.
  */
 export async function writeGeminiHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".gemini", "settings.json");
-  const config = await readJsonObject(filePath);
-  const hooks = ensureObject(config, "hooks");
-  upsertSettingsHook(hooks, "BeforeAgent", {
+  const filePath = geminiSettingsPath(context);
+  const doc = await loadJsonConfig(filePath);
+  upsertManagedHook(doc, "BeforeAgent", {
     matcher: "*",
     hooks: [{ type: "command", name: "bitrix-mcp-directive", command: contextHookCommand("BeforeAgent", directToolsDirective()) }]
   });
-  await writeJsonObject(filePath, config);
-  return { label: "Gemini CLI hooks", path: filePath };
+  return guidanceResult("Gemini CLI hooks", filePath, await saveJsonConfig(doc));
+}
+
+export function cursorHooksPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".cursor", "hooks.json");
 }
 
 /**
@@ -253,15 +312,17 @@ export async function writeGeminiHooks(context: InitContext): Promise<AgentGuida
  * inject context. Requires a top-level `version` field.
  */
 export async function writeCursorHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".cursor", "hooks.json");
-  const config = await readJsonObject(filePath);
-  if (typeof config.version !== "number") {
-    config.version = 1;
+  const filePath = cursorHooksPath(context);
+  const doc = await loadJsonConfig(filePath);
+  if (typeof getJsonValue(doc, ["version"]) !== "number") {
+    setJsonValue(doc, ["version"], 1);
   }
-  const hooks = ensureObject(config, "hooks");
-  upsertSettingsHook(hooks, "sessionStart", { command: cursorContextCommand(directToolsDirective()) });
-  await writeJsonObject(filePath, config);
-  return { label: "Cursor hooks", path: filePath };
+  upsertManagedHook(doc, "sessionStart", { command: cursorContextCommand(directToolsDirective()) });
+  return guidanceResult("Cursor hooks", filePath, await saveJsonConfig(doc));
+}
+
+export function codexHooksPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".codex", "hooks.json");
 }
 
 /**
@@ -271,48 +332,65 @@ export async function writeCursorHooks(context: InitContext): Promise<AgentGuida
  * is trusted.
  */
 export async function writeCodexHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".codex", "hooks.json");
-  const config = await readJsonObject(filePath);
-  const hooks = ensureObject(config, "hooks");
-  upsertSettingsHook(hooks, "SessionStart", {
+  const filePath = codexHooksPath(context);
+  const doc = await loadJsonConfig(filePath);
+  upsertManagedHook(doc, "SessionStart", {
     matcher: "startup|resume",
     hooks: [{ type: "command", command: contextHookCommand("SessionStart", directToolsDirective()) }]
   });
-  await writeJsonObject(filePath, config);
-  return { label: "Codex hooks", path: filePath };
+  return guidanceResult("Codex hooks", filePath, await saveJsonConfig(doc));
+}
+
+export function copilotHooksPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".github", "hooks", "bitrix-mcp.json");
+}
+
+function userOwnedWarning(filePath: string): string {
+  return `${filePath} exists and was not created by bitrix-mcp (no ${BITRIX_MCP_HOOK_MARKER} marker); left unchanged.`;
 }
 
 /**
  * GitHub Copilot / VS Code agent hooks. VS Code auto-loads every `.json` under
- * `.github/hooks/`, so bitrix-mcp owns a dedicated file and overwrites it. The
- * SessionStart event injects context via `hookSpecificOutput.additionalContext`.
+ * `.github/hooks/`, so bitrix-mcp owns a dedicated file. The SessionStart event
+ * injects context via `hookSpecificOutput.additionalContext`. An existing file
+ * without our marker is treated as user-owned and left alone.
  */
 export async function writeCopilotHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".github", "hooks", "bitrix-mcp.json");
-  await writeJsonObject(filePath, {
+  const filePath = copilotHooksPath(context);
+  const previous = await readTextFileIfExists(filePath);
+  if (previous !== undefined && !previous.includes(BITRIX_MCP_HOOK_MARKER)) {
+    return { label: "Copilot hooks", path: filePath, outcome: "unchanged", warning: userOwnedWarning(filePath) };
+  }
+  const next = `${JSON.stringify({
     hooks: {
       SessionStart: [
         { type: "command", command: contextHookCommand("SessionStart", directToolsDirective()) }
       ]
     }
-  });
-  return { label: "Copilot hooks", path: filePath };
+  }, null, 2)}\n`;
+  return guidanceResult("Copilot hooks", filePath, await writeTextIfChanged(filePath, next, { previous }));
+}
+
+export function clineHookPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".clinerules", "hooks", "UserPromptSubmit");
 }
 
 /**
  * Cline hooks are executable scripts named exactly after the hook type (no
  * extension) under `.clinerules/hooks/`. The UserPromptSubmit script emits
  * `{"contextModification": ...}` to inject context. Cline runs hooks on
- * macOS/Linux only, so the file is a `bash` script marked executable.
+ * macOS/Linux only, so the file is a `bash` script marked executable. An
+ * existing script without our marker is user-owned and left alone.
  */
 export async function writeClineHooks(context: InitContext): Promise<AgentGuidanceResult> {
-  const filePath = path.join(context.projectRoot, ".clinerules", "hooks", "UserPromptSubmit");
+  const filePath = clineHookPath(context);
+  const previous = await readTextFileIfExists(filePath);
+  if (previous !== undefined && !previous.includes(BITRIX_MCP_HOOK_MARKER)) {
+    return { label: "Cline hooks", path: filePath, outcome: "unchanged", warning: userOwnedWarning(filePath) };
+  }
   const payload = JSON.stringify({ contextModification: directToolsDirective() });
   const script = `#!/usr/bin/env bash\n# ${BITRIX_MCP_HOOK_MARKER}\ncat <<'BITRIX_MCP_JSON'\n${payload}\nBITRIX_MCP_JSON\n`;
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, script, "utf8");
-  await fs.chmod(filePath, 0o755);
-  return { label: "Cline hooks", path: filePath };
+  return guidanceResult("Cline hooks", filePath, await writeTextIfChanged(filePath, script, { previous, mode: 0o755 }));
 }
 
 /** Agents that support context-injection hooks, mapped to their hook writer. */
@@ -326,43 +404,30 @@ const HOOK_WRITERS: Partial<Record<Agent, (context: InitContext) => Promise<Agen
 };
 
 async function writeTextFile(filePath: string, value: string, label = "Bitrix MCP guidance"): Promise<AgentGuidanceResult> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, value.endsWith("\n") ? value : `${value}\n`, "utf8");
-  return { label, path: filePath };
-}
-
-async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
+  const outcome = await writeTextIfChanged(filePath, value.endsWith("\n") ? value : `${value}\n`);
+  return guidanceResult(label, filePath, outcome);
 }
 
 function markedSection(section: string): string {
   return `${GUIDANCE_SECTION_START}\n${section.trim()}\n${GUIDANCE_SECTION_END}`;
 }
 
+export const GUIDANCE_SECTION_PATTERN = new RegExp(`${GUIDANCE_SECTION_START}[\\s\\S]*?${GUIDANCE_SECTION_END}`);
+
 function upsertSection(source: string, section: string): string {
   const normalizedSection = markedSection(section);
-  const sectionPattern = new RegExp(`${GUIDANCE_SECTION_START}[\\s\\S]*?${GUIDANCE_SECTION_END}`);
-  return sectionPattern.test(source)
-    ? source.replace(sectionPattern, normalizedSection)
+  return GUIDANCE_SECTION_PATTERN.test(source)
+    ? source.replace(GUIDANCE_SECTION_PATTERN, normalizedSection)
     : `${source.trimEnd()}${source.trim() ? "\n\n" : ""}${normalizedSection}\n`;
 }
 
 async function upsertMarkedSection(filePath: string, section: string, label: string, newFileTemplate?: string): Promise<AgentGuidanceResult> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const source = await readTextFileIfExists(filePath);
   const next = source === undefined ? newFileTemplate ?? `${markedSection(section)}\n` : upsertSection(source, section);
-  await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
-  return { label, path: filePath };
+  return guidanceResult(label, filePath, await writeTextIfChanged(filePath, next.endsWith("\n") ? next : `${next}\n`, { previous: source }));
 }
 
-function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: string } {
+export function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: string } {
   if (!source.startsWith("---\n")) {
     return { frontmatter: "", body: source };
   }
@@ -379,7 +444,6 @@ function splitMarkdownFrontmatter(source: string): { frontmatter: string; body: 
 }
 
 async function upsertCursorRule(filePath: string, section: string, label: string): Promise<AgentGuidanceResult> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const source = await readTextFileIfExists(filePath);
   const next = source === undefined ? cursorRuleContent() : (() => {
     const { frontmatter, body } = splitMarkdownFrontmatter(source);
@@ -387,12 +451,19 @@ async function upsertCursorRule(filePath: string, section: string, label: string
     return `${frontmatter}${updatedBody}`;
   })();
 
-  await fs.writeFile(filePath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
-  return { label, path: filePath };
+  return guidanceResult(label, filePath, await writeTextIfChanged(filePath, next.endsWith("\n") ? next : `${next}\n`, { previous: source }));
+}
+
+export function canonicalSkillPath(context: Pick<InitContext, "dataDir">): string {
+  return path.join(context.dataDir, "skills", "bitrix-mcp", "SKILL.md");
+}
+
+export function claudeSkillPath(context: Pick<InitContext, "projectRoot">): string {
+  return path.join(context.projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md");
 }
 
 async function writeProjectSkill(context: InitContext): Promise<AgentGuidanceResult> {
-  return writeTextFile(path.join(context.dataDir, "skills", "bitrix-mcp", "SKILL.md"), BITRIX_MCP_SKILL, "canonical skill");
+  return writeTextFile(canonicalSkillPath(context), BITRIX_MCP_SKILL, "canonical skill");
 }
 
 function markdownRuleContent(): string {
@@ -411,9 +482,9 @@ function cursorRuleContent(): string {
   ].join("\n");
 }
 
-type AgentRule = { path: string; mode: "managed" | "cursor"; content: string; label: string; newFileTemplate?: string };
+export type AgentRule = { path: string; mode: "managed" | "cursor"; content: string; label: string; newFileTemplate?: string };
 
-function agentRulePath(agent: Agent, context: InitContext): AgentRule {
+export function agentRulePath(agent: Agent, context: Pick<InitContext, "projectRoot" | "dataDir">): AgentRule {
   const agentLabel = AGENT_CHOICES.find((choice) => choice.id === agent)?.label ?? agent;
   const label = `${agentLabel} guidance`;
 
@@ -453,17 +524,18 @@ function agentRulePath(agent: Agent, context: InitContext): AgentRule {
   return { path: path.join(context.dataDir, "rules", "bitrix-mcp.md"), mode: "managed", content: BITRIX_MCP_RULES, label, newFileTemplate: markdownRuleContent() };
 }
 
-export async function writeAgentGuidance(agent: Agent, context: InitContext): Promise<AgentGuidanceResult[]> {
+export interface GuidanceOptions {
+  /** Write context-injection hooks for agents that support them (default true). */
+  hooks?: boolean;
+}
+
+export async function writeAgentGuidance(agent: Agent, context: InitContext, options: GuidanceOptions = {}): Promise<AgentGuidanceResult[]> {
   const results: AgentGuidanceResult[] = [await writeProjectSkill(context)];
   // Claude Code (and Claude Desktop, which reads the same project config) auto-discover
   // skills from <project>/.claude/skills, so install the skill there (the folder is
   // created if missing) in addition to the canonical .bitrix-mcp/skills copy.
   if (agent === "claude-code") {
-    results.push(await writeTextFile(
-      path.join(context.projectRoot, ".claude", "skills", "bitrix-mcp", "SKILL.md"),
-      BITRIX_MCP_SKILL,
-      "Claude skill"
-    ));
+    results.push(await writeTextFile(claudeSkillPath(context), BITRIX_MCP_SKILL, "Claude skill"));
   }
   const rule = agentRulePath(agent, context);
   results.push(rule.mode === "cursor"
@@ -473,49 +545,26 @@ export async function writeAgentGuidance(agent: Agent, context: InitContext): Pr
   // ToolSearch). For agents that support context-injection hooks, also write a
   // hook that actively pushes the "use bitrix-mcp first" directive.
   const hookWriter = HOOK_WRITERS[agent];
-  if (hookWriter) {
+  if (hookWriter && options.hooks !== false) {
     results.push(await hookWriter(context));
   }
   return results;
 }
 
-
-type StdioServerConfig = Record<string, unknown> & {
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-};
-
-function stripJsonComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
-
-async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
-  try {
-    const source = await fs.readFile(filePath, "utf8");
-    const trimmed = source.trim();
-    if (!trimmed) {
-      return {};
-    }
-    const parsed = JSON.parse(stripJsonComments(trimmed));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    throw new Error(`Config ${filePath} must contain a JSON object.`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
-}
-
-async function writeJsonObject(filePath: string, value: Record<string, unknown>): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
+/** Env keys bitrix-mcp writes into client configs; any other env key is user-owned. */
+export const MANAGED_ENV_KEYS = [
+  "BITRIX_MCP_WORKSPACE",
+  "BITRIX_MCP_DATA_DIR",
+  "BITRIX_MCP_DOCS_DIR",
+  "BITRIX_ROOT",
+  "BITRIX_MCP_EMBEDDINGS_URL",
+  "BITRIX_MCP_SEMANTIC_ENABLED",
+  "BITRIX_MCP_OFFICIAL_DOCS_ENABLED",
+  "BITRIX_MCP_DB_ENABLED",
+  "BITRIX_MCP_DB_ALLOW_WRITE",
+  "BITRIX_MCP_TINKER_ENABLED",
+  "BITRIX_MCP_PHP_BIN"
+];
 
 export function envConfig(context: InitContext): Record<string, string> {
   return {
@@ -547,55 +596,76 @@ export function serverInvocation(): { command: string; args: string[] } {
     : { command: "bitrix-mcp", args: ["serve"] };
 }
 
-function mcpServerConfig(context: InitContext): StdioServerConfig {
+function mcpServerConfig(context: InitContext): Record<string, unknown> {
   return {
     ...serverInvocation(),
     env: envConfig(context)
   };
 }
 
-function clineLikeServerConfig(context: InitContext): Record<string, unknown> {
-  return {
-    ...mcpServerConfig(context),
-    alwaysAllow: [],
-    disabled: false
-  };
+/** Name of the server entry bitrix-mcp owns inside every client config. */
+export const SERVER_ENTRY_NAME = "bitrix-mcp";
+
+export interface ServerEntryOptions {
+  /** Top-level object holding servers (`mcpServers`, or `servers` for VS Code). */
+  containerKey?: string;
+  /** Extra keys always set to our value (e.g. VS Code `type`). */
+  managed?: Record<string, unknown>;
+  /** Keys set only when missing, so user edits win (e.g. Cline `alwaysAllow`). */
+  defaults?: Record<string, unknown>;
 }
 
-function ensureObject(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-  const value = parent[key];
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
+const CLINE_LIKE_DEFAULTS: ServerEntryOptions = { defaults: { alwaysAllow: [], disabled: false } };
+
+/**
+ * Merges the `bitrix-mcp` entry into a JSON/JSONC client config: `command`,
+ * `args`, and bitrix-mcp's own env keys are updated, while user-added keys
+ * (`disabled`, `timeout`, `alwaysAllow`, extra env vars, ...) plus comments,
+ * formatting, and other servers are preserved. Unparsable files abort with an
+ * error and are never overwritten; a one-time `<file>.bak` is written before
+ * the first change to an existing file.
+ */
+export async function writeMcpServersConfig(filePath: string, context: InitContext, options: ServerEntryOptions = {}): Promise<WrittenConfig> {
+  const containerKey = options.containerKey ?? "mcpServers";
+  const doc = await loadJsonConfig(filePath);
+  const container = getJsonValue(doc, [containerKey]);
+  if (container !== undefined && !isPlainObject(container)) {
+    throw new Error(`Cannot update ${filePath}: "${containerKey}" is not an object. bitrix-mcp did not modify it.`);
   }
-  const next: Record<string, unknown> = {};
-  parent[key] = next;
-  return next;
-}
+  const entryPath = [containerKey, SERVER_ENTRY_NAME];
+  const existing = getJsonValue(doc, entryPath);
+  const managed: Record<string, unknown> = { ...(options.managed ?? {}), ...serverInvocation() };
+  const env = envConfig(context);
 
-export async function writeMcpServersConfig(filePath: string, context: InitContext, serverConfig: Record<string, unknown> = mcpServerConfig(context)): Promise<WrittenConfig> {
-  const config = await readJsonObject(filePath);
-  ensureObject(config, "mcpServers")["bitrix-mcp"] = serverConfig;
-  await writeJsonObject(filePath, config);
-  return { label: filePath, path: filePath };
-}
+  if (!isPlainObject(existing)) {
+    setJsonValue(doc, entryPath, { ...managed, env, ...(options.defaults ?? {}) });
+  } else {
+    for (const [key, value] of Object.entries(managed)) {
+      setJsonValue(doc, [...entryPath, key], value);
+    }
+    for (const [key, value] of Object.entries(options.defaults ?? {})) {
+      if (!(key in existing)) {
+        setJsonValue(doc, [...entryPath, key], value);
+      }
+    }
+    if (!isPlainObject(existing.env)) {
+      setJsonValue(doc, [...entryPath, "env"], env);
+    } else {
+      for (const key of MANAGED_ENV_KEYS) {
+        setJsonValue(doc, [...entryPath, "env", key], env[key]);
+      }
+    }
+  }
 
-async function writeVsCodeConfig(filePath: string, context: InitContext): Promise<WrittenConfig> {
-  const config = await readJsonObject(filePath);
-  ensureObject(config, "servers")["bitrix-mcp"] = {
-    type: "stdio",
-    ...mcpServerConfig(context)
-  };
-  await writeJsonObject(filePath, config);
-  return { label: "VS Code / GitHub Copilot", path: filePath };
-}
-
-async function writeContinueConfig(filePath: string, context: InitContext): Promise<WrittenConfig> {
-  return { ...(await writeMcpServersConfig(filePath, context)), label: "Continue" };
+  const outcome = await saveJsonConfig(doc);
+  return { label: filePath, path: filePath, outcome };
 }
 
 function escapeTomlString(value: string): string {
   return JSON.stringify(value);
 }
+
+export const CODEX_TABLE = ["mcp_servers", SERVER_ENTRY_NAME];
 
 function codexTomlBlock(context: InitContext): string {
   const { command, args } = serverInvocation();
@@ -610,97 +680,100 @@ function codexTomlBlock(context: InitContext): string {
   ].join("\n");
 }
 
-function replaceTomlBlock(source: string, tableName: string, block: string): string {
-  const lines = source.split(/\r?\n/);
-  const start = lines.findIndex((line) => line.trim() === `[${tableName}]`);
-  if (start === -1) {
-    return `${source.trimEnd()}${source.trim() ? "\n\n" : ""}${block}\n`;
-  }
-
-  let end = start + 1;
-  while (end < lines.length && !/^\s*\[[^\]]+\]\s*$/.test(lines[end])) {
-    end += 1;
-  }
-  lines.splice(start, end - start, ...block.split("\n"));
-  return `${lines.join("\n").trimEnd()}\n`;
+/**
+ * Replaces the `[mcp_servers.bitrix-mcp]` table in Codex `config.toml`
+ * (bare or quoted key, optional trailing comment) and drops stale sub-tables
+ * such as `[mcp_servers.bitrix-mcp.env]`; other tables are left untouched.
+ */
+export function upsertCodexToml(source: string, context: InitContext): string {
+  return replaceTomlTable(source, CODEX_TABLE, codexTomlBlock(context));
 }
 
 async function writeCodexConfig(filePath: string, context: InitContext): Promise<WrittenConfig> {
-  let source = "";
-  try {
-    source = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  const source = await readTextFileIfExists(filePath);
+  const outcome = await writeTextIfChanged(filePath, upsertCodexToml(source ?? "", context), { backup: true, previous: source });
+  return { label: "OpenAI Codex", path: filePath, outcome };
+}
+
+function homeDirOf(context: Pick<InitContext, "homeDir">): string {
+  return context.homeDir ?? resolveHomeDir();
+}
+
+export function windsurfConfigPath(context: Pick<InitContext, "homeDir"> = {}): string {
+  return path.join(homeDirOf(context), ".codeium", "windsurf", "mcp_config.json");
+}
+
+export function clineConfigPath(context: Pick<InitContext, "homeDir"> = {}): string {
+  return path.join(homeDirOf(context), ".cline", "data", "settings", "cline_mcp_settings.json");
+}
+
+export function codexConfigPath(context: Pick<InitContext, "homeDir"> = {}): string {
+  return path.join(homeDirOf(context), ".codex", "config.toml");
+}
+
+export function kiloCodeConfigPath(context: Pick<InitContext, "homeDir"> = {}): string {
+  return path.join(homeDirOf(context), ".kilocode", "cli", "global", "settings", "mcp_settings.json");
+}
+
+/** Where an agent's MCP server config lives (JSON unless `format` says otherwise). */
+export interface AgentConfigTarget {
+  label: string;
+  path: string;
+  format: "json" | "toml";
+  scope: "project" | "global";
+  options?: ServerEntryOptions;
+}
+
+export function agentConfigTarget(agent: Agent, context: Pick<InitContext, "projectRoot" | "homeDir">): AgentConfigTarget | undefined {
+  const project = (label: string, ...segments: string[]): AgentConfigTarget => ({ label, path: path.join(context.projectRoot, ...segments), format: "json", scope: "project" });
+  switch (agent) {
+    case "cursor":
+      return project("Cursor", ".cursor", "mcp.json");
+    case "claude-code":
+      return project("Claude Code", ".mcp.json");
+    case "vscode":
+      return { ...project("VS Code / GitHub Copilot", ".vscode", "mcp.json"), options: { containerKey: "servers", managed: { type: "stdio" } } };
+    case "windsurf":
+      return { label: "Windsurf", path: windsurfConfigPath(context), format: "json", scope: "global" };
+    case "cline":
+      return { label: "Cline", path: clineConfigPath(context), format: "json", scope: "global", options: CLINE_LIKE_DEFAULTS };
+    case "roo-code":
+      return { ...project("Roo Code", ".roo", "mcp.json"), options: CLINE_LIKE_DEFAULTS };
+    case "continue":
+      return project("Continue", ".continue", "mcpServers", "bitrix-mcp.json");
+    case "gemini-cli":
+      return project("Gemini CLI", ".gemini", "settings.json");
+    case "codex":
+      return { label: "OpenAI Codex", path: codexConfigPath(context), format: "toml", scope: "global" };
+    case "kilo-code":
+      return { label: "Kilo Code", path: kiloCodeConfigPath(context), format: "json", scope: "global", options: CLINE_LIKE_DEFAULTS };
+    default:
+      return undefined;
   }
-
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, replaceTomlBlock(source, "mcp_servers.bitrix-mcp", codexTomlBlock(context)), "utf8");
-  return { label: "OpenAI Codex", path: filePath };
-}
-
-function windsurfConfigPath(): string {
-  return path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json");
-}
-
-function clineConfigPath(): string {
-  return path.join(os.homedir(), ".cline", "data", "settings", "cline_mcp_settings.json");
-}
-
-function codexConfigPath(): string {
-  return path.join(os.homedir(), ".codex", "config.toml");
-}
-
-function kiloCodeConfigPath(): string {
-  return path.join(os.homedir(), ".kilocode", "cli", "global", "settings", "mcp_settings.json");
 }
 
 function jetBrainsSnippet(context: InitContext): string {
   return JSON.stringify({ mcpServers: { "bitrix-mcp": mcpServerConfig(context) } }, null, 2);
 }
 
-async function askCustomJsonPath(rl: readline.Interface): Promise<string> {
+async function askCustomJsonPath(rl: readline.Interface, context: InitContext): Promise<string> {
   const answer = (await rl.question("Путь к JSON MCP config для другого клиента: ")).trim();
   if (!answer) {
     throw new Error("Custom MCP config path is required for another MCP client.");
   }
-  return path.resolve(answer.replace(/^~(?=$|\/|\\)/, os.homedir()));
+  return path.resolve(answer.replace(/^~(?=$|\/|\\)/, homeDirOf(context)));
 }
 
 async function writeAgentConfig(agent: Agent, context: InitContext, rl: readline.Interface): Promise<WrittenConfig> {
-  if (agent === "cursor") {
-    return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".cursor", "mcp.json"), context)), label: "Cursor" };
+  const target = agentConfigTarget(agent, context);
+  if (target?.format === "toml") {
+    return writeCodexConfig(target.path, context);
   }
-  if (agent === "claude-code") {
-    return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".mcp.json"), context)), label: "Claude Code" };
-  }
-  if (agent === "vscode") {
-    return writeVsCodeConfig(path.join(context.projectRoot, ".vscode", "mcp.json"), context);
-  }
-  if (agent === "windsurf") {
-    return { ...(await writeMcpServersConfig(windsurfConfigPath(), context)), label: "Windsurf" };
-  }
-  if (agent === "cline") {
-    return { ...(await writeMcpServersConfig(clineConfigPath(), context, clineLikeServerConfig(context))), label: "Cline" };
-  }
-  if (agent === "roo-code") {
-    return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".roo", "mcp.json"), context, clineLikeServerConfig(context))), label: "Roo Code" };
-  }
-  if (agent === "continue") {
-    return writeContinueConfig(path.join(context.projectRoot, ".continue", "mcpServers", "bitrix-mcp.json"), context);
-  }
-  if (agent === "gemini-cli") {
-    return { ...(await writeMcpServersConfig(path.join(context.projectRoot, ".gemini", "settings.json"), context)), label: "Gemini CLI" };
-  }
-  if (agent === "codex") {
-    return writeCodexConfig(codexConfigPath(), context);
-  }
-  if (agent === "kilo-code") {
-    return { ...(await writeMcpServersConfig(kiloCodeConfigPath(), context, clineLikeServerConfig(context))), label: "Kilo Code" };
+  if (target) {
+    return { ...(await writeMcpServersConfig(target.path, context, target.options)), label: target.label };
   }
   if (agent === "generic-json") {
-    const configPath = await askCustomJsonPath(rl);
+    const configPath = await askCustomJsonPath(rl, context);
     return { ...(await writeMcpServersConfig(configPath, context)), label: "Другой MCP-клиент" };
   }
 
@@ -713,6 +786,7 @@ async function writeAgentConfig(agent: Agent, context: InitContext, rl: readline
     ].join("\n")
   };
 }
+
 
 export function parseAgentSelection(answer: string): Agent[] {
   const tokens = answer
@@ -806,7 +880,7 @@ async function detectPhpBin(): Promise<string> {
     if (resolved) return resolved;
   }
 
-  const home = os.homedir().replace(/\\/gu, "/");
+  const home = resolveHomeDir().replace(/\\/gu, "/");
   const knownLocations = process.platform === "win32"
     ? [
         `${home}/.config/herd/bin/php.bat`,
@@ -885,6 +959,8 @@ export interface InitOptions {
   dbAllowWrite?: boolean;
   tinker?: boolean;
   phpBin?: string;
+  /** Write agent context-injection hooks (default true; `--no-hooks` sets false). */
+  hooks?: boolean;
 }
 
 export interface InitDependencies {
@@ -914,7 +990,7 @@ export async function createInitContext(projectRoot = process.cwd()): Promise<In
   }
 
   await fs.mkdir(dataDir, { recursive: true });
-  return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled, dbEnabled, dbAllowWrite, tinkerEnabled, phpBin };
+  return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled, dbEnabled, dbAllowWrite, tinkerEnabled, phpBin, homeDir: resolveHomeDir() };
 }
 
 function runtimePathsFromContext(context: InitContext, officialDocsEnabled: boolean): RuntimePaths {
@@ -936,12 +1012,15 @@ function runtimePathsFromContext(context: InitContext, officialDocsEnabled: bool
 
 async function resolveAgents(options: InitOptions): Promise<{ agents: Agent[]; rl?: readline.Interface }> {
   if (options.allAgents) {
-    return { agents: allConfigurableAgents() };
+    const agents = allConfigurableAgents();
+    output.write(`Configuring all agents: ${agents.join(", ")}\n`);
+    return { agents };
   }
   if (options.agents?.length) {
     return { agents: options.agents };
   }
   if (options.yes) {
+    output.write("--yes: no --agent given, configuring the default agent: Cursor (cursor). Use --agent <id> or --all-agents to choose others.\n");
     return { agents: ["cursor"] };
   }
   return askAgents();
@@ -999,10 +1078,10 @@ export async function writeConfigs(agents: Agent[], context: InitContext, rl?: r
   }
 }
 
-export async function writeGuidance(agents: Agent[], context: InitContext): Promise<AgentGuidanceResult[]> {
+export async function writeGuidance(agents: Agent[], context: InitContext, options: GuidanceOptions = {}): Promise<AgentGuidanceResult[]> {
   const guidanceResults: AgentGuidanceResult[] = [];
   for (const agent of agents) {
-    guidanceResults.push(...(await writeAgentGuidance(agent, context)));
+    guidanceResults.push(...(await writeAgentGuidance(agent, context, options)));
   }
   return guidanceResults;
 }
@@ -1010,7 +1089,8 @@ export async function writeGuidance(agents: Agent[], context: InitContext): Prom
 function printConfigureResults(configResults: WrittenConfig[], guidanceResults: AgentGuidanceResult[]): void {
   for (const configResult of configResults) {
     if (configResult.path) {
-      output.write(`${configResult.label} MCP config updated: ${configResult.path}\n`);
+      const verb = configResult.outcome === "unchanged" ? "already up to date" : configResult.outcome === "created" ? "created" : "updated";
+      output.write(`${configResult.label} MCP config ${verb}: ${configResult.path}\n`);
     }
     if (configResult.note) {
       output.write(`${configResult.label}:\n${configResult.note}\n`);
@@ -1019,12 +1099,20 @@ function printConfigureResults(configResults: WrittenConfig[], guidanceResults: 
 
   output.write("Bitrix MCP guidance installed:\n");
   const uniqueGuidance = new Map<string, string>();
+  const warnings: string[] = [];
   for (const result of guidanceResults) {
+    if (result.warning) {
+      warnings.push(result.warning);
+      continue;
+    }
     // Preserve the most descriptive label if paths collide (e.g. agent guidance over canonical)
     uniqueGuidance.set(result.path, result.label);
   }
   for (const [filePath, label] of uniqueGuidance.entries()) {
     output.write(`- ${label}: ${filePath}\n`);
+  }
+  for (const warning of [...new Set(warnings)]) {
+    output.write(`Warning: ${warning}\n`);
   }
 }
 
@@ -1033,7 +1121,7 @@ export async function configureAgents(options: InitOptions = {}): Promise<void> 
   const { agents, rl } = await resolveAgents(options);
   try {
     const configResults = await writeConfigs(agents, context, rl);
-    const guidanceResults = await writeGuidance(agents, context);
+    const guidanceResults = await writeGuidance(agents, context, { hooks: options.hooks });
     printConfigureResults(configResults, guidanceResults);
   } finally {
     rl?.close();
@@ -1094,7 +1182,7 @@ export async function initAndServe(options: InitOptions = {}, deps: InitDependen
     }
 
     const configResults = await writeConfigs(agents, context, rl);
-    const guidanceResults = await writeGuidance(agents, context);
+    const guidanceResults = await writeGuidance(agents, context, { hooks: options.hooks });
     printConfigureResults(configResults, guidanceResults);
   } finally {
     rl?.close();
