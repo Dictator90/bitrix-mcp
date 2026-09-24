@@ -10,6 +10,7 @@ import { searchInheritanceRelations, searchSymbolsForContext } from "../indexer/
 import { ALLOW_SECRET_FILES_ENV, isSecretFile, secretFilesAllowed } from "../config/secrets.js";
 import { detectLanguage } from "../indexer/language.js";
 import { listDocResources, readDocResource } from "../resources/docs.js";
+import { annotateRegisteredTools, confirmDangerousCall } from "./annotations.js";
 import { runWorkerTask, withMcpToolGuard } from "./toolGuards.js";
 import { EmbeddingsClient } from "../search/embeddingsClient.js";
 import { formatSemanticDocSearchResults } from "./format.js";
@@ -248,6 +249,7 @@ const searchFormatSchema = {
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
   const server = new McpServer({ name: "bitrix-mcp", version: readPackageVersion() });
+  annotateRegisteredTools(server);
 
   server.tool(
     "bitrix_read_file_context",
@@ -862,7 +864,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
           sql: z.string().min(1).describe("Write SQL statement to execute."),
           connection: z.string().optional().describe("Connection name from .settings.php; defaults to \"default\".")
         },
-        async ({ sql, connection }) => runWorkerTask("bitrix_db_execute", { name: "dbExecute", paths, query: { sql, connection } })
+        async ({ sql, connection }) => {
+          await confirmDangerousCall(server, "bitrix_db_execute", `Connection: ${connection ?? "default"}\n\n${sql}`);
+          return runWorkerTask("bitrix_db_execute", { name: "dbExecute", paths, query: { sql, connection } });
+        }
       );
     }
   }
@@ -875,7 +880,10 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
         code: z.string().min(1).describe("PHP code to run with Bitrix loaded. Use `return <expr>;` to get a serialized value back; echoed output is captured separately. A leading <?php tag is optional."),
         timeoutMs: z.number().int().min(1000).max(600000).optional().describe("Max execution time in milliseconds; default 30000.")
       },
-      async ({ code, timeoutMs }) => runWorkerTask("bitrix_tinker", { name: "tinker", paths, query: { code, timeoutMs } })
+      async ({ code, timeoutMs }) => {
+        await confirmDangerousCall(server, "bitrix_tinker", code);
+        return runWorkerTask("bitrix_tinker", { name: "tinker", paths, query: { code, timeoutMs } });
+      }
     );
   }
 
