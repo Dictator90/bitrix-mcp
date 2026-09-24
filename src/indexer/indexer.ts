@@ -7,7 +7,7 @@ import { sqlitePath } from "../config/paths.js";
 import { parseJsSymbols } from "../liveapi/jsParser.js";
 import { parsePhpSymbolsWithDiagnostics } from "../liveapi/phpParser.js";
 import { detectLanguage } from "./language.js";
-import { readExistingFilesByKind, readIndexFromSqlite, writeIndexToSqlite } from "./sqliteStore.js";
+import { readIndexFromSqlite, SqliteIndexWriter } from "./sqliteStore.js";
 import { indexAutoloadMetadata } from "./autoload.js";
 import { NoopProgressReporter } from "../progress/noopReporter.js";
 import type { IndexProgressEvent, IndexScope, ProgressReporter } from "../progress/types.js";
@@ -77,7 +77,30 @@ export interface IndexOptions {
   scope?: IndexScope;
   /** Index `lang/` message-file directories. Defaults to false (excluded). */
   includeLang?: boolean;
+  /**
+   * Base directory for stored relative paths, when `root` is a subdirectory
+   * being re-indexed (e.g. one template). Defaults to `root`. Only files under
+   * `root` are pruned from the index.
+   */
+  relativeTo?: string;
+  /**
+   * Keep parsed symbols in the returned manifest (default true). Long runs pass
+   * false so parsed files are released after each write batch.
+   */
+  retainSymbols?: boolean;
 }
+
+/**
+ * Base directory for relative paths when re-indexing `root`: the workspace when
+ * `root` is inside it (so paths match a full run), otherwise `root` itself.
+ */
+export function relativeBaseFor(workspaceRoot: string, root: string): string {
+  const relative = path.relative(path.resolve(workspaceRoot), path.resolve(root));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? path.resolve(workspaceRoot) : path.resolve(root);
+}
+
+/** Files parsed between SQLite write transactions. */
+const WRITE_BATCH_SIZE = 250;
 
 // Bitrix i18n message files live in `lang/` directories across modules,
 // components and templates. They are huge and rarely useful for code search,
@@ -170,9 +193,10 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
   const reporter = options.reporter ?? new NoopProgressReporter();
   const scope: IndexScope = options.scope ?? options.kind;
   const root = path.resolve(options.root);
+  const baseRoot = path.resolve(options.relativeTo ?? root);
+  const retainSymbols = options.retainSymbols ?? true;
   const dbFile = options.dbFile ?? sqlitePath(path.dirname(options.outFile ?? path.join(root, ".bitrix-mcp", "legacy-index.json")));
-  const existingFiles = options.force ? [] : await readExistingFilesByKind(dbFile, options.kind);
-  const existingByPath = new Map(existingFiles.map((file) => [file.path, file]));
+  const generatedAt = new Date().toISOString();
 
   reporter.start({ scope, phase: "discover", status: "start", startedAt });
   const { found, queued } = await discoverFiles(root, { kind: options.kind, patterns: options.patterns, ignores: options.ignores, includeLang: options.includeLang });
@@ -185,85 +209,101 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     queuedFiles: queued.length
   });
 
+  const writer = await SqliteIndexWriter.open(dbFile, {
+    kind: options.kind,
+    root: baseRoot,
+    scanRoot: root,
+    currentPaths: queued.map((relativePath) => path.join(root, relativePath)),
+    force: options.force,
+    generatedAt
+  });
+
   const files: IndexFile[] = [];
   const warnings: IndexWarning[] = [];
   const debugParse = process.env.BITRIX_MCP_DEBUG_PARSE === "1";
   let symbolCount = 0;
   let relationCount = 0;
   let skippedFiles = 0;
+  let batch: IndexFile[] = [];
   const total = queued.length;
-  reporter.start({ scope, phase: "parse", status: "start", message: "Parse files", total, startedAt: Date.now() });
-  let processed = 0;
-  for (const relativePath of queued) {
-    processed += 1;
-    const absolutePath = path.join(root, relativePath);
-    const stat = await fs.stat(absolutePath);
-    const language = detectLanguage(absolutePath);
-    const existing = existingByPath.get(absolutePath);
-    const shouldParseSymbols = !existing || existing.size !== stat.size || existing.mtimeMs !== stat.mtimeMs;
-    if (!shouldParseSymbols) {
-      skippedFiles += 1;
-    }
-    reporter.update({ scope, phase: "parse", status: "progress", current: processed, total, file: relativePath, module: detectModule(relativePath) });
-    const source = shouldParseSymbols && (language === "php" || language === "javascript" || language === "typescript") ? await fs.readFile(absolutePath, "utf8") : "";
-    let symbols: SymbolRecord[] = [];
-    let moduleUsages: ModuleUsageRecord[] = [];
-    let ormEntities: OrmEntityRecord[] = [];
-    let ormUsages: OrmUsageRecord[] = [];
-    let iblockUsages: IblockUsageRecord[] = [];
-    let hlblockUsages: HlblockUsageRecord[] = [];
-    let optionUsages: OptionUsageRecord[] = [];
-    if (shouldParseSymbols && language === "php") {
-      const result = parsePhpSymbolsWithDiagnostics(source, absolutePath);
-      symbols = result.symbols;
-      moduleUsages = result.moduleUsages;
-      ormEntities = result.ormEntities;
-      ormUsages = result.ormUsages;
-      iblockUsages = result.iblockUsages;
-      hlblockUsages = result.hlblockUsages;
-      optionUsages = result.optionUsages;
-      warnings.push(...result.warnings);
-      if (debugParse) {
-        for (const warning of result.warnings) {
-          console.warn(`[bitrix-mcp] PHP parse fallback: ${warning.file}: ${warning.message}`);
-        }
+  const flush = () => {
+    writer.writeFiles(batch);
+    batch = [];
+  };
+
+  try {
+    reporter.start({ scope, phase: "parse", status: "start", message: "Parse files", total, startedAt: Date.now() });
+    let processed = 0;
+    for (const scanRelativePath of queued) {
+      processed += 1;
+      const absolutePath = path.join(root, scanRelativePath);
+      const relativePath = baseRoot === root ? scanRelativePath : path.relative(baseRoot, absolutePath).replace(/\\/gu, "/");
+      reporter.update({ scope, phase: "parse", status: "progress", current: processed, total, file: relativePath, module: detectModule(relativePath) });
+
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(absolutePath);
+      } catch (error) {
+        // Removed between discovery and parsing: leave it out; the next run prunes it.
+        warnings.push({ type: "file_error", file: absolutePath, message: `Skipped: ${(error as Error).message}` });
+        continue;
       }
-    } else if (shouldParseSymbols && (language === "javascript" || language === "typescript")) {
-      symbols = parseJsSymbols(source, absolutePath);
+      const language = detectLanguage(absolutePath);
+      const unchanged = writer.isUnchanged(absolutePath, stat.size, stat.mtimeMs);
+      const indexFile: IndexFile = { path: absolutePath, relativePath, kind: options.kind, size: stat.size, mtimeMs: stat.mtimeMs, language, symbols: [] };
+      if (unchanged) {
+        skippedFiles += 1;
+        files.push(indexFile);
+        continue;
+      }
+
+      try {
+        const parsed = await parseFile(absolutePath, language);
+        warnings.push(...parsed.warnings);
+        if (debugParse) {
+          for (const warning of parsed.warnings) {
+            console.warn(`[bitrix-mcp] PHP parse fallback: ${warning.file}: ${warning.message}`);
+          }
+        }
+        const withContext = <T extends object>(records: T[]) => records.map((record) => ({ ...record, kind: options.kind, relativeFile: relativePath }));
+        indexFile.symbols = parsed.symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? language }));
+        indexFile.moduleUsages = withContext(parsed.moduleUsages);
+        indexFile.ormEntities = withContext(parsed.ormEntities);
+        indexFile.ormUsages = withContext(parsed.ormUsages);
+        indexFile.iblockUsages = withContext(parsed.iblockUsages);
+        indexFile.hlblockUsages = withContext(parsed.hlblockUsages);
+        indexFile.optionUsages = withContext(parsed.optionUsages);
+        symbolCount += parsed.symbols.length;
+        relationCount += parsed.moduleUsages.length + parsed.ormUsages.length + parsed.iblockUsages.length + parsed.hlblockUsages.length + parsed.optionUsages.length + parsed.ormEntities.length;
+      } catch (error) {
+        // One unreadable or unparsable file must not abort the whole run: index it without symbols.
+        warnings.push({ type: "file_error", file: absolutePath, message: `Parse failed: ${(error as Error).message}` });
+      }
+
+      batch.push(indexFile);
+      files.push(retainSymbols ? indexFile : { ...indexFile, symbols: [], moduleUsages: undefined, ormEntities: undefined, ormUsages: undefined, iblockUsages: undefined, hlblockUsages: undefined, optionUsages: undefined });
+      if (batch.length >= WRITE_BATCH_SIZE) flush();
     }
-    files.push({
-      path: absolutePath,
-      relativePath,
-      kind: options.kind,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      language,
-      symbols: symbols.map((symbol) => ({ ...symbol, language: symbol.language ?? language })),
-      moduleUsages: moduleUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
-      ormEntities: ormEntities.map((entity) => ({ ...entity, kind: options.kind, relativeFile: relativePath })),
-      ormUsages: ormUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
-      iblockUsages: iblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
-      hlblockUsages: hlblockUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath })),
-      optionUsages: optionUsages.map((usage) => ({ ...usage, kind: options.kind, relativeFile: relativePath }))
-    });
-    symbolCount += symbols.length;
-    relationCount += moduleUsages.length + ormUsages.length + iblockUsages.length + hlblockUsages.length + optionUsages.length + ormEntities.length;
+    reporter.done({ scope, phase: "parse", status: "done", symbols: symbolCount, relations: relationCount });
+
+    reporter.start({ scope, phase: "write", status: "start", message: "Write index" });
+    flush();
+    writer.finish({ files: files.length, warnings });
+    reporter.done({ scope, phase: "write", status: "done" });
+  } finally {
+    writer.close();
   }
-  reporter.done({ scope, phase: "parse", status: "done", symbols: symbolCount, relations: relationCount });
 
   const manifest: IndexManifest = {
     version: 1,
-    generatedAt: new Date().toISOString(),
-    root,
+    generatedAt,
+    root: baseRoot,
     kind: options.kind,
     files,
     warnings
   };
 
-  reporter.start({ scope, phase: "write", status: "start", message: "Write index" });
-  await writeIndexToSqlite(dbFile, manifest, { force: options.force });
-  reporter.done({ scope, phase: "write", status: "done" });
-  if (options.kind === "project") {
+  if (options.kind === "project" && baseRoot === root) {
     await indexAutoloadMetadata(root, dbFile);
   }
   reporter.done({
@@ -276,11 +316,33 @@ export async function buildIndex(options: IndexOptions): Promise<IndexManifest> 
     symbols: symbolCount,
     relations: relationCount
   });
-  // Return the in-memory manifest built during this run. Callers only need
-  // file counts / freshly parsed symbols, so we avoid re-reading the entire
-  // index back from SQLite (a per-file query fan-out that cost minutes on
-  // large scopes). Unchanged files stay fully indexed in SQLite either way.
+  // Return the in-memory manifest built during this run (without re-reading the
+  // index from SQLite). Unchanged files carry no symbols; they stay fully indexed
+  // in SQLite either way.
   return manifest;
+}
+
+interface ParsedFile {
+  symbols: SymbolRecord[];
+  moduleUsages: ModuleUsageRecord[];
+  ormEntities: OrmEntityRecord[];
+  ormUsages: OrmUsageRecord[];
+  iblockUsages: IblockUsageRecord[];
+  hlblockUsages: HlblockUsageRecord[];
+  optionUsages: OptionUsageRecord[];
+  warnings: IndexWarning[];
+}
+
+async function parseFile(absolutePath: string, language: string): Promise<ParsedFile> {
+  const empty: ParsedFile = { symbols: [], moduleUsages: [], ormEntities: [], ormUsages: [], iblockUsages: [], hlblockUsages: [], optionUsages: [], warnings: [] };
+  if (language === "php") {
+    const result = parsePhpSymbolsWithDiagnostics(await fs.readFile(absolutePath, "utf8"), absolutePath);
+    return { ...empty, ...result, warnings: result.warnings };
+  }
+  if (language === "javascript" || language === "typescript") {
+    return { ...empty, symbols: parseJsSymbols(await fs.readFile(absolutePath, "utf8"), absolutePath) };
+  }
+  return empty;
 }
 
 export async function readIndex(indexFile: string, kind?: IndexKind): Promise<IndexManifest | undefined> {

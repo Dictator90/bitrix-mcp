@@ -31,8 +31,10 @@ async function runCliIndexTemplate(args: string[] = []): Promise<IndexManifest> 
 test("cli index-template indexes a relative templatePath from workspace root", async () => {
   const manifest = await runCliIndexTemplate(["local/templates/my_template"]);
 
-  assert.equal(manifest.root, path.join(fixtureRoot, "local/templates/my_template"));
-  assert.ok(manifest.files.every((file) => !file.relativePath.startsWith("local/templates")));
+  // A single template directory keeps workspace-relative paths, like a full template run.
+  assert.equal(manifest.root, fixtureRoot);
+  assert.ok(manifest.files.length > 0);
+  assert.ok(manifest.files.every((file) => file.relativePath.startsWith("local/templates/my_template/")));
   assert.ok(manifest.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 

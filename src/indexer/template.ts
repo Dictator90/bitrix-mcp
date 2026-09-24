@@ -1,6 +1,6 @@
 import path from "node:path";
 import { indexPath, type RuntimePaths } from "../config/paths.js";
-import { DEFAULT_INDEX_PATTERNS, type IndexOptions } from "./indexer.js";
+import { DEFAULT_INDEX_PATTERNS, relativeBaseFor, type IndexOptions } from "./indexer.js";
 
 export interface TemplateIndexTarget {
   root: string;
@@ -22,6 +22,8 @@ export function resolveTemplateIndexOptions(paths: RuntimePaths, templatePath?: 
   const target = resolveTemplateIndexTarget(paths.workspaceRoot, templatePath);
   return {
     root: target.root,
+    // A single template directory keeps workspace-relative paths, like a full template run.
+    relativeTo: templatePath ? relativeBaseFor(paths.workspaceRoot, target.root) : undefined,
     kind: "template",
     outFile: indexPath(paths.dataDir, "template"),
     patterns: target.patterns

@@ -5,6 +5,7 @@ import { indexPath, resolveBitrixProjectRoot, resolveRuntimePaths, sqlitePath, t
 import { detectChanges } from "../indexer/detectChanges.js";
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph } from "../indexer/graph.js";
 import { buildIndex } from "../indexer/indexer.js";
+import { resolveBitrixIndex } from "../indexer/bitrixModules.js";
 import { formatIndexAllResult, indexAll, readIndexStatus } from "../indexer/actions.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchBitrixRelations } from "../indexer/sqliteStore.js";
@@ -145,12 +146,12 @@ export async function runBenchmark(options: BenchmarkOptions = {}): Promise<Benc
   }));
 
   steps.push(await timeStep("index-project", async () => {
-    const manifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force });
+    const manifest = await buildIndex({ root: paths.workspaceRoot, kind: "project", outFile: indexPath(paths.dataDir, "project"), force, retainSymbols: false });
     return { files: manifest.files.length };
   }));
 
   steps.push(await timeStep("index-template", async () => {
-    const manifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force });
+    const manifest = await buildIndex({ ...resolveTemplateIndexOptions(paths), force, retainSymbols: false });
     return { files: manifest.files.length };
   }));
 
@@ -160,7 +161,9 @@ export async function runBenchmark(options: BenchmarkOptions = {}): Promise<Benc
   } else {
     steps.push(await timeStep("index-bitrix", async () => {
       const projectRoot = resolveBitrixProjectRoot(paths.bitrixRoot as string);
-      const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: ["bitrix/modules/**/*.php", "local/modules/**/*.php"], force });
+      // Same selection as index-bitrix/index-all, so this step never prunes files the real index holds.
+      const bitrix = resolveBitrixIndex({ modules: "all" });
+      const manifest = await buildIndex({ root: projectRoot, kind: "bitrix", outFile: indexPath(paths.dataDir, "bitrix"), patterns: bitrix.patterns, ignores: bitrix.ignores, force, retainSymbols: false });
       return { files: manifest.files.length };
     }));
   }

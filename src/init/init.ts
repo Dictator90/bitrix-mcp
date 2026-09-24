@@ -1134,7 +1134,7 @@ export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "tem
     output.write(`Index ${kind} already exists: ${dbFile}\n`);
     return;
   }
-  const manifest = await buildIndex({ root, kind, dbFile, patterns, reporter });
+  const manifest = await buildIndex({ root, kind, dbFile, patterns, reporter, retainSymbols: false });
   output.write(`Indexed ${manifest.files.length} ${kind} files into ${dbFile}\n`);
 }
 

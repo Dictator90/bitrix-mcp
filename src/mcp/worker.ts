@@ -2,8 +2,8 @@ import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
 import { formatIndexAllResult, indexAll } from "../indexer/actions.js";
-import { buildIndex } from "../indexer/indexer.js";
-import { getComponentContext, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchDocSymbolRefs, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
+import { buildIndex, relativeBaseFor } from "../indexer/indexer.js";
+import { getComponentContext, searchCallSites, getOrmEntityMap, getProjectOverview, searchAgents, searchAutoloadRecords, searchBitrixRelations, searchDocSymbolRefs, searchComponents, searchHlblockUsages, searchIblockUsages, searchMailEvents, searchModuleUsages, searchOptionUsages, searchOrmEntities, searchOrmUsages, type AgentSearchQuery, type AutoloadSearchQuery, type BitrixRelationSearchQuery, type ProjectOverviewOptions, type ComponentContextQuery, type ComponentSearchQuery, type HlblockUsageSearchQuery, type IblockUsageSearchQuery, type MailEventSearchQuery, type ModuleUsageSearchQuery, type OptionSearchQuery, type OrmEntityMapQuery, type OrmSearchQuery, type OrmUsageSearchQuery } from "../indexer/sqliteStore.js";
 import { resolveTemplateIndexOptions } from "../indexer/template.js";
 import { searchLiveApi, searchSqliteDocs, searchSqliteEvents, type LiveApiEventQuery, type LiveApiQuery } from "../liveapi/search.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
@@ -50,12 +50,13 @@ type WorkerTask =
 export async function runTask(task: WorkerTask): Promise<unknown> {
   switch (task.name) {
     case "indexProject": {
-      const manifest = await buildIndex({ root: task.root ?? task.paths.workspaceRoot, kind: "project", outFile: indexPath(task.paths.dataDir, "project") });
+      const root = task.root ?? task.paths.workspaceRoot;
+      const manifest = await buildIndex({ root, relativeTo: relativeBaseFor(task.paths.workspaceRoot, root), kind: "project", outFile: indexPath(task.paths.dataDir, "project"), retainSymbols: false });
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} project files.` }] };
     }
     case "indexTemplate": {
       const options = resolveTemplateIndexOptions(task.paths, task.templatePath ?? task.root);
-      const manifest = await buildIndex(options);
+      const manifest = await buildIndex({ ...options, retainSymbols: false });
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
     }
     case "indexAll": {
@@ -104,9 +105,13 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
           : formatDocSearchResults(await searchSqliteDocs(dbFile, { query: task.query.query, limit }) ?? [], { query: task.query.query, format }) ?? [];
       }
       const localKinds = task.query.kind ?? ["project", "template", "install"];
-      const localUsages = includeLocalUsages
-        ? formatLiveApiSearchResults(await searchLiveApi(dbFile, { query: task.query.query, kind: localKinds, preferLocal: true, limit }) ?? [], { query: task.query.query, format }) ?? []
-        : [];
+      let localUsages: unknown[] = [];
+      if (includeLocalUsages) {
+        // Call sites of the API first (where local code uses it), then matching local symbols.
+        const callSites = await searchCallSites(dbFile, { query: task.query.query, kind: localKinds, limit });
+        const symbols = await searchLiveApi(dbFile, { query: task.query.query, kind: localKinds, preferLocal: true, limit }) ?? [];
+        localUsages = formatLiveApiSearchResults([...callSites, ...symbols].slice(0, limit), { query: task.query.query, format }) ?? [];
+      }
       const coreDefinitions = includeCoreDefinition
         ? formatLiveApiSearchResults(await searchLiveApi(dbFile, { query: task.query.query, kind: "bitrix", preferLocal: false, limit }) ?? [], { query: task.query.query, format }) ?? []
         : [];

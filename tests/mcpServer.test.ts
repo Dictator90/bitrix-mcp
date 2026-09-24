@@ -225,7 +225,8 @@ test("MCP bitrix_index_template accepts templatePath", async () => {
   const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
 
   assert.deepEqual(result, { content: [{ type: "text", text: "Indexed 1 template files." }] });
-  assert.equal(manifest?.root, path.join(fixtureRoot, "local/templates/my_template"));
+  assert.equal(manifest?.root, fixtureRoot);
+  assert.ok(manifest?.files.every((file) => file.relativePath.startsWith("local/templates/my_template/")));
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 
@@ -250,7 +251,8 @@ test("MCP bitrix_index_template keeps root as deprecated templatePath alias", as
   await assert.rejects(fs.readFile(path.join(dataDir, "template-index.json"), "utf8"));
   const manifest = await readIndexFromSqlite(sqlitePath(dataDir), "template");
 
-  assert.equal(manifest?.root, path.join(fixtureRoot, "local/templates/my_template"));
+  assert.equal(manifest?.root, fixtureRoot);
+  assert.ok(manifest?.files.every((file) => file.relativePath.startsWith("local/templates/my_template/")));
   assert.ok(manifest?.files.some((file) => file.symbols.some((symbol) => symbol.name === "my_template_helper")));
 });
 

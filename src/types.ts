@@ -212,7 +212,7 @@ export interface BitrixRelationRecord {
 }
 
 export interface IndexWarning {
-  type: "php_parse_fallback";
+  type: "php_parse_fallback" | "file_error";
   file: string;
   message: string;
 }
