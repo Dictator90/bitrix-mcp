@@ -12,8 +12,9 @@ import { readBitrixConnections, redactConnection, resolveConnection, withReadOnl
 import { runQuery, getSchema } from "../db/mysqlClient.js";
 import { heavyToolTimeoutMs } from "./toolGuards.js";
 import { runTinker } from "../php/tinker.js";
+import type { ProgressReporter } from "../progress/types.js";
 
-type WorkerTask =
+export type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
   | { name: "indexTemplate"; paths: RuntimePaths; templatePath?: string; root?: string }
   | { name: "indexAll"; paths: RuntimePaths; includeInstall?: boolean }
@@ -47,23 +48,32 @@ type WorkerTask =
   | { name: "dbExecute"; paths: RuntimePaths; query: { sql: string; connection?: string } }
   | { name: "tinker"; paths: RuntimePaths; query: { code: string; timeoutMs?: number } };
 
-export async function runTask(task: WorkerTask): Promise<unknown> {
+export type WorkerTaskName = WorkerTask["name"];
+
+export interface WorkerTaskContext {
+  reporter?: ProgressReporter;
+}
+
+export async function runTask(task: WorkerTask, context: WorkerTaskContext = {}): Promise<unknown> {
+  const { reporter } = context;
   switch (task.name) {
     case "indexProject": {
-      const manifest = await buildIndex({ root: task.root ?? task.paths.workspaceRoot, kind: "project", outFile: indexPath(task.paths.dataDir, "project") });
+      const manifest = await buildIndex({ root: task.root ?? task.paths.workspaceRoot, kind: "project", outFile: indexPath(task.paths.dataDir, "project"), reporter });
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} project files.` }] };
     }
     case "indexTemplate": {
       const options = resolveTemplateIndexOptions(task.paths, task.templatePath ?? task.root);
-      const manifest = await buildIndex(options);
+      const manifest = await buildIndex({ ...options, reporter });
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
     }
     case "indexAll": {
-      const result = await indexAll(task.paths, { includeInstall: task.includeInstall });
+      const result = await indexAll(task.paths, { includeInstall: task.includeInstall, reporter });
       return { content: [{ type: "text", text: formatIndexAllResult(result) }] };
     }
     case "indexDocs": {
+      reporter?.start({ scope: "docs", phase: "docs", status: "start", message: "Index documentation" });
       const chunks = await indexDocResourcesToSqlite(task.paths.dataDir, task.paths.docsPaths, { includeOfficialDocs: task.paths.officialDocsEnabled ?? false });
+      reporter?.done({ scope: "docs", phase: "done", status: "done", docsChunks: chunks });
       return { content: [{ type: "text", text: `Indexed ${chunks} documentation chunks.` }] };
     }
     case "searchLiveApi": {
