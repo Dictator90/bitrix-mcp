@@ -56,6 +56,11 @@ const OPTIONS: Record<string, OptionDef> = {
   "no-hooks": { type: "boolean", description: "Do not write agent context-injection hooks" },
   "dry-run": { type: "boolean", description: "Print what would change without changing anything" },
 
+  // watch / clean
+  docs: { type: "boolean", description: "Also watch documentation directories and re-index docs" },
+  debounce: { type: "string", value: "ms", description: "Quiet period before re-indexing a batch of changes (default 500)" },
+  all: { type: "boolean", description: "Also remove the docs-sources/ documentation checkouts" },
+
   // detect-changes / graph
   base: { type: "string", value: "ref", description: "Git base ref to diff against" },
   kind: { type: "string", value: "kinds", description: "Only these file kinds (comma-separated)" },
@@ -78,7 +83,7 @@ const OPTIONS: Record<string, OptionDef> = {
 const PROGRESS = ["progress", "no-progress", "compact", "json-progress"];
 const LANG = ["include-lang", "exclude-lang"];
 const BITRIX = ["modules", "bitrix-modules", "full", ...LANG, "install", "no-bitrix"];
-const INIT = ["agent", "all-agents", "yes", "no-index", "no-docs", "no-official-docs", "serve", "no-serve", "no-db", "db-allow-write", "tinker", "php-bin", "no-hooks"];
+const INIT = ["agent", "all-agents", "yes", "no-index", "no-docs", "no-official-docs", "serve", "no-serve", "no-db", "db-allow-write", "tinker", "php-bin", "no-hooks", "dry-run"];
 
 interface CommandSpec {
   synopsis: string;
@@ -94,6 +99,8 @@ export const COMMANDS: Record<string, CommandSpec> = {
   uninstall: { synopsis: "uninstall [--agent <id>] [--all-agents] [--dry-run]", summary: "Remove the MCP config entries, hooks, guidance sections, and skills written by init/configure.", options: ["agent", "all-agents", "dry-run"], maxPositionals: 0 },
   config: { synopsis: "config [--json]", summary: "Show resolved runtime paths and MCP client config file presence.", options: ["json"], maxPositionals: 0 },
   serve: { synopsis: "serve", summary: "Start the MCP server over stdio.", options: [], maxPositionals: 0 },
+  watch: { synopsis: "watch [options]", summary: "Watch the workspace (and Bitrix root) and incrementally re-index changed files until Ctrl+C.", options: [...BITRIX, "docs", "debounce", "json"], maxPositionals: 0 },
+  clean: { synopsis: "clean [--dry-run] [--yes] [--all]", summary: "Remove index data from the data directory (SQLite index, legacy JSON indexes, benchmark reports).", options: ["dry-run", "yes", "all"], maxPositionals: 0 },
   "index-all": { synopsis: "index-all [options]", summary: "Index project, templates, Bitrix modules, and docs.", options: ["force", ...BITRIX, ...PROGRESS], maxPositionals: 0 },
   "index-code": { synopsis: "index-code [options]", summary: "Index project, templates, and Bitrix modules.", options: ["force", ...BITRIX, ...PROGRESS], maxPositionals: 0 },
   "index-project": { synopsis: "index-project [root] [options]", summary: "Index project files.", options: ["force", ...LANG, ...PROGRESS], maxPositionals: 1 },

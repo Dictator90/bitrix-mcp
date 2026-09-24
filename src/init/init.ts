@@ -9,19 +9,22 @@ import { resolveHomeDir } from "../config/home.js";
 import { sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { buildIndex, DEFAULT_BITRIX_PATTERNS } from "../indexer/indexer.js";
 import { hasIndexMetadata } from "../indexer/sqliteStore.js";
-import { serveStdio } from "../mcp/server.js";
 import { indexDocResourcesToSqlite } from "../resources/docs.js";
 import { createProgressReporter, detectCi, type ProgressReporter } from "../progress/index.js";
+import { unifiedDiff } from "./diff.js";
 import {
   getJsonValue,
+  isDryRun,
   isPlainObject,
   loadJsonConfig,
   readTextFileIfExists,
   replaceTomlTable,
   saveJsonConfig,
   setJsonValue,
+  withDryRun,
   writeTextIfChanged,
   type JsonConfigDocument,
+  type PlannedWrite,
   type WriteOutcome
 } from "./configFiles.js";
 
@@ -961,6 +964,8 @@ export interface InitOptions {
   phpBin?: string;
   /** Write agent context-injection hooks (default true; `--no-hooks` sets false). */
   hooks?: boolean;
+  /** Print the files that would be created/updated (with diffs) without writing, indexing, or serving. */
+  dryRun?: boolean;
 }
 
 export interface InitDependencies {
@@ -989,7 +994,9 @@ export async function createInitContext(projectRoot = process.cwd()): Promise<In
     process.env.BITRIX_ROOT = bitrixRoot;
   }
 
-  await fs.mkdir(dataDir, { recursive: true });
+  if (!isDryRun()) {
+    await fs.mkdir(dataDir, { recursive: true });
+  }
   return { projectRoot, dataDir, docsDir, bitrixRoot, embeddingsUrl, semanticEnabled, dbEnabled, dbAllowWrite, tinkerEnabled, phpBin, homeDir: resolveHomeDir() };
 }
 
@@ -1086,18 +1093,24 @@ export async function writeGuidance(agents: Agent[], context: InitContext, optio
   return guidanceResults;
 }
 
+function outcomeVerb(outcome: WriteOutcome | undefined, dryRun: boolean): string {
+  if (outcome === "unchanged") return "already up to date";
+  if (dryRun) return outcome === "created" ? "would be created" : "would be updated";
+  return outcome === "created" ? "created" : "updated";
+}
+
 function printConfigureResults(configResults: WrittenConfig[], guidanceResults: AgentGuidanceResult[]): void {
+  const dryRun = isDryRun();
   for (const configResult of configResults) {
     if (configResult.path) {
-      const verb = configResult.outcome === "unchanged" ? "already up to date" : configResult.outcome === "created" ? "created" : "updated";
-      output.write(`${configResult.label} MCP config ${verb}: ${configResult.path}\n`);
+      output.write(`${configResult.label} MCP config ${outcomeVerb(configResult.outcome, dryRun)}: ${configResult.path}\n`);
     }
     if (configResult.note) {
       output.write(`${configResult.label}:\n${configResult.note}\n`);
     }
   }
 
-  output.write("Bitrix MCP guidance installed:\n");
+  output.write(dryRun ? "Bitrix MCP guidance (dry run):\n" : "Bitrix MCP guidance installed:\n");
   const uniqueGuidance = new Map<string, string>();
   const warnings: string[] = [];
   for (const result of guidanceResults) {
@@ -1106,7 +1119,7 @@ function printConfigureResults(configResults: WrittenConfig[], guidanceResults: 
       continue;
     }
     // Preserve the most descriptive label if paths collide (e.g. agent guidance over canonical)
-    uniqueGuidance.set(result.path, result.label);
+    uniqueGuidance.set(result.path, dryRun ? `${result.label} (${outcomeVerb(result.outcome, true)})` : result.label);
   }
   for (const [filePath, label] of uniqueGuidance.entries()) {
     output.write(`- ${label}: ${filePath}\n`);
@@ -1116,7 +1129,44 @@ function printConfigureResults(configResults: WrittenConfig[], guidanceResults: 
   }
 }
 
+function displayPath(filePath: string, projectRoot: string): string {
+  const relative = path.relative(projectRoot, filePath);
+  return (relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath).replace(/\\/gu, "/");
+}
+
+/** Diff lines printed per file by --dry-run (new guidance files are long). */
+const DRY_RUN_DIFF_MAX_LINES = 80;
+
+/** Summary of planned writes plus a unified diff for each file that would change. */
+export function formatDryRunPlan(writes: PlannedWrite[], projectRoot: string): string {
+  if (writes.length === 0) {
+    return "Dry run: nothing would be written.";
+  }
+  const labels: Record<WriteOutcome, string> = { created: "create   ", updated: "update   ", unchanged: "unchanged" };
+  const lines = ["", "Dry run: no files were written. Planned changes:"];
+  for (const write of writes) {
+    lines.push(`  ${labels[write.outcome]} ${displayPath(write.filePath, projectRoot)}`);
+  }
+  for (const write of writes.filter((entry) => entry.outcome !== "unchanged")) {
+    const diff = unifiedDiff(displayPath(write.filePath, projectRoot), write.previous, write.next).split("\n");
+    lines.push("", ...diff.slice(0, DRY_RUN_DIFF_MAX_LINES));
+    if (diff.length > DRY_RUN_DIFF_MAX_LINES) {
+      lines.push(`... ${diff.length - DRY_RUN_DIFF_MAX_LINES} more diff lines`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 export async function configureAgents(options: InitOptions = {}): Promise<void> {
+  if (options.dryRun) {
+    const { result: context, writes } = await withDryRun(() => configureOnly(options));
+    output.write(formatDryRunPlan(writes, context.projectRoot));
+    return;
+  }
+  await configureOnly(options);
+}
+
+async function configureOnly(options: InitOptions): Promise<InitContext> {
   const context = await createInitContext();
   const { agents, rl } = await resolveAgents(options);
   try {
@@ -1126,6 +1176,7 @@ export async function configureAgents(options: InitOptions = {}): Promise<void> 
   } finally {
     rl?.close();
   }
+  return context;
 }
 
 export async function indexIfMissing(paths: RuntimePaths, kind: "project" | "template" | "bitrix", root: string, patterns?: string[], reporter?: ProgressReporter): Promise<void> {
@@ -1159,13 +1210,38 @@ export async function serve(paths: RuntimePaths, deps: InitDependencies = {}): P
     "\nStarting the bitrix-mcp MCP server over stdio. It will keep running and wait for your MCP client to connect —\n" +
     "this is expected, the process is not frozen. Press Ctrl+C to stop. (Re-run `bitrix-mcp init --no-serve` to skip this step.)\n"
   );
-  await (deps.serveStdio ?? serveStdio)(paths);
+  await (deps.serveStdio ?? (await import("../mcp/server.js")).serveStdio)(paths);
 }
 
 export async function initAndServe(options: InitOptions = {}, deps: InitDependencies = {}): Promise<void> {
-  const context = await createInitContext();
+  if (options.dryRun) {
+    const { result: context, writes } = await withDryRun(() => configureInitContext(options));
+    output.write(formatDryRunPlan(writes, context.projectRoot));
+    const paths = runtimePathsFromContext(context, options.officialDocs ?? true);
+    if (options.index ?? true) {
+      output.write(`Would index code (project, templates${paths.bitrixRoot ? ", Bitrix core" : ""}) into ${sqlitePath(paths.dataDir)} when those indexes are missing.\n`);
+    }
+    if (options.docs ?? true) {
+      output.write(`Would index documentation from ${paths.docsDir}${includeOfficialDocsNote(options)} into ${sqlitePath(paths.dataDir)}.\n`);
+    }
+    if (defaultShouldServe(options)) {
+      output.write("Would start the stdio MCP server (--serve).\n");
+    }
+    return;
+  }
+  const context = await configureInitContext(options);
   const includeOfficialDocs = options.officialDocs ?? true;
+  const paths = runtimePathsFromContext(context, includeOfficialDocs);
+  await runInit(options, deps, paths);
+}
 
+function includeOfficialDocsNote(options: InitOptions): string {
+  return options.officialDocs === false ? "" : " and the official Bitrix docs";
+}
+
+/** The config-writing half of init: agents, DB/tinker access, MCP configs, and guidance. */
+async function configureInitContext(options: InitOptions): Promise<InitContext> {
+  const context = await createInitContext();
   const { agents, rl } = await resolveAgents(options);
   try {
     const dbAccess = await resolveDbAccess(options, rl);
@@ -1187,9 +1263,10 @@ export async function initAndServe(options: InitOptions = {}, deps: InitDependen
   } finally {
     rl?.close();
   }
+  return context;
+}
 
-  const paths = runtimePathsFromContext(context, includeOfficialDocs);
-
+async function runInit(options: InitOptions, deps: InitDependencies, paths: RuntimePaths): Promise<void> {
   if (options.index ?? true) {
     const reporter = createProgressReporter({ stderr: process.stderr, isTty: Boolean(process.stderr.isTTY), isCi: detectCi() });
     await indexCode(paths, reporter);

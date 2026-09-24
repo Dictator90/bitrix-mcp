@@ -79,6 +79,9 @@ bitrix-mcp index-code     # reindex code only (no docs)
 bitrix-mcp serve          # start the MCP server (your client normally does this)
 bitrix-mcp status         # index counters and DB path
 bitrix-mcp doctor         # health check and resolved paths
+bitrix-mcp watch          # keep the index current while you edit (Ctrl+C to stop)
+bitrix-mcp clean --dry-run   # show which index files `clean` would delete
+bitrix-mcp configure --agent cursor --dry-run   # preview config changes (diff) without writing
 ```
 
 Index only specific Bitrix core modules for a much faster run:

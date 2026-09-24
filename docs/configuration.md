@@ -97,6 +97,12 @@ Claude Desktop reads the project `.mcp.json`, so use `claude-code` for it.
 - `--no-official-docs` — index only local/registered docs (don't clone the official repo).
 - `--serve` — start the stdio server after init (default: don't).
 - `--no-serve` — explicit no-op for the default behavior.
+- `--dry-run` — print which files would be created, updated, or left unchanged, with a unified diff of each change, and exit. Nothing is written (not even `.bitrix-mcp/`), nothing is indexed, and the server is not started; `init --dry-run` also says which indexing steps it would run. Diffs longer than 80 lines are truncated. Interactive prompts still run unless you pass `--agent`, `--all-agents`, or `--yes`.
+
+```bash
+bitrix-mcp configure --agent claude-code,codex --dry-run
+bitrix-mcp init --yes --dry-run
+```
 
 Use `bitrix-mcp configure` with the same agent flags when you only want config + guidance files (never indexes, never serves).
 
