@@ -334,6 +334,8 @@ function migrateSchema(db: DatabaseSync): void {
       CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS idx_symbols_class_name_nocase ON symbols(class_name COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS idx_events_name_nocase ON events(name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_source_nocase ON bitrix_relations(source_type, source_name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_bitrix_relations_target_nocase ON bitrix_relations(target_type, target_name COLLATE NOCASE);
 
       CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_symbol ON doc_symbol_refs(symbol);
       CREATE INDEX IF NOT EXISTS idx_doc_symbol_refs_doc_uri ON doc_symbol_refs(doc_uri);
