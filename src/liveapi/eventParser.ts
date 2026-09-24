@@ -1,8 +1,5 @@
 import type { EventRecord } from "../types.js";
-
-function lineOf(source: string, index: number): number {
-  return source.slice(0, index).split(/\r?\n/).length;
-}
+import { lineOf } from "./bitrixApis.js";
 
 function unquote(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -98,12 +95,25 @@ function parseClassConstant(value: string): string | undefined {
   return match?.[1].replace(/\\\\/g, "\\");
 }
 
-function callbackPart(value: string | undefined): string | undefined {
-  const stringValue = unquote(value);
-  return stringValue ?? (value ? parseClassConstant(value) : undefined);
+/** Best-effort FQN of the class declared before `index`, used to resolve `self::class`, `static::class`, `__CLASS__` and `$this`. */
+function enclosingClassName(source: string, index: number): string | undefined {
+  const before = source.slice(0, index);
+  const classMatch = [...before.matchAll(/\b(?:class|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)/g)].at(-1);
+  if (!classMatch) return undefined;
+  const namespaceMatch = [...before.matchAll(/^\s*namespace\s+([A-Za-z_][A-Za-z0-9_\\]*)\s*[;{]/gm)].at(-1);
+  return namespaceMatch ? `${namespaceMatch[1]}\\${classMatch[1]}` : classMatch[1];
 }
 
-function callbackHandler(callback: string): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous"> {
+function callbackPart(value: string | undefined, enclosingClass?: string): string | undefined {
+  const stringValue = unquote(value);
+  if (stringValue !== undefined) return stringValue;
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (/^(?:(?:self|static)\s*::\s*class|__CLASS__|\$this)$/i.test(trimmed)) return enclosingClass;
+  return parseClassConstant(trimmed);
+}
+
+function callbackHandler(callback: string, enclosingClass?: string): Pick<EventRecord, "handlerClass" | "handlerMethod" | "handlerFunction" | "anonymous"> {
   const trimmed = callback.trim();
   if (/^(?:static\s+)?function\b/i.test(trimmed) || /^fn\s*\(/i.test(trimmed)) {
     return { handlerFunction: "closure", anonymous: true };
@@ -111,7 +121,7 @@ function callbackHandler(callback: string): Pick<EventRecord, "handlerClass" | "
 
   const arrayMatch = trimmed.match(/^(?:array\s*\(|\[)\s*([\s\S]+?)\s*,\s*(["'][^"']+["'])/i);
   if (arrayMatch) {
-    return { handlerClass: callbackPart(arrayMatch[1]), handlerMethod: unquote(arrayMatch[2]) };
+    return { handlerClass: callbackPart(arrayMatch[1], enclosingClass), handlerMethod: unquote(arrayMatch[2]) };
   }
 
   const stringValue = unquote(callback);
@@ -144,7 +154,7 @@ function buildEvent(source: string, filePath: string, startIndex: number, signat
 
 export function parsePhpEvents(source: string, filePath: string): EventRecord[] {
   const events: EventRecord[] = [];
-  const callRegex = /\b(AddEventHandler|RegisterModuleDependences|addEventHandlerCompatible|addEventHandler|registerEventHandler)\s*\(/gi;
+  const callRegex = /\b(AddEventHandler|RegisterModuleDependences|addEventHandlerCompatible|addEventHandler|registerEventHandlerCompatible|registerEventHandler)\s*\(/gi;
 
   for (const match of source.matchAll(callRegex)) {
     const callName = match[1];
@@ -158,15 +168,17 @@ export function parsePhpEvents(source: string, filePath: string): EventRecord[] 
     const signature = `${callName}(${argsText.trim()})`;
     const lowerCallName = callName.toLowerCase();
 
+    const enclosingClass = /self|static|__CLASS__|\$this/i.test(argsText) ? enclosingClassName(source, startIndex) : undefined;
+
     if (lowerCallName === "addeventhandler" || lowerCallName === "addeventhandlercompatible") {
-      const event = buildEvent(source, filePath, startIndex, signature, unquote(args[0]), unquote(args[1]), callbackHandler(args[2] ?? ""));
+      const event = buildEvent(source, filePath, startIndex, signature, unquote(args[0]), unquote(args[1]), callbackHandler(args[2] ?? "", enclosingClass));
       if (event) events.push(event);
       continue;
     }
 
-    if (lowerCallName === "registermoduledependences" || lowerCallName === "registereventhandler") {
+    if (lowerCallName === "registermoduledependences" || lowerCallName === "registereventhandler" || lowerCallName === "registereventhandlercompatible") {
       const event = buildEvent(source, filePath, startIndex, signature, unquote(args[0]), unquote(args[1]), {
-        handlerClass: callbackPart(args[3]),
+        handlerClass: callbackPart(args[3], enclosingClass),
         handlerMethod: unquote(args[4])
       });
       if (event) events.push(event);

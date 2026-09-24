@@ -20,10 +20,32 @@ function scriptKindFromPath(filePath: string): ts.ScriptKind {
   }
 }
 
+/** Module id from `bitrix|local/modules/<module>/...` or the public copy `bitrix/js/<module>/...`. */
 function moduleFromPath(filePath: string): string | undefined {
   const normalized = filePath.replace(/\\/g, "/");
-  const match = normalized.match(/(?:^|\/)bitrix\/modules\/([^/]+)\/install(?:\/|$)/i) ?? normalized.match(/(?:^|\/)local\/modules\/([^/]+)\/install(?:\/|$)/i);
+  const match = normalized.match(/(?:^|\/)(?:bitrix|local)\/modules\/([^/]+)\//i) ?? normalized.match(/(?:^|\/)bitrix\/js\/([^/]+)\//i);
   return match?.[1];
+}
+
+function heritageNames(sourceFile: ts.SourceFile, node: ts.ClassLikeDeclaration, token: ts.SyntaxKind): string[] {
+  return (node.heritageClauses ?? [])
+    .filter((clause) => clause.token === token)
+    .flatMap((clause) => clause.types.map((type) => nodeText(sourceFile, type.expression)));
+}
+
+/** `BX.namespace('BX.Foo')` → `BX.Foo`. */
+function bxNamespaceCall(node: ts.Expression | undefined): string | undefined {
+  if (!node || !ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+  const callee = node.expression;
+  if (!ts.isIdentifier(callee.expression) || callee.expression.text !== "BX" || callee.name.text !== "namespace") return undefined;
+  const argument = node.arguments[0];
+  return argument && ts.isStringLiteralLike(argument) ? argument.text : undefined;
+}
+
+function isRootedAtThis(expression: ts.Expression): boolean {
+  let current: ts.Expression = expression;
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) current = current.expression;
+  return current.kind === ts.SyntaxKind.ThisKeyword;
 }
 
 function lineOf(sourceFile: ts.SourceFile, node: ts.Node): number {
@@ -108,12 +130,56 @@ export function parseJsSymbols(source: string, filePath: string): SymbolRecord[]
     }));
   }
 
+  const namespaceAliases = new Map<string, string>();
+
+  function classHeritage(node: ts.ClassLikeDeclaration): Pick<SymbolRecord, "extends" | "implements"> {
+    const extendsName = heritageNames(sourceFile, node, ts.SyntaxKind.ExtendsKeyword)[0];
+    const implementsNames = heritageNames(sourceFile, node, ts.SyntaxKind.ImplementsKeyword);
+    return {
+      ...(extendsName ? { extends: extendsName } : {}),
+      ...(implementsNames.length ? { implements: implementsNames } : {})
+    };
+  }
+
+  /** Assignment target text with `BX.namespace()` aliases expanded (`ns.Foo` → `BX.Crm.Foo`). */
+  function assignmentTargetName(left: ts.Expression): string {
+    const text = nodeText(sourceFile, left).replace(/\s+/g, "");
+    const [root, ...rest] = text.split(".");
+    const alias = namespaceAliases.get(root);
+    return alias && rest.length ? [alias, ...rest].join(".") : text;
+  }
+
+  /** Legacy `BX.Foo = function () {}`, `BX.Foo.prototype.bar = function () {}` and `BX.Foo = class {}` declarations. */
+  function addAssignedDeclaration(node: ts.BinaryExpression): void {
+    if (!ts.isPropertyAccessExpression(node.left) || isRootedAtThis(node.left)) return;
+    const right = node.right;
+    if (!isFunctionLikeExpression(right) && !ts.isClassExpression(right)) return;
+    const name = assignmentTargetName(node.left);
+    const prototypeMatch = name.match(/^(.+)\.prototype\.([^.]+)$/);
+    if (prototypeMatch && !ts.isClassExpression(right)) {
+      symbols.push(makeSymbol(sourceFile, filePath, module, language, node, {
+        type: "method",
+        name: prototypeMatch[2],
+        className: prototypeMatch[1],
+        signature: declarationSignature(sourceFile, node)
+      }));
+      return;
+    }
+    symbols.push(makeSymbol(sourceFile, filePath, module, language, node, {
+      type: ts.isClassExpression(right) ? "class" : "function",
+      name,
+      ...(ts.isClassExpression(right) ? classHeritage(right) : {}),
+      signature: declarationSignature(sourceFile, node)
+    }));
+  }
+
   function visit(node: ts.Node): void {
     if (ts.isClassDeclaration(node) && node.name) {
       const className = node.name.text;
       symbols.push(makeSymbol(sourceFile, filePath, module, language, node, {
         type: "class",
         name: className,
+        ...classHeritage(node),
         signature: declarationSignature(sourceFile, node)
       }));
       if (isExported(node)) addExportSymbol(symbols, sourceFile, filePath, module, language, node, className);
@@ -155,6 +221,8 @@ export function parseJsSymbols(source: string, filePath: string): SymbolRecord[]
       for (const declaration of node.declarationList.declarations) {
         const variableName = propertyNameText(sourceFile, declaration.name);
         if (!variableName) continue;
+        const namespaceName = bxNamespaceCall(declaration.initializer);
+        if (namespaceName) namespaceAliases.set(variableName, namespaceName);
         if (declaration.initializer && isFunctionLikeExpression(declaration.initializer)) {
           symbols.push(makeSymbol(sourceFile, filePath, module, language, declaration, {
             type: "function",
@@ -171,7 +239,7 @@ export function parseJsSymbols(source: string, filePath: string): SymbolRecord[]
       let objectName: string | undefined = objectStack.at(-1);
       if (ts.isVariableDeclaration(parent)) objectName = propertyNameText(sourceFile, parent.name);
       if (ts.isPropertyAssignment(parent)) objectName = propertyNameText(sourceFile, parent.name);
-      if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) objectName = nodeText(sourceFile, parent.left);
+      if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) objectName = assignmentTargetName(parent.left);
 
       objectStack.push(objectName ?? "");
       for (const property of node.properties) {
@@ -212,6 +280,8 @@ export function parseJsSymbols(source: string, filePath: string): SymbolRecord[]
         }
       } else if (isModuleExportsAccess(node.left)) {
         addExportSymbol(symbols, sourceFile, filePath, module, language, node, "module.exports", nodeText(sourceFile, node.left));
+      } else {
+        addAssignedDeclaration(node);
       }
     }
 

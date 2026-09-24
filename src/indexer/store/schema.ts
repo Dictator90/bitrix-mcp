@@ -11,7 +11,7 @@ export const SCHEMA_VERSION = 5;
  * changes what is extracted, so unchanged files are re-parsed on the next
  * index run instead of keeping stale symbols until `--force`.
  */
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 const migratedDatabases = new Set<string>();
 

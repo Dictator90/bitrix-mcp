@@ -33,7 +33,7 @@ export interface SymbolParameterRecord {
 }
 
 export interface SymbolRecord {
-  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event";
+  type: "class" | "interface" | "trait" | "function" | "method" | "event" | "component" | "constant" | "static_call" | "method_call" | "export" | "object_method" | "agent" | "mail_event" | "enum" | "event_emit" | "event_unregister";
   kind?: IndexKind;
   language?: string;
   name: string;
@@ -49,6 +49,8 @@ export interface SymbolRecord {
   extends?: string;
   implements?: string[];
   traits?: string[];
+  /** PHP 8 attribute class names (resolved) declared on the symbol; not persisted by the SQLite writer yet. */
+  attributes?: string[];
   parameters?: SymbolParameterRecord[];
   handlerClass?: string;
   handlerMethod?: string;
@@ -218,6 +220,8 @@ export interface IndexWarning {
   type: "php_parse_fallback" | "file_error";
   file: string;
   message: string;
+  /** True when the AST parser recovered a partial tree despite syntax errors (no regex fallback was needed). */
+  recovered?: boolean;
 }
 
 export interface IndexManifest {

@@ -146,7 +146,7 @@ export async function runDoctor(paths: RuntimePaths): Promise<DoctorCheck[]> {
     const fallbackFiles = new Set(warnings.map((warning) => warning.file)).size;
     checks.push(fallbackFiles === 0
       ? { name: "phpParse", status: "ok", message: "No PHP parse fallback/errors recorded." }
-      : { name: "phpParse", status: "warning", message: `${fallbackFiles} PHP file${fallbackFiles === 1 ? "" : "s"} used regex fallback after AST parse errors. Set BITRIX_MCP_DEBUG_PARSE=1 while indexing to print file paths.` });
+      : { name: "phpParse", status: "warning", message: `${fallbackFiles} PHP file${fallbackFiles === 1 ? "" : "s"} had syntax errors (partial AST recovery or regex fallback). Set BITRIX_MCP_DEBUG_PARSE=1 while indexing to print file paths.` });
   } catch (error) {
     checks.push({ name: "sqliteDb", status: "error", message: `SQLite DB check failed for ${dbFile}: ${error instanceof Error ? error.message : String(error)}` });
   }
