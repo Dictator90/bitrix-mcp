@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { sqlitePath, type RuntimePaths } from "./paths.js";
+import { resolveHomeDir } from "./home.js";
 
 export interface RuntimeConfigSummary {
   workspaceRoot: string;
@@ -32,7 +32,7 @@ export interface ConfigDiagnostics {
 }
 
 function homePath(...segments: string[]): string {
-  return path.join(os.homedir(), ...segments);
+  return path.join(resolveHomeDir(), ...segments);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

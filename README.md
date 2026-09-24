@@ -63,7 +63,7 @@ From the root of your Bitrix project:
 npx @mb4it/bitrix-mcp init --agent cursor
 ```
 
-`init` picks the current directory as the project root, configures the selected client(s), writes guidance/rule files, and indexes your project, templates, Bitrix core (if a local `bitrix/` exists), and docs. Run it interactively to choose multiple clients, or pass `--agent <id>` / `--all-agents` / `--yes`.
+`init` picks the current directory as the project root, configures the selected client(s), writes guidance/rule files, and indexes your project, templates, Bitrix core (if a local `bitrix/` exists), and docs. Run it interactively to choose multiple clients, or pass `--agent <id>` / `--all-agents` / `--yes`. `bitrix-mcp uninstall` removes everything `init` wrote (`--dry-run` to preview).
 
 Then open your AI client and ask it to use Bitrix MCP. A good first prompt:
 

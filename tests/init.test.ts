@@ -413,7 +413,7 @@ test("writeAgentGuidance includes authority rule and descriptive labels", async 
   assert.match(rule, /Treat `bitrix-mcp` tool results as the primary source of truth/);
 });
 
-test("writeAgentGuidance writes idempotent Claude Code hooks that load bitrix-mcp tools", async () => {
+test("writeAgentGuidance writes idempotent Claude Code SessionStart hooks that load bitrix-mcp tools", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-claude-hooks-"));
   const settingsPath = path.join(projectRoot, ".claude", "settings.json");
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
@@ -422,7 +422,13 @@ test("writeAgentGuidance writes idempotent Claude Code hooks that load bitrix-mc
     `${JSON.stringify(
       {
         permissions: { allow: ["Read"] },
-        hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo keep-me" }] }] }
+        hooks: {
+          UserPromptSubmit: [
+            { hooks: [{ type: "command", command: "echo keep-me" }] },
+            // Managed per-prompt entry written by older releases: must be removed.
+            { hooks: [{ type: "command", command: "echo '{}' # bitrix-mcp:auto-directive" }] }
+          ]
+        }
       },
       null,
       2
@@ -442,27 +448,52 @@ test("writeAgentGuidance writes idempotent Claude Code hooks that load bitrix-mc
   };
 
   await writeAgentGuidance("claude-code", context);
-  await writeAgentGuidance("claude-code", context);
+  const second = await writeAgentGuidance("claude-code", context);
+  assert.equal(second.find((result) => result.label === "Claude Code hooks")?.outcome, "unchanged");
 
   const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
   const isOurs = (entry: unknown) => JSON.stringify(entry).includes("bitrix-mcp:auto-directive");
 
   // Unrelated settings and the pre-existing user hook are preserved.
   assert.deepEqual(settings.permissions.allow, ["Read"]);
-  assert.ok(settings.hooks.UserPromptSubmit.some((entry: unknown) => JSON.stringify(entry).includes("echo keep-me")), "user hook preserved");
+  assert.deepEqual(settings.hooks.UserPromptSubmit, [{ hooks: [{ type: "command", command: "echo keep-me" }] }]);
 
   // Exactly one managed directive per event, even after two runs (idempotent).
-  assert.equal(settings.hooks.UserPromptSubmit.filter(isOurs).length, 1);
+  assert.equal(settings.hooks.SessionStart.filter(isOurs).length, 1);
   assert.equal(settings.hooks.SubagentStart.filter(isOurs).length, 1);
 
   // The directive tells Claude to load the deferred server tools via ToolSearch.
-  const command = settings.hooks.UserPromptSubmit.find(isOurs).hooks[0].command;
+  const command = settings.hooks.SessionStart.find(isOurs).hooks[0].command;
   assert.match(command, /select:mcp__bitrix-mcp__bitrix_index_status/);
 
-  // The command emits valid hook JSON with a UserPromptSubmit additionalContext.
+  // The command emits valid hook JSON with a SessionStart additionalContext.
   const payload = JSON.parse(command.slice(command.indexOf("'") + 1, command.lastIndexOf("'")));
-  assert.equal(payload.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.equal(payload.hookSpecificOutput.hookEventName, "SessionStart");
   assert.match(payload.hookSpecificOutput.additionalContext, /primary source of truth/);
+});
+
+test("writeAgentGuidance drops the old managed UserPromptSubmit key when nothing else is left", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-claude-hooks-legacy-"));
+  const settingsPath = path.join(projectRoot, ".claude", "settings.json");
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "echo x # bitrix-mcp:auto-directive" }] }] } }), "utf8");
+  const context = {
+    projectRoot,
+    dataDir: path.join(projectRoot, ".bitrix-mcp"),
+    docsDir: path.join(projectRoot, "docs"),
+    embeddingsUrl: "http://127.0.0.1:8765",
+    semanticEnabled: false,
+    dbEnabled: false,
+    dbAllowWrite: false,
+    tinkerEnabled: false,
+    phpBin: "php"
+  };
+
+  await writeAgentGuidance("claude-code", context);
+
+  const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  assert.equal("UserPromptSubmit" in settings.hooks, false);
+  assert.ok(Array.isArray(settings.hooks.SessionStart));
 });
 
 test("writeAgentGuidance writes Gemini CLI BeforeAgent hooks without a ToolSearch step", async () => {
