@@ -10,13 +10,21 @@ import { sqlitePath, type RuntimePaths } from "../src/config/paths.js";
 
 const execFileAsync = promisify(execFile);
 const bitrixCoreRepositoryUrl = "https://github.com/autrobin/bitrix.core.git";
+// Pinned so the test never runs an unreviewed revision of the third-party update.sh.
+const bitrixCoreRepositoryCommit = "6f35f573d111b31fb6cda60051787c5a5a3b30ed";
+// Needs network, git, tar and a Unix shell, and runs a third-party script: opt-in only.
+const integrationEnabled = process.env.BITRIX_MCP_INTEGRATION === "1";
 
 type ToolResponse = { content: Array<{ type: string; text: string }> };
 type ToolRegistry = Record<string, { handler: (args: Record<string, unknown>) => Promise<ToolResponse> }>;
 
 async function cloneBitrixCoreRepository(targetDir: string): Promise<string> {
   const checkoutDir = path.join(targetDir, "bitrix.core");
-  await execFileAsync("git", ["clone", "--depth", "1", "--filter=blob:none", bitrixCoreRepositoryUrl, checkoutDir], { maxBuffer: 1024 * 1024 * 10 });
+  const git = (args: string[]) => execFileAsync("git", args, { cwd: checkoutDir, maxBuffer: 1024 * 1024 * 10 });
+  await fs.mkdir(checkoutDir, { recursive: true });
+  await git(["init", "--quiet"]);
+  await git(["fetch", "--quiet", "--depth", "1", "--filter=blob:none", bitrixCoreRepositoryUrl, bitrixCoreRepositoryCommit]);
+  await git(["checkout", "--quiet", "FETCH_HEAD"]);
   return checkoutDir;
 }
 
@@ -88,7 +96,8 @@ async function installStandardFromRepositoryUpdater(repoDir: string, archivePath
 
   await execFileAsync("sh", ["update.sh"], {
     cwd: standardRoot,
-    env: { ...process.env, BITRIX_MCP_STANDARD_ARCHIVE: archivePath, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}` },
+    // Minimal environment: the third-party script must not see the caller's credentials.
+    env: { HOME: process.env.HOME ?? "", BITRIX_MCP_STANDARD_ARCHIVE: archivePath, PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}` },
     maxBuffer: 1024 * 1024 * 10
   });
 
@@ -108,7 +117,11 @@ function parseJsonTool<T>(response: ToolResponse): T {
   return JSON.parse(response.content[0]?.text ?? "null") as T;
 }
 
-test("MCP tools index and search a standard Bitrix checkout deployed from autrobin/bitrix.core", { skip: process.platform === "win32" ? "update.sh requires a Unix shell; do not require Git Bash for Windows test runs" : false }, async () => {
+test("MCP tools index and search a standard Bitrix checkout deployed from autrobin/bitrix.core", {
+  skip: !integrationEnabled
+    ? "set BITRIX_MCP_INTEGRATION=1 to run (needs network, git, tar and sh)"
+    : process.platform === "win32" ? "update.sh requires a Unix shell; do not require Git Bash for Windows test runs" : false
+}, async () => {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-core-repo-"));
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "bitrix-mcp-core-data-"));
   const repoDir = await cloneBitrixCoreRepository(workDir);
@@ -134,7 +147,7 @@ test("MCP tools index and search a standard Bitrix checkout deployed from autrob
   const server = createMcpServer(paths);
   const tools = (server as unknown as { _registeredTools: ToolRegistry })._registeredTools;
 
-  const allResult = await tools.bitrix_index_all.handler({});
+  const allResult = await tools.bitrix_index_all.handler({ includeInstall: true });
   assert.match(allResult.content[0]?.text ?? "", /Indexed Bitrix module files: 3/);
   assert.match(allResult.content[0]?.text ?? "", /Indexed install asset files: 1/);
   assert.match(allResult.content[0]?.text ?? "", /Indexed documentation chunks: 1/);

@@ -85,7 +85,7 @@ async function runChildProcessTask<T>(toolName: string, workerData: unknown, tim
 }
 
 async function runWorkerThreadTask<T>(toolName: string, workerData: unknown, timeoutMs: number): Promise<T> {
-  const worker = new Worker(new URL("./worker.js", import.meta.url), { workerData });
+  const worker = new Worker(new URL("./workerThread.js", import.meta.url), { workerData });
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {

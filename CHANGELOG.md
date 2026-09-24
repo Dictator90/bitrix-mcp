@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.1
+
+### Added
+
+- **`bitrix_index_all` accepts `includeInstall`.** Module `install/` assets have been opt-in since 0.4.2, but the MCP tool had no way to request them (the CLI already had `--install`). Pass `includeInstall: true` to index them; the default stays `false`.
+- **CI.** A GitHub Actions workflow runs typecheck, tests, build and a CLI smoke test on Linux, macOS and Windows with Node 22.12, 22 and 24.
+- `npm run test:integration` runs the network-dependent Bitrix core checkout test on demand.
+
+### Fixed
+
+- **The `node:sqlite` `ExperimentalWarning` no longer leaks to stderr.** Every CLI command, the MCP server and its worker threads printed `ExperimentalWarning: SQLite is an experimental feature…`, which broke `--json-progress` (stderr was no longer pure JSON Lines) and cluttered MCP client logs. The CLI, worker-thread and child-process entry points now install a filter for that one warning before loading `node:sqlite`; all other warnings are still printed.
+- **The MCP server reports its real version.** `serverInfo.version` was hardcoded to `0.1.0`; it is now read from `package.json`, like `--version`.
+- `package-lock.json` is back in sync with `package.json`; it had been left at 0.4.8.
+
+### Changed
+
+- **The Bitrix core integration test is opt-in and pinned.** It cloned the latest `autrobin/bitrix.core` and ran its `update.sh` with the caller's full environment on every `npm test` — including `prepublishOnly`, where npm credentials are present. It now runs only with `BITRIX_MCP_INTEGRATION=1`, checks out a pinned commit, and gives the script a minimal environment (`HOME`, `PATH`). Its stale "install assets are indexed by default" expectation was also fixed.
+- The `npm test` glob is now quoted, so Node expands it instead of the shell. Without quotes, adding a test in a `tests/` subfolder would make `sh` expand the pattern to that folder only and silently skip every top-level test.
+
+### Documentation
+
+- `docs/security.md`, `docs/configuration.md` and both READMEs no longer claim that passwords are never returned or that the DB tools cannot modify data. The `bitrix_db_query` read-only check is a keyword filter, not a security boundary (`WITH … DELETE`, `SELECT … INTO OUTFILE` and `LOAD_FILE` pass it), and `bitrix_read_file_context`, `bitrix_db_query` and `bitrix_tinker` can still read secrets. The docs now say so and recommend a `SELECT`-only DB account. They also state that `init` enables DB access by default even though the server's own default is off.
+- The `bitrix_index_all` description, `docs/tools.md`, `docs/indexing.md` and CLI help no longer say install assets are indexed by default.
+- `docs/release.md` adds the version-sync, tagging and CI steps.
+
 ## 0.6.0
 
 ### Added

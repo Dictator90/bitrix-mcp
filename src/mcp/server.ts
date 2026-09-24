@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { readPackageVersion } from "../config/version.js";
 import { resolveRuntimePaths, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { readIndexStatus } from "../indexer/actions.js";
 import { searchInheritanceRelations, searchSymbolsForContext } from "../indexer/sqliteStore.js";
@@ -226,7 +227,7 @@ const searchFormatSchema = {
 };
 
 export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): McpServer {
-  const server = new McpServer({ name: "bitrix-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "bitrix-mcp", version: readPackageVersion() });
 
   server.tool(
     "bitrix_read_file_context",
@@ -708,10 +709,12 @@ export function createMcpServer(paths: RuntimePaths = resolveRuntimePaths()): Mc
 
   server.tool(
     "bitrix_index_all",
-    "Index the project, templates, Bitrix modules, module install assets, and registered documentation sources into SQLite.",
-    {},
-    async () => {
-      return runWorkerTask("bitrix_index_all", { name: "indexAll", paths });
+    "Index the project, templates, Bitrix modules, and registered documentation sources into SQLite. Module install assets are skipped unless includeInstall is true.",
+    {
+      includeInstall: z.boolean().optional().describe("Also index module install/ assets (slow on large cores); default false.")
+    },
+    async ({ includeInstall }) => {
+      return runWorkerTask("bitrix_index_all", { name: "indexAll", paths, includeInstall });
     }
   );
 

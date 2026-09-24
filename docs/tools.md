@@ -52,9 +52,9 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Limitations: `templatePath` is relative to workspace by default.
 
 ### `bitrix_index_all`
-- Purpose: index project, templates, Bitrix modules, install assets, and docs.
-- Parameters: none.
-- Example response: `{ "projectFiles": 180, "templateFiles": 75, "bitrixFiles": 0, "docChunks": 420 }`.
+- Purpose: index project, templates, Bitrix modules, and docs. Module install assets are skipped unless `includeInstall: true` is passed.
+- Parameters: optional `includeInstall` (boolean, default `false`) — also index module `install/` assets (slow on a full core).
+- Example response (text): `Indexed project files: 180`, `Indexed template files: 75`, `Indexed Bitrix module files: 0`, `Indexed install asset files: 0`, `Indexed documentation chunks: 420`, `SQLite DB: …`.
 - Recommended prompt: "Use Bitrix MCP to rebuild all indexes, then answer using indexed context."
 - Use when: initial setup or broad refresh.
 - Limitations: official docs may require network when enabled; Bitrix root is skipped if absent.

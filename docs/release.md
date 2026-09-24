@@ -11,6 +11,7 @@ rm -rf dist
 npm ci
 npm run typecheck
 npm test
+npm run test:integration  # optional: needs network, git, tar and sh; Linux/macOS only
 npm run build
 node dist/cli.js --help
 npm pack --dry-run
@@ -22,5 +23,7 @@ For one-off execution without global installation, use the scoped package name w
 ```bash
 npx @mb4it/bitrix-mcp init --agent cursor --no-serve
 ```
+
+Keep `package.json` and `package-lock.json` versions in sync (bump with `npm version <x.y.z> --no-git-tag-version`, which updates both), tag the release commit `vX.Y.Z`, and confirm the CI workflow is green on it.
 
 Do not publish from automation until you have confirmed npm authentication with the intended `@mb4it` account or organization.

@@ -139,7 +139,7 @@ BITRIX_MCP_DB_ENABLED=1         # включить инструменты БД (
 BITRIX_MCP_DB_ALLOW_WRITE=1     # дополнительно разрешить INSERT/UPDATE/DELETE (по умолчанию отключено)
 ```
 
-Инструменты: `bitrix_db_connections` (список активных подключений, пароли скрыты), `bitrix_db_schema` (таблицы и столбцы), `bitrix_db_query` (SQL только для чтения). Записи — опционально: `bitrix_db_execute` (INSERT/UPDATE/DELETE) при `BITRIX_MCP_DB_ALLOW_WRITE=1`. Пароли никогда не возвращаются. Предназначено только для локальной разработки. `init` спрашивает, включить ли доступ к БД (по умолчанию да) и записи (по умолчанию нет); управляй с помощью `--no-db` и `--db-allow-write` без интерактивного режима.
+Инструменты: `bitrix_db_connections` (список активных подключений, пароли скрыты), `bitrix_db_schema` (таблицы и столбцы), `bitrix_db_query` (SQL только для чтения). Записи — опционально: `bitrix_db_execute` (INSERT/UPDATE/DELETE) при `BITRIX_MCP_DB_ALLOW_WRITE=1`. `bitrix_db_connections` скрывает пароли, но проверка «только чтение» — это фильтр по ключевому слову, а не граница безопасности, и другие инструменты всё равно могут прочитать секреты (см. [Security](./docs/security.md)); если нужна гарантия, используй учётную запись БД только с правом `SELECT`. Предназначено только для локальной разработки. `init` спрашивает, включить ли доступ к БД (по умолчанию да) и записи (по умолчанию нет); управляй с помощью `--no-db` и `--db-allow-write` без интерактивного режима.
 
 ## Выполнение PHP-кода в рантайме (опционально)
 
@@ -171,7 +171,10 @@ BITRIX_MCP_PHP_BIN=php          # путь к бинарнику PHP CLI (по �
 npm test
 npm run typecheck
 npm run build
+npm run test:integration   # опционально, нужны сеть/git/sh
 ```
+
+CI (`.github/workflows/ci.yml`) запускает typecheck, тесты и сборку на Linux, macOS и Windows с Node 22.12, 22 и 24.
 
 ## Лицензия
 

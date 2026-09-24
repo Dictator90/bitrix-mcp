@@ -1,4 +1,3 @@
-import { parentPort, workerData } from "node:worker_threads";
 import { indexPath, sqlitePath, type RuntimePaths } from "../config/paths.js";
 import { detectChanges, type DetectChangesOptions } from "../indexer/detectChanges.js";
 import { getGraphNeighbors, getImpactRadiusForPaths, traverseGraph, type GraphNeighborsOptions, type GraphTraverseOptions, type ImpactRadiusOptions } from "../indexer/graph.js";
@@ -16,7 +15,7 @@ import { runTinker } from "../php/tinker.js";
 type WorkerTask =
   | { name: "indexProject"; paths: RuntimePaths; root?: string }
   | { name: "indexTemplate"; paths: RuntimePaths; templatePath?: string; root?: string }
-  | { name: "indexAll"; paths: RuntimePaths }
+  | { name: "indexAll"; paths: RuntimePaths; includeInstall?: boolean }
   | { name: "indexDocs"; paths: RuntimePaths }
   | { name: "searchLiveApi"; paths: RuntimePaths; query: LiveApiQuery & SearchFormatOptions }
   | { name: "searchEvents"; paths: RuntimePaths; query: LiveApiEventQuery & SearchFormatOptions }
@@ -59,7 +58,7 @@ export async function runTask(task: WorkerTask): Promise<unknown> {
       return { content: [{ type: "text", text: `Indexed ${manifest.files.length} template files.` }] };
     }
     case "indexAll": {
-      const result = await indexAll(task.paths);
+      const result = await indexAll(task.paths, { includeInstall: task.includeInstall });
       return { content: [{ type: "text", text: formatIndexAllResult(result) }] };
     }
     case "indexDocs": {
@@ -243,17 +242,4 @@ function apiUsageRecommendations(query: string): string[] {
     return ["Check handler signature and module/event names."];
   }
   return ["Check documented parameters, return values, error handling, and indexed local call sites before changing API usage."];
-}
-
-const activeParentPort = parentPort;
-if (activeParentPort) {
-  runTask(workerData as WorkerTask)
-    .then((result) => activeParentPort.postMessage({ ok: true, result }))
-    .catch((error: unknown) => {
-      activeParentPort.postMessage({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined
-      });
-    });
 }

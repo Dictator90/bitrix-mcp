@@ -1,4 +1,6 @@
-import { runTask } from "./worker.js";
+import "../runtime/sqliteWarning.js";
+
+const { runTask } = await import("./worker.js");
 
 process.once("message", (task: unknown) => {
   runTask(task as never)

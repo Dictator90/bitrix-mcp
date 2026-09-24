@@ -136,7 +136,7 @@ BITRIX_MCP_DB_ENABLED=1         # enable database tools (default off)
 BITRIX_MCP_DB_ALLOW_WRITE=1     # additionally allow INSERT/UPDATE/DELETE (default off)
 ```
 
-Tools: `bitrix_db_connections` (list active connections, passwords redacted), `bitrix_db_schema` (tables and columns), `bitrix_db_query` (read-only SQL). Writes are opt-in: `bitrix_db_execute` (INSERT/UPDATE/DELETE) when `BITRIX_MCP_DB_ALLOW_WRITE=1`. Passwords are never returned. Intended for local development only. `init` prompts whether to enable DB access (default yes) and writes (default no); use `--no-db` and `--db-allow-write` to control it non-interactively.
+Tools: `bitrix_db_connections` (list active connections, passwords redacted), `bitrix_db_schema` (tables and columns), `bitrix_db_query` (read-only SQL). Writes are opt-in: `bitrix_db_execute` (INSERT/UPDATE/DELETE) when `BITRIX_MCP_DB_ALLOW_WRITE=1`. `bitrix_db_connections` redacts passwords, but the read-only check is a keyword filter, not a security boundary, and other tools can still read secrets (see [Security](./docs/security.md)); use a `SELECT`-only DB account if you need a guarantee. Intended for local development only. `init` prompts whether to enable DB access (default yes) and writes (default no); use `--no-db` and `--db-allow-write` to control it non-interactively.
 
 ## Runtime PHP execution (opt-in)
 
@@ -168,7 +168,10 @@ BITRIX_MCP_PHP_BIN=php          # path to PHP CLI binary (default php; should ma
 npm test
 npm run typecheck
 npm run build
+npm run test:integration   # optional, needs network/git/sh
 ```
+
+CI (`.github/workflows/ci.yml`) runs typecheck, tests and build on Linux, macOS and Windows with Node 22.12, 22 and 24.
 
 ## License
 

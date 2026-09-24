@@ -1,6 +1,6 @@
 {
   "name": "@mb4it/bitrix-mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Local MCP server for Bitrix Framework references, LiveAPI indexing, and semantic documentation search.",
   "type": "module",
   "bin": {
@@ -19,7 +19,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "node --test --import tsx tests/**/*.test.ts",
+    "test": "node --test --import tsx \"tests/**/*.test.ts\"",
+    "test:integration": "BITRIX_MCP_INTEGRATION=1 node --test --import tsx tests/bitrixCoreRepo.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run typecheck && npm test && npm run build",
     "start": "node dist/cli.js serve",
