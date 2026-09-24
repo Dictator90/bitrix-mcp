@@ -62,6 +62,8 @@ const OPTIONS: Record<string, OptionDef> = {
   "include-source": { type: "boolean", description: "Include source excerpts" },
   "no-relations": { type: "boolean", description: "Skip relation analysis" },
   "no-impact": { type: "boolean", description: "Skip impact analysis" },
+  "no-symbol-diff": { type: "boolean", description: "Skip the symbol-level diff of changed files" },
+  "diff-baseline": { type: "string", value: "mode", description: "Symbol diff before state: auto, index, or git" },
   "no-risk": { type: "boolean", description: "Skip risk scoring" },
   "no-symbols": { type: "boolean", description: "Skip changed-symbol detection" },
   depth: { type: "string", value: "n", description: "Traversal depth (integer >= 0)" },
@@ -106,7 +108,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
   "search-modules": { synopsis: "search-modules <module>", summary: "Search indexed Bitrix module include/check API usages.", options: [], maxPositionals: 1 },
   status: { synopsis: "status", summary: "Show the SQLite DB path and index counters.", options: [], maxPositionals: 0 },
   doctor: { synopsis: "doctor [--json] [--verbose]", summary: "Check workspace, Bitrix root, SQLite, docs, ignore file, and embeddings.", options: ["json", "verbose"], maxPositionals: 0 },
-  "detect-changes": { synopsis: "detect-changes [options]", summary: "Analyze Git-changed Bitrix files, indexed entities, and impact.", options: ["base", "kind", "include-source", "no-relations", "no-impact", "no-risk", "depth", "max-files", "max-items", "full", "json"], maxPositionals: 0 },
+  "detect-changes": { synopsis: "detect-changes [options]", summary: "Analyze Git-changed Bitrix files, indexed entities, and impact.", options: ["base", "kind", "include-source", "no-relations", "no-impact", "no-risk", "no-symbol-diff", "diff-baseline", "depth", "max-files", "max-items", "full", "json"], maxPositionals: 0 },
   "graph-neighbors": { synopsis: "graph-neighbors <type> <name> [options]", summary: "Query direct neighbors in the dependency graph (JSON output).", options: ["direction", "relation-type", "depth", "limit", "full", "json"], maxPositionals: 2 },
   "impact-radius": { synopsis: "impact-radius [file ...] [options]", summary: "Analyze Bitrix graph impact radius (JSON output).", options: ["base", "depth", "relation-types", "no-symbols", "no-risk", "limit", "full", "json"], maxPositionals: Number.POSITIVE_INFINITY },
   benchmark: { synopsis: "benchmark [--force]", summary: "Generate .bitrix-mcp/benchmark.json and benchmark.md.", options: ["force"], maxPositionals: 0 }
