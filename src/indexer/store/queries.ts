@@ -6,6 +6,7 @@ import type { BitrixRelationRecord, IndexFile, IndexKind, HlblockUsageRecord, Ib
 import { fileLookupClause, normalizeSlashes, normalizedFileLookupCandidates, nullable, relationMetadataJson, rowToBitrixRelation, rowToHlblockUsage, rowToIblockUsage, rowToModuleUsage, rowToOptionUsage, rowToOrmEntity, rowToOrmUsage, rowToSymbol } from "./rows.js";
 import type { BitrixRelationRow, FileRow, HlblockUsageRow, IblockUsageRow, ModuleUsageRow, OptionUsageRow, OrmEntityRow, OrmUsageRow, SymbolRow } from "./rows.js";
 import { ensureSqliteStore } from "./schema.js";
+import { CLASS_NODE_TYPE, INHERITANCE_RELATION_TYPES, isCaseInsensitiveNodeType, normalizeStoredRelation, phpNameKey, storedGraphNodeTypes } from "./relations.js";
 import type { AgentSearchQuery, AutoloadSearchQuery, BitrixRelationSearchQuery, ComponentContextQuery, ComponentContextResult, ComponentSearchQuery, HlblockUsageSearchQuery, IblockUsageSearchQuery, InheritanceSearchQuery, MailEventSearchQuery, MailEventSearchResult, ModuleUsageSearchQuery, OptionSearchQuery, OrmEntityMapQuery, OrmSearchQuery, OrmUsageSearchQuery, SymbolContextSearchQuery, WriteBitrixRelationsOptions } from "./types.js";
 
 
@@ -411,10 +412,36 @@ export async function searchModuleUsages(dbFile: string, query: ModuleUsageSearc
 }
 
 
-function normalizePhpNameForLookup(name: string): string {
-  return name.trim().replace(/^\\/u, "").toLowerCase();
+const RELATION_COLUMNS = "id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json";
+const DEFAULT_INHERITANCE_DEPTH = 5;
+const MAX_INHERITANCE_DEPTH = 10;
+/** Upper bound of relation rows read per transitive inheritance level (keeps hub parents bounded). */
+const MAX_INHERITANCE_ROWS_PER_LEVEL = 5000;
+const SQL_IN_CHUNK = 400;
+
+function chunked<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
 }
 
+function inheritanceKindRank(kind: string | undefined): number {
+  return kind === "project" || kind === "template" ? 0 : 1;
+}
+
+/**
+ * Finds classes that extend / implement / use the target.
+ *
+ * Matching: a target containing a backslash is matched as an exact fully qualified name; a short
+ * name matches only the last namespace segment exactly (`Base` matches `Foo\Base`, never
+ * `Foo\MyBase`). Comparisons are case-insensitive and ignore a leading backslash, as in PHP.
+ *
+ * With `transitive: true` descendants are followed breadth-first (subclasses of matching classes,
+ * which inherit their parents' interfaces and traits) up to `maxDepth` levels; the walk is
+ * cycle-safe and every level is bounded. Each transitive result carries `metadata.depth` and
+ * `metadata.via` (the ancestor it was reached through). `kind` / `module` filter the returned rows
+ * only, so a project class extending a core class that extends the target is still found.
+ */
 export async function searchInheritanceRelations(dbFile: string, query: InheritanceSearchQuery): Promise<BitrixRelationRecord[] | undefined> {
   try {
     await fs.access(dbFile);
@@ -424,44 +451,102 @@ export async function searchInheritanceRelations(dbFile: string, query: Inherita
   await ensureSqliteStore(dbFile);
   const db = openDatabase(dbFile);
   try {
-    const normalizedTarget = normalizePhpNameForLookup(query.target);
+    const normalizedTarget = phpNameKey(query.target);
     if (!normalizedTarget) return [];
-    const shortTarget = normalizedTarget.split("\\").filter(Boolean).at(-1) ?? normalizedTarget;
-    const filters: string[] = ["source_type = 'class'", "relation_type IN ('extends', 'implements', 'uses_trait')"];
-    const params: Array<string | number> = [];
-
-    if (query.relation && query.relation !== "any") {
-      filters.push("relation_type = ?");
-      params.push(query.relation);
-    }
-    filters.push("(lower(ltrim(target_name, '\\')) = ? OR lower(ltrim(target_name, '\\')) LIKE ? OR lower(ltrim(target_name, '\\')) = ?)");
-    params.push(normalizedTarget, `%\\${shortTarget}`, shortTarget);
-
+    const exactTarget = normalizedTarget.includes("\\");
+    const requestedRelations = query.relation && query.relation !== "any" ? [query.relation] : [...INHERITANCE_RELATION_TYPES];
     const kinds = query.kind === undefined ? [] : Array.isArray(query.kind) ? query.kind : [query.kind];
-    if (kinds.length > 0) {
-      filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
-      params.push(...kinds);
-    }
-    if (query.module !== undefined) {
-      filters.push("module = ?");
-      params.push(query.module);
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
+    const sourceTypes = storedGraphNodeTypes(CLASS_NODE_TYPE);
+    const sourceTypeFilter = `source_type IN (${sourceTypes.map(() => "?").join(", ")})`;
+    const targetExpr = "lower(ltrim(target_name, char(92)))";
+    const firstLevelTargetFilter = exactTarget ? `${targetExpr} = ?` : `(${targetExpr} = ? OR substr(${targetExpr}, -?) = ?)`;
+    const firstLevelTargetParams: Array<string | number> = exactTarget ? [normalizedTarget] : [normalizedTarget, normalizedTarget.length + 1, `\\${normalizedTarget}`];
+
+    if (query.transitive !== true) {
+      const filters = [sourceTypeFilter, `relation_type IN (${requestedRelations.map(() => "?").join(", ")})`, firstLevelTargetFilter];
+      const params: Array<string | number> = [...sourceTypes, ...requestedRelations, ...firstLevelTargetParams];
+      if (kinds.length > 0) {
+        filters.push(`kind IN (${kinds.map(() => "?").join(", ")})`);
+        params.push(...kinds);
+      }
+      if (query.module !== undefined) {
+        filters.push("module = ?");
+        params.push(query.module);
+      }
+      params.push(limit);
+      const rows = db.prepare(`
+        SELECT ${RELATION_COLUMNS}
+        FROM bitrix_relations
+        WHERE ${filters.join(" AND ")}
+        ORDER BY CASE WHEN kind IN ('project', 'template') THEN 0 ELSE 1 END, source_name ASC, id ASC
+        LIMIT ?
+      `).all(...params) as unknown as BitrixRelationRow[];
+      return rows.map((row) => normalizeStoredRelation(rowToBitrixRelation(row)));
     }
 
-    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 20)));
-    params.push(limit);
-    const rows = db.prepare(`
-      SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
-      FROM bitrix_relations
-      WHERE ${filters.join(" AND ")}
-      ORDER BY CASE WHEN kind IN ('project', 'template') THEN 0 ELSE 1 END, source_name ASC, id ASC
-      LIMIT ?
-    `).all(...params) as unknown as BitrixRelationRow[];
-    return rows.map(rowToBitrixRelation);
+    const maxDepth = Math.max(1, Math.min(MAX_INHERITANCE_DEPTH, Math.floor(query.maxDepth ?? DEFAULT_INHERITANCE_DEPTH)));
+    // Subclasses inherit interfaces and traits, so deeper levels also follow `extends`.
+    const deeperRelations = [...new Set([...requestedRelations, "extends"])];
+    const visited = new Set<string>([normalizedTarget]);
+    const seenRows = new Set<number>();
+    const results: BitrixRelationRecord[] = [];
+    let frontier: string[] = [normalizedTarget];
+
+    for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth += 1) {
+      const relations = depth === 1 ? requestedRelations : deeperRelations;
+      const relationFilter = `relation_type IN (${relations.map(() => "?").join(", ")})`;
+      const levelRows: BitrixRelationRow[] = [];
+      const targetChunks: string[][] = depth === 1 ? [[]] : chunked(frontier, SQL_IN_CHUNK);
+      for (const chunk of targetChunks) {
+        const targetFilter = depth === 1 ? firstLevelTargetFilter : `${targetExpr} IN (${chunk.map(() => "?").join(", ")})`;
+        const targetParams = depth === 1 ? firstLevelTargetParams : chunk;
+        const rows = db.prepare(`
+          SELECT ${RELATION_COLUMNS}
+          FROM bitrix_relations
+          WHERE ${sourceTypeFilter} AND ${relationFilter} AND ${targetFilter}
+          ORDER BY id ASC
+          LIMIT ?
+        `).all(...sourceTypes, ...relations, ...targetParams, MAX_INHERITANCE_ROWS_PER_LEVEL - levelRows.length) as unknown as BitrixRelationRow[];
+        levelRows.push(...rows);
+        if (levelRows.length >= MAX_INHERITANCE_ROWS_PER_LEVEL) break;
+      }
+
+      const next: string[] = [];
+      const levelResults: BitrixRelationRecord[] = [];
+      for (const row of levelRows) {
+        if (seenRows.has(row.id)) continue;
+        seenRows.add(row.id);
+        const relation = normalizeStoredRelation(rowToBitrixRelation(row));
+        const matchesKind = kinds.length === 0 || (relation.kind !== undefined && (kinds as string[]).includes(relation.kind));
+        const matchesModule = query.module === undefined || relation.module === query.module;
+        if (matchesKind && matchesModule) {
+          levelResults.push({ ...relation, metadata: { ...(relation.metadata ?? {}), depth, via: relation.targetName } });
+        }
+        const sourceKey = phpNameKey(relation.sourceName);
+        if (!visited.has(sourceKey)) {
+          visited.add(sourceKey);
+          next.push(sourceKey);
+        }
+      }
+      levelResults.sort((a, b) => inheritanceKindRank(a.kind) - inheritanceKindRank(b.kind) || a.sourceName.localeCompare(b.sourceName) || (a.id ?? 0) - (b.id ?? 0));
+      for (const relation of levelResults) {
+        results.push(relation);
+        if (results.length >= limit) return results;
+      }
+      frontier = next;
+    }
+    return results;
   } finally {
     db.close();
   }
 }
 
+/**
+ * Exact-match relation lookup. `class` also matches the legacy class-like node types
+ * (`parent_class`, `interface`, `trait`), and names of class/method/function/ORM entity nodes are
+ * compared case-insensitively (a leading backslash is ignored), as PHP does.
+ */
 export async function searchBitrixRelations(dbFile: string, query: BitrixRelationSearchQuery): Promise<BitrixRelationRecord[] | undefined> {
   try {
     await fs.access(dbFile);
@@ -473,11 +558,27 @@ export async function searchBitrixRelations(dbFile: string, query: BitrixRelatio
   try {
     const filters: string[] = [];
     const params: Array<string | number> = [];
+    for (const [typeColumn, nameColumn, type, name] of [
+      ["source_type", "source_name", query.sourceType, query.sourceName],
+      ["target_type", "target_name", query.targetType, query.targetName]
+    ] as const) {
+      if (type !== undefined) {
+        const types = storedGraphNodeTypes(type);
+        filters.push(`${typeColumn} IN (${types.map(() => "?").join(", ")})`);
+        params.push(...types);
+      }
+      if (name !== undefined) {
+        if (type !== undefined && isCaseInsensitiveNodeType(type)) {
+          const bare = name.trim().replace(/^\\+/u, "");
+          filters.push(`(${nameColumn} = ? COLLATE NOCASE OR ${nameColumn} = ? COLLATE NOCASE)`);
+          params.push(bare, `\\${bare}`);
+        } else {
+          filters.push(`${nameColumn} = ?`);
+          params.push(name);
+        }
+      }
+    }
     for (const [column, value] of [
-      ["source_type", query.sourceType],
-      ["source_name", query.sourceName],
-      ["target_type", query.targetType],
-      ["target_name", query.targetName],
       ["relation_type", query.relationType],
       ["module", query.module],
       ["kind", query.kind],
@@ -493,13 +594,13 @@ export async function searchBitrixRelations(dbFile: string, query: BitrixRelatio
     params.push(limit);
     const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
     const rows = db.prepare(`
-      SELECT id, source_type, source_name, target_type, target_name, relation_type, file, line, module, kind, signature, metadata_json
+      SELECT ${RELATION_COLUMNS}
       FROM bitrix_relations
       ${whereClause}
       ORDER BY id DESC
       LIMIT ?
     `).all(...params) as unknown as BitrixRelationRow[];
-    return rows.map(rowToBitrixRelation);
+    return rows.map((row) => normalizeStoredRelation(rowToBitrixRelation(row)));
   } finally {
     db.close();
   }

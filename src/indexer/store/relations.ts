@@ -154,12 +154,62 @@ export function componentRelationsForFile(file: IndexFile): BitrixRelationRecord
   }];
 }
 
+/**
+ * Graph node type of every PHP class-like declaration (class, interface, trait). Inheritance
+ * edges point at `class:<FQN>` for parents, interfaces and traits alike, so a declaration's own
+ * node and the edges that reference it share one node id; `relation_type` (`extends` /
+ * `implements` / `uses_trait`) carries the meaning. Rows written by older parser versions used
+ * `parent_class`, `interface` and `trait` target types: readers treat those as aliases of `class`.
+ */
+export const CLASS_NODE_TYPE = "class";
+export const LEGACY_CLASS_NODE_TYPES: readonly string[] = ["parent_class", "interface", "trait"];
+export const INHERITANCE_RELATION_TYPES: readonly string[] = ["extends", "implements", "uses_trait"];
+
+/** PHP class, function and method names are case-insensitive, so are their graph nodes. */
+const CASE_INSENSITIVE_NODE_TYPES = new Set(["class", "method", "function", "orm_entity"]);
+
+/** Maps a node type onto its canonical form (legacy class-like types become `class`). */
+export function canonicalGraphNodeType(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  return LEGACY_CLASS_NODE_TYPES.includes(normalized) ? CLASS_NODE_TYPE : normalized;
+}
+
+/** Every stored `source_type` / `target_type` value that denotes the given node type. */
+export function storedGraphNodeTypes(type: string): string[] {
+  const canonical = canonicalGraphNodeType(type);
+  return canonical === CLASS_NODE_TYPE ? [CLASS_NODE_TYPE, ...LEGACY_CLASS_NODE_TYPES] : [canonical];
+}
+
+export function isCaseInsensitiveNodeType(type: string): boolean {
+  return CASE_INSENSITIVE_NODE_TYPES.has(canonicalGraphNodeType(type));
+}
+
+/** Canonical PHP name used for comparisons: no leading backslash, lower case. */
+export function phpNameKey(name: string): string {
+  return name.trim().replace(/^\\+/u, "").toLowerCase();
+}
+
+/**
+ * Read-time normalization of stored relation rows: legacy class-like node types become `class`
+ * (the original type is kept as `metadata.targetKind` / `metadata.sourceKind` when not already set).
+ */
+export function normalizeStoredRelation(relation: BitrixRelationRecord): BitrixRelationRecord {
+  const sourceType = canonicalGraphNodeType(relation.sourceType);
+  const targetType = canonicalGraphNodeType(relation.targetType);
+  if (sourceType === relation.sourceType && targetType === relation.targetType) return relation;
+  const metadata: Record<string, unknown> = { ...(relation.metadata ?? {}) };
+  if (sourceType !== relation.sourceType && metadata.sourceKind === undefined) metadata.sourceKind = relation.sourceType === "parent_class" ? "class" : relation.sourceType;
+  if (targetType !== relation.targetType && metadata.targetKind === undefined) metadata.targetKind = relation.targetType === "parent_class" ? "class" : relation.targetType;
+  return { ...relation, sourceType, targetType, metadata };
+}
+
 export function inheritanceRelationsForSymbol(symbol: SymbolRecord, file: IndexFile): BitrixRelationRecord[] {
-  if (symbol.type !== "class") return [];
+  if (symbol.type !== "class" && symbol.type !== "interface" && symbol.type !== "trait") return [];
   const sourceName = symbol.fullyQualifiedName ?? symbol.name;
   const base = {
-    sourceType: "class",
+    sourceType: CLASS_NODE_TYPE,
     sourceName,
+    targetType: CLASS_NODE_TYPE,
     file: symbol.file,
     line: symbol.line,
     module: symbol.module,
@@ -168,13 +218,13 @@ export function inheritanceRelationsForSymbol(symbol: SymbolRecord, file: IndexF
   };
   const relations: BitrixRelationRecord[] = [];
   if (symbol.extends) {
-    relations.push({ ...base, targetType: "parent_class", targetName: symbol.extends, relationType: "extends" });
+    relations.push({ ...base, targetName: symbol.extends, relationType: "extends", metadata: { sourceKind: symbol.type, targetKind: symbol.type } });
   }
   for (const interfaceName of symbol.implements ?? []) {
-    relations.push({ ...base, targetType: "interface", targetName: interfaceName, relationType: "implements" });
+    relations.push({ ...base, targetName: interfaceName, relationType: "implements", metadata: { sourceKind: symbol.type, targetKind: "interface" } });
   }
   for (const traitName of symbol.traits ?? []) {
-    relations.push({ ...base, targetType: "trait", targetName: traitName, relationType: "uses_trait" });
+    relations.push({ ...base, targetName: traitName, relationType: "uses_trait", metadata: { sourceKind: symbol.type, targetKind: "trait" } });
   }
   return relations;
 }

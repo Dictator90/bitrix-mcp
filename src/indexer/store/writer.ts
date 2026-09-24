@@ -370,9 +370,7 @@ function writeFileRows(st: WriteStatements, scope: IndexWriteScope, file: IndexF
       );
       const entityName = entity.fullyQualifiedName || entity.className;
       insertRelation.run("file", file.relativePath, "orm_entity", entityName, "defines_orm_entity", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), JSON.stringify({ tableName: entity.tableName }));
-      if (entity.parentClass) {
-        insertRelation.run("class", entityName, "parent_class", entity.parentClass, "extends", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
-      }
+      // The entity's `extends` edge is written once, from its class symbol (inheritanceRelationsForSymbol).
       if (entity.tableName) {
         insertRelation.run("orm_entity", entityName, "table", entity.tableName, "maps_table", relationFileForStorage(entity.file, file), entity.line, nullable(entity.module), nullable(file.kind), nullable(entity.signature), null);
       }
