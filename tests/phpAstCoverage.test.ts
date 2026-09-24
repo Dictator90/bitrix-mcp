@@ -64,6 +64,13 @@ test("an unterminated attribute at EOF does not hang the parser", () => {
   assert.ok(result.symbols.some((symbol) => symbol.type === "class" && symbol.name === "Hanging"));
 });
 
+test("a truncated enum declaration at EOF does not hang the parser", () => {
+  for (const source of ["<?php\nenum", "<?php\nenum Status", "<?php\nenum Status: string"]) {
+    const result = parsePhpSymbolsWithDiagnostics(source, MODULE_FILE);
+    assert.equal(result.warnings.length, 1, source);
+  }
+});
+
 test("PHP 8.4 property hooks parse without falling back", () => {
   const result = parsePhpSymbolsWithDiagnostics(String.raw`<?php
 namespace Vendor\Mod;

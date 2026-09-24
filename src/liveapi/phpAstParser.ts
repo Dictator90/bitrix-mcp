@@ -88,7 +88,9 @@ function createParser(suppressErrors: boolean): ParseCode {
   };
   return (source, filePath) => {
     remaining = source.length * 4 + 10_000;
-    return engine.parseCode(source, filePath) as unknown as PhpNode;
+    // A trailing newline also stops php-parser's `enum` look-ahead from spinning on a label at EOF.
+    const padded = source.endsWith("\n") ? source : `${source}\n`;
+    return engine.parseCode(padded, filePath) as unknown as PhpNode;
   };
 }
 
