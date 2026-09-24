@@ -13,9 +13,13 @@
 | `BITRIX_MCP_EMBEDDINGS_URL` | Python embeddings service URL (default `http://127.0.0.1:8765`). |
 | `BITRIX_MCP_SEMANTIC_ENABLED` | Enable the optional `bitrix_semantic_docs_search` tool (`1`/`true`/`yes`/`on`). Off by default. |
 | `BITRIX_MCP_ALLOW_OUTSIDE_WORKSPACE` | Allow MCP indexing of paths outside the workspace when set to `1`. |
-| `BITRIX_MCP_DB_ENABLED` | Enable live project DB access tools (`bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`). Reads credentials from `bitrix/.settings.php`. Off by default in the server; `init` enables it unless you answer no or pass `--no-db`. The read-only check is a keyword filter, not a security boundary — see [security](./security.md). |
+| `BITRIX_MCP_DB_ENABLED` | Enable live project DB access tools (`bitrix_db_connections`, `bitrix_db_schema`, `bitrix_db_query`). Reads credentials from `bitrix/.settings.php` and `.settings_extra.php`. Off by default in the server; `init` enables it unless you answer no or pass `--no-db`. See [security](./security.md) for what the read-only mode does and does not guarantee. |
+| `BITRIX_MCP_DB_READONLY_USER` / `BITRIX_MCP_DB_READONLY_PASSWORD` | Optional credentials of a `SELECT`-only database account; when set, `bitrix_db_query` and `bitrix_db_schema` use them instead of the `.settings.php` account. |
 | `BITRIX_MCP_DB_ALLOW_WRITE` | Additionally register `bitrix_db_execute` for write SQL (INSERT/UPDATE/DELETE). Requires `BITRIX_MCP_DB_ENABLED`. Off by default. |
 | `BITRIX_MCP_TINKER_ENABLED` | Enable the `bitrix_tinker` tool (runs arbitrary PHP with the Bitrix kernel loaded). Off by default. Full code execution — local trusted dev only. |
+| `BITRIX_MCP_TINKER_ENV_PASSTHROUGH` | Comma-separated extra environment variables to pass to tinker's PHP process (it otherwise gets only PATH, HOME, locale, temp, PHP ini and Windows system variables). |
+| `BITRIX_MCP_CONFIRM_DANGEROUS` | Set `0` to skip the elicitation prompt that asks you to approve each `bitrix_tinker` / `bitrix_db_execute` call (only shown by clients that support elicitation). |
+| `BITRIX_MCP_ALLOW_SECRET_FILES` | Set `1` to let `bitrix_read_file_context` / `bitrix_read_symbol_context` return, and indexing include, credential and dump files (`.settings.php`, `dbconn.php`, `.env`, keys, SQL dumps, …). Off by default. |
 | `BITRIX_MCP_HOME_DIR` | Override the home directory used for **global** client configs (Windsurf, Cline, Codex, Kilo Code) by `init`/`configure`/`uninstall`/`config`. Defaults to your OS home directory; useful for sandboxes and tests. |
 | `BITRIX_MCP_PHP_BIN` | Path to the PHP CLI binary used by `bitrix_tinker`. `init` auto-detects it (PATH, Herd, Laragon, XAMPP, OpenServer) and writes it into the config only when tinker is enabled; falls back to `php`. Should match the site's PHP version/extensions. |
 

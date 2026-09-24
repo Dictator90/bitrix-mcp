@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.7.0
+
+Security and robustness release. Some changes are **breaking** for scripts: see "CLI" below.
+
+### Security
+
+- **`bitrix_db_query` read-only mode is now enforced, not just keyword-checked.** The old first-keyword check let through `WITH … DELETE` (MySQL 8), `SELECT … INTO OUTFILE` (writing files, e.g. a web shell into `upload/`), `SELECT LOAD_FILE(…)` (reading files outside the workspace), `FOR UPDATE`, executable comments, and `SLEEP`/`BENCHMARK` (tying up the DB). Now:
+  - a string- and comment-aware SQL lexer rejects write, lock and file keywords anywhere in the statement, executable comments (`/*! … */`), and side-effecting functions (`LOAD_FILE`, `SLEEP`, `BENCHMARK`, `GET_LOCK`, `NEXTVAL`, …); `SHOW CREATE TABLE`, `REPLACE()`/`INSERT()` string functions and keywords inside strings or backticks still work;
+  - the statement runs inside `START TRANSACTION READ ONLY … ROLLBACK`;
+  - a server-side statement timeout is set (`max_statement_time` on MariaDB, `MAX_EXECUTION_TIME` on MySQL), and on timeout the query is killed on the server with `KILL QUERY` instead of running on after the client gives up.
+- **New `BITRIX_MCP_DB_READONLY_USER` / `BITRIX_MCP_DB_READONLY_PASSWORD`.** When set, `bitrix_db_query` and `bitrix_db_schema` connect with this (ideally `SELECT`-only) account instead of the `.settings.php` one.
+- **Credential and dump files are no longer returned or indexed.** `bitrix_read_file_context` and `bitrix_read_symbol_context` refuse `.settings.php`, `.settings_extra.php`, `php_interface/dbconn.php`, `bitrix/license_key.php`, `.env*`, VCS and `.ssh` directories, `.htpasswd`, `.npmrc`, `auth.json`, keys and certificates, SQL dumps, SQLite files and `bitrix/backup/`, and indexing skips them. Previously `bitrix_read_file_context({ file: "bitrix/.settings.php" })` returned the DB password in plain text. Override with `BITRIX_MCP_ALLOW_SECRET_FILES=1`. Context reads also refuse binary files and files over 10 MB instead of loading them whole.
+- **`bitrix_tinker` no longer passes the MCP client's environment to PHP.** PHP gets only PATH, HOME, locale, temp, PHP ini and Windows system variables, so API tokens and cloud credentials are not readable from snippets. Add variables with `BITRIX_MCP_TINKER_ENV_PASSTHROUGH=VAR1,VAR2`.
+- **Tool annotations and confirmation.** Every tool now carries MCP annotations (`readOnlyHint` for searches and reads, non-destructive writes for index tools, `destructiveHint` for `bitrix_db_execute` and `bitrix_tinker`). With clients that support MCP elicitation, those two tools ask you to approve each call, showing the SQL or PHP; `BITRIX_MCP_CONFIRM_DANGEROUS=0` disables the prompt.
+
+### Added
+
+- **`bitrix-mcp uninstall [--agent <id>] [--all-agents] [--dry-run]`** removes what `init`/`configure` wrote: the `bitrix-mcp` server entry, managed hooks, managed guidance sections and installed skills, leaving your own content intact. Global configs are changed only when their entry points at the current project. Index data and `*.bak` backups are kept.
+- **`--no-hooks`** for `init`/`configure` skips writing agent hooks.
+- **`--debug`** prints the stack trace on errors.
+- **`BITRIX_MCP_HOME_DIR`** overrides the home directory used for global client configs (Windsurf, Cline, Codex, Kilo Code).
+- **DB connections:** `.settings_extra.php` is merged over `.settings.php` (as Bitrix does), Unix sockets (`localhost:/run/mysqld/mysqld.sock`) are supported, and legacy cp1251 sites (`utf_mode` false) are read with the right charset. PostgreSQL connections now fail with a clear "not supported yet" error instead of trying MySQL on port 3306.
+
+### Changed
+
+- **CLI (breaking):** arguments are parsed strictly per command with `node:util` `parseArgs`.
+  - `<command> --help` / `-h` prints that command's help without running it. Before, `index-code --help` ran a full index and `init --help` wrote client configs.
+  - `--opt value` and `--opt=value` both work for every value option. Before, `--modules main,iblock` was silently read as the root path.
+  - Unknown options, flags a command does not support (e.g. `status --force`, previously ignored) and extra arguments now fail with exit code 2. Numeric options (`--depth`, `--limit`, `--max-files`, `--max-items`) are validated. Unknown `--agent` ids are an error listing the known ids.
+  - `-v`/`--version` only works as a global flag before the command.
+- **`init`/`configure` edit client configs surgically.**
+  - JSON configs are read as JSONC with `jsonc-parser`: comments, formatting, trailing commas and unrelated keys are preserved. Before, a regex comment stripper corrupted strings such as `"Read(src/**/*.ts)"` (→ `"Read(src*.ts)"`) in `.claude/settings.json` and crashed on trailing commas. An unparsable file stops `init` with an error naming it and is left untouched.
+  - The `bitrix-mcp` server entry is merged, not replaced: your own keys (extra env vars, `disabled`, `timeout`, `alwaysAllow`) survive re-runs.
+  - A one-time `<file>.bak` is written before the first change to an existing config file; unchanged files are not rewritten.
+  - Codex `config.toml` block detection handles `[[array]]` headers, trailing comments and quoted keys, and removes a stale `[mcp_servers.bitrix-mcp.env]` sub-table.
+  - Existing user-owned hook files without the bitrix-mcp marker (`.clinerules/hooks/UserPromptSubmit`, `.github/hooks/bitrix-mcp.json`) are skipped with a warning instead of overwritten.
+  - `--yes` now says which agent it configured (Cursor), and each config reports created / updated / already up to date.
+- **Claude Code hook runs once per session.** The per-prompt `UserPromptSubmit` directive, which added ~150–200 tokens to every prompt, is replaced by a `SessionStart` hook; `SubagentStart` stays and the directive texts are shorter. Re-running `init`/`configure` removes the old managed `UserPromptSubmit` entry.
+- **`bitrix_db_query` results:**
+  - They are streamed and capped by rows (`limit`, default 500) and by size (about 1 MB), with `truncatedReason: "rows" | "bytes"`. The row `LIMIT` is appended only at the top level and can no longer be swallowed by a trailing `-- comment`.
+  - BIGINT/DECIMAL values come back as strings without precision loss, and dates are returned as stored.
+  - BLOBs come back as text, or `<binary N bytes: …>` instead of a `{"type":"Buffer","data":[…]}` array.
+  - Cells over 4000 characters are truncated.
+- **`bitrix_tinker`:**
+  - Output over 4 MB kills the process.
+  - `output` is truncated at 20k characters, and `returnValue` is omitted above 8k characters (`returnText` is still returned).
+  - Timeouts kill the whole process tree: SIGTERM then SIGKILL, or `taskkill /T /F` on Windows, where PHP could previously be orphaned. The PHP timeout is also kept below the worker timeout, so temp files are always removed.
+- DB and tinker failures are returned with `isError: true`.
+
+### Fixed
+
+- `bitrix_tinker` snippets that call `exit()`/`die()` now return their output with `exited: true` instead of a `NoOutput` error.
+- The `.settings.php` regex fallback now reads only the `connections` section, so a cache or session `host` is no longer mistaken for the database host.
+
+### Dependencies
+
+- Added `jsonc-parser` (runtime).
+
 ## 0.6.1
 
 ### Added

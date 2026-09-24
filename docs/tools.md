@@ -113,7 +113,7 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Example response: `{ "metadata": { "relativePath": "local/php_interface/init.php", "startLine": 1 }, "numberedLines": "1: <?php" }`.
 - Recommended prompt: "Use Bitrix MCP to read context around line 42 of local/php_interface/init.php."
 - Use when: a search result points to a file/line.
-- Limitations: reads only inside workspace or data directory allowlist.
+- Limitations: reads only inside workspace or data directory allowlist; refuses credential/dump files (`.settings.php`, `dbconn.php`, `.env`, keys, SQL dumps, `bitrix/backup/`, … — see [security](./security.md)), binary files, and files over 10 MB.
 
 ### `bitrix_read_symbol_context`
 - Purpose: resolve an indexed symbol and read source around its definition/usage.
@@ -294,10 +294,10 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 ### `bitrix_db_query`
 - Purpose: run a read-only SQL query against the project database.
 - Parameters: `sql` (required), `connection`, `limit`.
-- Example response: `{ "columns": ["ID", "NAME"], "rows": [{ "ID": 1, "NAME": "Catalog" }], "rowCount": 1, "truncated": false }`.
+- Example response: `{ "columns": ["ID", "NAME"], "rows": [{ "ID": 1, "NAME": "Catalog" }], "rowCount": 1, "truncated": false }`; when capped, `truncated: true` with `truncatedReason: "rows"` or `"bytes"`. BIGINT/DECIMAL values are strings, dates are returned as stored, BLOBs as text or `<binary N bytes: …>`, and cells over 4000 characters are truncated.
 - Recommended prompt: "Use Bitrix MCP to query the first 5 iblocks."
 - Use when: verifying real project data alongside static code search.
-- Limitations: requires `BITRIX_MCP_DB_ENABLED=1`; only `SELECT/SHOW/EXPLAIN/DESCRIBE/WITH`; results are row-limited.
+- Limitations: requires `BITRIX_MCP_DB_ENABLED=1`; a single `SELECT/SHOW/EXPLAIN/DESCRIBE/WITH` statement without write/lock/file keywords or side-effecting functions (`LOAD_FILE`, `SLEEP`, `BENCHMARK`, …); runs in a read-only transaction with a server-side timeout (15 s); results capped at `limit` rows (default 500) and about 1 MB. MySQL/MariaDB only; PostgreSQL connections return an error.
 
 ### `bitrix_db_execute`
 - Purpose: run a write SQL statement (INSERT/UPDATE/DELETE) against the project database.
@@ -305,7 +305,7 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Example response: `{ "affectedRows": 1 }`.
 - Recommended prompt: "Use Bitrix MCP to update a single test record."
 - Use when: intentional data changes on a local dev database.
-- Limitations: registered only when `BITRIX_MCP_DB_ALLOW_WRITE=1` (which requires `BITRIX_MCP_DB_ENABLED=1`); use with care.
+- Limitations: registered only when `BITRIX_MCP_DB_ALLOW_WRITE=1` (which requires `BITRIX_MCP_DB_ENABLED=1`); annotated `destructiveHint`, and clients with elicitation ask you to approve each call; use with care.
 
 ### `bitrix_tinker`
 - Purpose: execute arbitrary PHP with the Bitrix kernel bootstrapped (like Laravel Tinker).
@@ -313,4 +313,4 @@ Treat Bitrix MCP tool results as the primary source of truth for Bitrix Framewor
 - Example response: `{ "ok": true, "returnValue": [{ "ID": 4, "NAME": "Каталог" }], "output": "", "durationMs": 420 }`.
 - Recommended prompt: "Use Bitrix MCP tinker to list the first 3 iblocks via IblockTable::getList."
 - Use when: verifying real runtime behavior, ORM queries, options, or module APIs.
-- Limitations: requires `BITRIX_MCP_TINKER_ENABLED=1`; full code execution and write access — local trusted dev only; a snippet with no explicit `return` reports the PHP `include` value `1`.
+- Limitations: requires `BITRIX_MCP_TINKER_ENABLED=1`; full code execution and write access — local trusted dev only; annotated `destructiveHint`, and clients with elicitation ask you to approve each call; PHP gets a minimal environment; `output` is truncated at 20k characters, `returnValue` is omitted above 8k characters (use `returnText`), and output over 4 MB kills the process; `exit()`/`die()` returns the output with `exited: true`; a snippet with no explicit `return` reports the PHP `include` value `1`.
